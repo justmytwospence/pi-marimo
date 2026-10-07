@@ -51,10 +51,11 @@ export class MarimoWatcher {
     this.loop = this.run();
   }
 
+  /** Stop, waiting at most a second for the stream to close (a host may only end it at its next chunk). */
   async stop(): Promise<void> {
     this.stopped = true;
     this.wake?.();
-    await this.loop?.catch(() => undefined);
+    await Promise.race([this.loop?.catch(() => undefined), this.options.io.sleep(1000).done]);
   }
 
   setMode(mode: Mode): void {
