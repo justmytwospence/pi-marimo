@@ -106,6 +106,15 @@ describe("render", () => {
     expect(text).toContain("Kernel: 1 cell with errors.");
   });
 
+  test("stale on most cells is said once", () => {
+    const nb = new NotebookState();
+    nb.apply("kernel-ready", { cell_ids: ["a", "b", "c"], codes: ["a = 1", "b = a", "c = b"], names: [], configs: [] });
+    for (const id of ["a", "b"]) nb.apply("cell-op", { cell_id: id, stale_inputs: true });
+    const text = snapshot(nb, attachment);
+    expect(text).toContain("Kernel: 2 of 3 cells stale (inputs changed, not rerun).");
+    expect(text).not.toContain("-- stale");
+  });
+
   test("large notebooks fold quiet cells", () => {
     const nb = new NotebookState();
     const ids = Array.from({ length: 80 }, (_, i) => `c${i}`);

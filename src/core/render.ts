@@ -91,6 +91,9 @@ export function snapshot(nb: NotebookState, attachment: Attachment, options: Sna
   const seen = options.seenSeq ?? Number.POSITIVE_INFINITY;
   const cells = nb.ordered();
   const fold = cells.length > maxCells;
+  // When most cells are stale (a lazy notebook after a restart), say so once instead of on every line.
+  const staleCount = cells.filter((c) => c.stale).length;
+  const staleCommon = staleCount > cells.length / 2;
 
   const notes = (cell: Cell): string[] => {
     const out: string[] = [];
@@ -100,7 +103,7 @@ export function snapshot(nb: NotebookState, attachment: Attachment, options: Sna
     if (cell.blocked) out.push("not run: an ancestor failed");
     if (cell.disabled) out.push("disabled");
     else if (cell.status === "disabled-transitively") out.push("disabled by an ancestor");
-    if (cell.stale) out.push("stale");
+    if (cell.stale && !staleCommon) out.push("stale");
     if (nb.edited(cell)) out.push("edited, not rerun");
     if (cell.editedBy === "frontend" && cell.editSeq > seen) out.push("changed by the user in the browser");
     return out;
@@ -129,9 +132,11 @@ export function snapshot(nb: NotebookState, attachment: Attachment, options: Sna
       else lines.push(`  ${cell.id} (markdown)`);
       continue;
     }
+    // Folded or not, the outline keeps every heading.
+    if (headings.length) flushFolded();
+    for (const h of headings) lines.push(`${"#".repeat(h.level)} ${h.text}  [${cell.id}]`);
     if (fold && !cellNotes.length) { folded++; continue; }
     flushFolded();
-    for (const h of headings) lines.push(`${"#".repeat(h.level)} ${h.text}  [${cell.id}]`);
     const defs = nb.defs.get(cell.id) ?? [];
     const label = cell.name !== "_" ? `${cell.id} "${cell.name}"` : cell.id;
     const what = defs.length ? `defines ${truncate(defs.join(", "), 80)}` : firstLine(cell.code) || "(empty)";
@@ -146,6 +151,7 @@ export function snapshot(nb: NotebookState, attachment: Attachment, options: Sna
   if (queued) summary.push(`${queued} queued`);
   const errors = nb.errors().length;
   if (errors) summary.push(`${errors} cell${errors === 1 ? "" : "s"} with errors`);
+  if (staleCommon) summary.push(`${staleCount} of ${cells.length} cells stale (inputs changed, not rerun)`);
 
   return [
     `<${STATE_TAG} path="${attachment.path}" url="${attachment.url}" session="${attachment.sessionId}">`,
