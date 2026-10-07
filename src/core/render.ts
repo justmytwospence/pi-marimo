@@ -94,11 +94,14 @@ export function snapshot(nb: NotebookState, attachment: Attachment, options: Sna
   // When most cells are stale (a lazy notebook after a restart), say so once instead of on every line.
   const staleCount = cells.filter((c) => c.stale).length;
   const staleCommon = staleCount > cells.length / 2;
+  // Likewise a Run all: the queue is counted on the Kernel line, so list queued cells only when few.
+  const queuedCount = cells.filter((c) => c.status === "queued").length;
+  const queuedCommon = queuedCount > 10 || queuedCount > cells.length / 2;
 
   const notes = (cell: Cell): string[] => {
     const out: string[] = [];
     if (cell.status === "running") out.push(`RUNNING${cell.runningSince ? ` ${elapsed(now - cell.runningSince)}` : ""}`);
-    else if (cell.status === "queued") out.push("queued");
+    else if (cell.status === "queued" && !queuedCommon) out.push("queued");
     if (cell.error) out.push(`ERROR ${cell.error}`);
     if (cell.blocked) out.push("not run: an ancestor failed");
     if (cell.disabled) out.push("disabled");

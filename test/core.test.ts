@@ -106,6 +106,18 @@ describe("render", () => {
     expect(text).toContain("Kernel: 1 cell with errors.");
   });
 
+  test("a long queue is counted, not listed", () => {
+    const nb = new NotebookState();
+    const ids = Array.from({ length: 20 }, (_, i) => `c${i}`);
+    nb.apply("kernel-ready", { cell_ids: ids, codes: ids.map((id) => `${id} = 1`), names: [], configs: [] });
+    for (const id of ids.slice(1)) nb.apply("cell-op", { cell_id: id, status: "queued", timestamp: 1 });
+    nb.apply("cell-op", { cell_id: "c0", status: "running", timestamp: 1 });
+    const text = snapshot(nb, attachment, { maxCells: 10, now: 2000 });
+    expect(text).toContain("Kernel: running c0, 19 queued.");
+    expect(text).not.toContain("-- queued");
+    expect(text).toContain("  c0: c0 = 1 -- RUNNING 1s\n  … 19 more cells");
+  });
+
   test("stale on most cells is said once", () => {
     const nb = new NotebookState();
     nb.apply("kernel-ready", { cell_ids: ["a", "b", "c"], codes: ["a = 1", "b = a", "c = b"], names: [], configs: [] });
