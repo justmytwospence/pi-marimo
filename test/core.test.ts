@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, test } from "vitest";
-import { moveStateBreakpoint } from "../src/index.js";
+import { insertState } from "../src/index.js";
 import { headingsFromCode, isMarkdownCell, mdLiterals } from "../src/core/markdown.js";
 import { NotebookState } from "../src/core/notebook.js";
 import { snapshot, statusParts, statusText } from "../src/core/render.js";
@@ -137,22 +137,16 @@ describe("render", () => {
   });
 });
 
-describe("prompt cache breakpoint", () => {
-  test("moves Pi's last-message mark to the block before the state block", () => {
-    const payload = {
-      system: [{ type: "text", text: "sys", cache_control: { type: "ephemeral" } }],
-      messages: [
-        { role: "user", content: [{ type: "text", text: "hi" }] },
-        { role: "assistant", content: [{ type: "tool_use", id: "t", name: "bash", input: {} }] },
-        { role: "user", content: [{ type: "tool_result", tool_use_id: "t", content: "ok" }] },
-        { role: "user", content: [{ type: "text", text: "<marimo_notebook_state path=...>", cache_control: { type: "ephemeral", ttl: "1h" } }] },
-      ],
-    };
-    const out = moveStateBreakpoint(structuredClone(payload)) as typeof payload;
-    expect((out.messages[2].content[0] as any).cache_control).toEqual({ type: "ephemeral", ttl: "1h" });
-    expect((out.messages[3].content[0] as any).cache_control).toBeUndefined();
-    expect(JSON.stringify(out).match(/cache_control/g)).toHaveLength(2);
-    expect(moveStateBreakpoint({ messages: [{ role: "user", content: "no state" }] })).toBeUndefined();
+describe("turn state placement", () => {
+  test("after the turn's prompt, at the same place on every request of the turn", () => {
+    const block = { role: "custom", timestamp: 0 };
+    const prompt = { role: "user", timestamp: 5 };
+    const first = insertState([{ role: "user", timestamp: 1 }, { role: "assistant" }, prompt], block, undefined);
+    expect(first.messages.indexOf(block)).toBe(3);
+    expect(first.anchor).toBe(5);
+    // Later in the turn: tool results and a steering message follow; the block stays put.
+    const later = insertState([{ role: "user", timestamp: 1 }, { role: "assistant" }, prompt, { role: "assistant" }, { role: "toolResult" }, { role: "user", timestamp: 9 }], block, first.anchor);
+    expect(later.messages.indexOf(block)).toBe(3);
   });
 });
 

@@ -3,9 +3,9 @@
 // - Footer: `marimo: <file> · running <section> (12s) · 2 queued · 1 error`
 //   through ctx.ui.setStatus("marimo", ...), so it shows in Pi's own footer and
 //   any footer that reads extension statuses.
-// - Context: before every model request, the notebook's current state is
-//   appended as the last message. It is never stored in the session, so the
-//   model only ever sees the latest copy and old copies never pile up.
+// - Context: the notebook's state, taken when you send a prompt, sits right
+//   after that prompt for the whole turn. It is never stored in the session, so
+//   the model sees only the current turn's copy and old copies never pile up.
 // - /marimo: pick the notebook, follow notebooks under the cwd, or turn it off.
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
@@ -30,37 +30,22 @@ function savedMode(entries: readonly Entry[]): Mode | undefined {
 }
 
 /**
- * Anthropic caches a prompt only up to its marked breakpoints, and Pi marks the
- * last message, which is the state block. That block is replaced on the next
- * request, so a cache entry ending in it is never read again, and the
- * conversation before it would be re-read uncached every time. Moving the
- * breakpoint to the block just before the state block caches the conversation
- * instead; only the small state block is processed fresh. Pi already uses all
- * four breakpoints Anthropic allows, so the mark is moved, not added.
+ * Where this turn's state block goes: right after the prompt that started the
+ * turn (the last user message when the turn's first request is built). It stays
+ * there, unchanged, for every request of the turn, so the thinking the model
+ * writes after it stays valid: Anthropic drops a thinking block when anything
+ * before it changes. At the next prompt the old block is gone (it is never
+ * stored), which drops that earlier turn's thinking once.
  */
-export function moveStateBreakpoint(payload: unknown): unknown {
-  const body = payload as { messages?: Array<{ role?: string; content?: unknown }> } | undefined;
-  const messages = body?.messages;
-  if (!Array.isArray(messages)) return undefined;
-  for (let m = messages.length - 1; m >= 0; m--) {
-    const content = messages[m]?.content;
-    if (!Array.isArray(content)) continue;
-    const b = content.findIndex((block) => typeof block?.text === "string" && block.text.startsWith(`<${STATE_TAG}`));
-    if (b < 0) continue;
-    let target: Record<string, unknown> | undefined;
-    if (b > 0) target = content[b - 1];
-    else {
-      const previous = messages[m - 1]?.content;
-      if (Array.isArray(previous) && previous.length) target = previous[previous.length - 1];
-    }
-    const state = content[b] as { cache_control?: unknown };
-    const cacheable = ["text", "image", "tool_result", "document", "tool_use"];
-    if (!state.cache_control || !target || !cacheable.includes(String(target.type))) return undefined;
-    target.cache_control ??= state.cache_control;
-    delete state.cache_control;
-    return payload;
+export function insertState<M extends { role?: string; timestamp?: number }>(messages: M[], block: M, anchor: number | undefined): { messages: M[]; anchor: number | undefined } {
+  let at = -1;
+  if (anchor !== undefined) at = messages.findIndex((m) => m.role === "user" && m.timestamp === anchor);
+  if (at < 0) {
+    for (let i = messages.length - 1; i >= 0; i--) if (messages[i]?.role === "user") { at = i; break; }
+    anchor = at >= 0 ? messages[at]?.timestamp : undefined;
   }
-  return undefined;
+  if (at < 0) return { messages: [...messages, block], anchor };
+  return { messages: [...messages.slice(0, at + 1), block, ...messages.slice(at + 1)], anchor };
 }
 
 export default function piMarimo(pi: ExtensionAPI): void {
@@ -70,6 +55,8 @@ export default function piMarimo(pi: ExtensionAPI): void {
   let pending: ReturnType<typeof setTimeout> | undefined;
   let ticker: ReturnType<typeof setInterval> | undefined;
   let lastStatus: string | undefined;
+  // The state taken when the current turn's prompt was sent, and that prompt's timestamp.
+  let turn: { text: string; anchor?: number } | undefined;
 
   const statusLine = (): string | undefined => {
     if (!watcher) return undefined;
@@ -121,8 +108,12 @@ export default function piMarimo(pi: ExtensionAPI): void {
   });
 
   pi.on("before_agent_start", async () => {
-    watcher?.refresh();
-    await watcher?.settle(2000);
+    turn = undefined;
+    if (!watcher) return;
+    watcher.refresh();
+    await watcher.settle(2000);
+    if (!watcher.attachment || watcher.connection !== "connected" || !watcher.notebook.ready) return;
+    turn = { text: snapshot(watcher.notebook, watcher.attachment, { seenSeq, others: watcher.others(), refresh: "prompt" }) };
   });
 
   // Browser edits made after this point are flagged as new in the next turn.
@@ -131,17 +122,12 @@ export default function piMarimo(pi: ExtensionAPI): void {
   });
 
   pi.on("context", (event) => {
-    if (!watcher?.attachment || watcher.connection !== "connected" || !watcher.notebook.ready) return undefined;
-    const text = snapshot(watcher.notebook, watcher.attachment, { seenSeq, others: watcher.others() });
-    return {
-      messages: [
-        ...event.messages,
-        { role: "custom", customType: MESSAGE_TYPE, content: text, display: false, timestamp: Date.now() },
-      ],
-    };
+    if (!turn) return undefined;
+    const block = { role: "custom", customType: MESSAGE_TYPE, content: turn.text, display: false, timestamp: 0 } as (typeof event.messages)[number];
+    const placed = insertState(event.messages as Array<{ role?: string; timestamp?: number }>, block as { role?: string; timestamp?: number }, turn.anchor);
+    turn.anchor = placed.anchor;
+    return { messages: placed.messages as typeof event.messages };
   });
-
-  pi.on("before_provider_request", (event) => moveStateBreakpoint(event.payload));
 
   pi.registerCommand("marimo", {
     description: "Choose the marimo notebook Pi follows (auto, off, show)",
@@ -154,7 +140,7 @@ export default function piMarimo(pi: ExtensionAPI): void {
       if (arg === "off") { setMode({ kind: "off" }); ctx.ui.notify("marimo: off", "info"); return; }
       if (arg === "show") {
         if (!watcher.attachment || watcher.connection !== "connected") { ctx.ui.notify(statusLine() ?? "marimo: no notebook attached", "info"); return; }
-        ctx.ui.notify(snapshot(watcher.notebook, watcher.attachment, { seenSeq, others: watcher.others() }), "info");
+        ctx.ui.notify(snapshot(watcher.notebook, watcher.attachment, { seenSeq, others: watcher.others(), refresh: "prompt" }), "info");
         return;
       }
       const notebooks = await watcher.list();

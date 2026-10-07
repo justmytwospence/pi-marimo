@@ -72,6 +72,8 @@ function firstLine(code: string): string {
 }
 
 export interface SnapshotOptions {
+  /** When the block is refreshed: before every model request, or once per user prompt. */
+  refresh?: "request" | "prompt";
   /** Other notebooks open in the project, named so the agent knows they exist. */
   others?: Attachment[];
   /** Edits from the browser after this change number are flagged as new. */
@@ -159,7 +161,10 @@ export function snapshot(nb: NotebookState, attachment: Attachment, options: Sna
   return [
     `<${STATE_TAG} path="${attachment.path}" url="${attachment.url}" session="${attachment.sessionId}">`,
     "Live state of the marimo notebook open in the user's browser, added automatically by pi-marimo (not",
-    "written by the user). It is replaced with a fresh copy on every request, so trust this over older reads.",
+    ...(options.refresh === "prompt"
+      ? ["written by the user). Taken when the user sent their latest message and not updated during the turn;",
+        "earlier copies are removed. Check current values through marimo-pair before relying on them."]
+      : ["written by the user). It is replaced with a fresh copy on every request, so trust this over older reads."]),
     "Cells are listed in notebook order under their markdown headings, by cell id. Inspect or change cells",
     "through the marimo-pair skill, not by editing the .py file.",
     `Kernel: ${summary.length ? summary.join(", ") : "idle"}.`,
