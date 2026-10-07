@@ -6,11 +6,11 @@ working in, so Pi knows what it looks like and what it is doing without being as
 - **Footer:** `marimo: fit.py · running Data loading › Model fit (12s) · 2 queued · 1 error · +2 open`.
   The running part is the markdown section (heading path) the running cell sits under, so you can
   tell roughly what is running; `+2 open` counts the other notebooks it follows.
-- **Context:** before every model request, the notebook's current state is appended as the last
-  message: its outline (markdown headings), one line per code cell with what it defines, and what
-  needs attention (running, queued, errors, stale, edited but not rerun, changed by you in the
-  browser since Pi's last turn). The block is never stored in the session, so the model only ever
-  sees the latest copy and old copies never pile up.
+- **Context:** when you send a prompt, the notebook's state is taken once and placed right after
+  that prompt for every model request of the turn: its outline (markdown headings), one line per
+  code cell with what it defines, and what needs attention (running, queued, errors, stale, edited
+  but not rerun, changed by you in the browser since Pi's last turn). The block is never stored in
+  the session, so the model sees only the current turn's copy and old copies never pile up.
 - **`/marimo`:** pick which notebook to follow; `/marimo auto`, `/marimo off`; `/marimo show`
   prints the block the model sees.
 
@@ -41,12 +41,14 @@ pi-marimo connects under its own id and lets marimo find the session by file. Wh
 hold the same file (a closed tab's session can linger), that lookup would take the oldest, so it
 connects by the exact session id instead and does not see edits typed in the browser until they run.
 
-**Prompt cache.** Pi marks the last message as Anthropic's cache breakpoint, which is now the state
-block, replaced on the next request, so the conversation before it would never be read from cache
-again. pi-marimo moves that mark to the block just before the state block (Pi already uses all four
-breakpoints Anthropic allows). The conversation stays cached and only the state block (a few hundred
-tokens) is processed fresh on each request. Providers with automatic prefix caching (OpenAI) need
-nothing.
+**Thinking and the prompt cache.** Anthropic signs each thinking block against everything before
+it and drops the block (`prefix_binding_mismatch`) when that changes. A state block refreshed on
+every request would sit before each step's thinking and change on the next request, so the model
+would lose its reasoning from the previous step every time. Taken once per prompt and kept in the
+same place through the turn, the block changes nothing the model has already thought after, and the
+whole turn stays cached. At the next prompt the old copy is gone, which drops that earlier turn's
+thinking once and re-reads the conversation after it uncached once. The state can be a turn old
+while the agent runs cells; it sees their results through marimo-pair.
 
 ## Footer integration
 
