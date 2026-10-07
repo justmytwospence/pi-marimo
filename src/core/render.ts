@@ -1,7 +1,7 @@
 // Text views of a NotebookState: a one-line status for footers and status lines,
 // and the compact state block injected into the agent's context.
 
-import { basename } from "node:path";
+import { basename } from "./io.js";
 import { type Cell, NotebookState, truncate } from "./notebook.js";
 
 export interface Attachment {

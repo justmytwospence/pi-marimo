@@ -10,6 +10,7 @@
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { snapshot, STATE_TAG, statusParts, statusText } from "./core/render.js";
+import { nodeIo } from "./core/node-io.js";
 import { MarimoWatcher, type Mode } from "./core/watcher.js";
 
 const ENTRY = "pi-marimo";
@@ -105,7 +106,7 @@ export default function piMarimo(pi: ExtensionAPI): void {
   pi.on("session_start", async (_event, ctx) => {
     ctxRef = ctx;
     await watcher?.stop();
-    watcher = new MarimoWatcher({ cwd: ctx.cwd, token: process.env.MARIMO_TOKEN, onChange: schedule });
+    watcher = new MarimoWatcher({ io: nodeIo(), cwd: ctx.cwd, token: process.env.MARIMO_TOKEN, onChange: schedule });
     watcher.mode = savedMode(ctx.sessionManager.getBranch() as Entry[]) ?? { kind: "auto" };
     watcher.start();
   });

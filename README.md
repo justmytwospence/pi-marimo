@@ -71,4 +71,4 @@ npm run check   # typecheck, unit tests, and an end-to-end test against a real m
 ```
 
 The end-to-end test starts `marimo edit --headless` on a scratch notebook and is skipped when
-`marimo` is not on `PATH`. `src/core/` has no Pi imports; the Claude Code and opencode ports reuse it.
+`marimo` is not on `PATH`. `src/core/` is plain ECMAScript behind a small `Io` interface (`node-io.ts` for Node and Bun), so the [opencode](https://github.com/justmytwospence/opencode-marimo) and [Claude Code](https://github.com/justmytwospence/claude-marimo) ports copy it unchanged.

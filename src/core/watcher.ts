@@ -2,10 +2,9 @@
 // its session as a kiosk consumer, follows it across page reloads (which change
 // the session id) and server restarts, and reports every change.
 
-import { realpathSync } from "node:fs";
-import { isAbsolute, relative, resolve, sep } from "node:path";
+import { type Io, normalize, within } from "./io.js";
 import { NotebookState } from "./notebook.js";
-import { type Fetch, findNotebooks, type NotebookSession } from "./registry.js";
+import { findNotebooks, type NotebookSession } from "./registry.js";
 import type { Attachment } from "./render.js";
 import { streamSession } from "./sse.js";
 
@@ -17,32 +16,15 @@ export type Mode =
 export type Connection = "idle" | "searching" | "ambiguous" | "connecting" | "connected" | "disconnected";
 
 export interface WatcherOptions {
+  io: Io;
   cwd: string;
   token?: string;
   extraUrls?: string[];
   pollMs?: number;
-  fetch?: Fetch;
-  registryDir?: string;
   onChange: () => void;
 }
 
-function real(path: string): string {
-  try {
-    return realpathSync(resolve(path));
-  } catch {
-    return resolve(path);
-  }
-}
-
-export function samePath(a: string, b: string): boolean {
-  return real(a) === real(b);
-}
-
-/** Symlinks resolved, so /tmp and /private/tmp (macOS) match. */
-export function within(path: string, dir: string): boolean {
-  const rel = relative(real(dir), real(path));
-  return rel === "" || (!rel.startsWith(`..${sep}`) && rel !== ".." && !isAbsolute(rel));
-}
+type Target = NotebookSession & { shared: boolean };
 
 export class MarimoWatcher {
   readonly notebook = new NotebookState();
@@ -56,8 +38,10 @@ export class MarimoWatcher {
   private readonly consumerId = `pi-marimo-${Math.random().toString(36).slice(2, 10)}`;
   private stopped = true;
   private scanned = false;
-  private wake?: AbortController;
+  private wake?: () => void;
   private loop?: Promise<void>;
+  private realCwd?: string;
+  private readonly realPaths = new Map<string, string>();
 
   constructor(private readonly options: WatcherOptions) {}
 
@@ -69,30 +53,39 @@ export class MarimoWatcher {
 
   async stop(): Promise<void> {
     this.stopped = true;
-    this.wake?.abort();
+    this.wake?.();
     await this.loop?.catch(() => undefined);
   }
 
   setMode(mode: Mode): void {
     this.mode = mode;
-    this.wake?.abort();
+    this.wake?.();
   }
 
   /** Wait (up to ms) for the first scan and any connection in progress, so a first request has the state. */
   async settle(ms: number): Promise<void> {
-    const end = Date.now() + ms;
-    while (!this.stopped && (!this.scanned || this.connection === "connecting") && Date.now() < end) {
-      await new Promise((done) => setTimeout(done, 50));
+    for (let waited = 0; !this.stopped && (!this.scanned || this.connection === "connecting") && waited < ms; waited += 50) {
+      await this.options.io.sleep(50).done;
     }
   }
 
   /** Rescan now instead of at the next poll. */
   refresh(): void {
-    if (this.connection !== "connected" && this.connection !== "connecting") this.wake?.abort();
+    if (this.connection !== "connected" && this.connection !== "connecting") this.wake?.();
   }
 
   async list(): Promise<NotebookSession[]> {
-    return findNotebooks({ token: this.options.token, fetch: this.options.fetch, extraUrls: this.options.extraUrls, dir: this.options.registryDir });
+    return findNotebooks(this.options.io, { token: this.options.token, extraUrls: this.options.extraUrls });
+  }
+
+  private async real(path: string): Promise<string> {
+    const absolute = normalize(path, this.options.cwd);
+    let real = this.realPaths.get(absolute);
+    if (real === undefined) {
+      real = normalize(await this.options.io.realpath(absolute));
+      this.realPaths.set(absolute, real);
+    }
+    return real;
   }
 
   private set(connection: Connection, attachment?: Attachment): void {
@@ -102,34 +95,35 @@ export class MarimoWatcher {
     if (changed) this.options.onChange();
   }
 
-  private async resolveTarget(): Promise<(NotebookSession & { shared: boolean }) | undefined> {
+  private async resolveTarget(): Promise<Target | undefined> {
     const mode = this.mode;
     if (mode.kind === "off") return undefined;
     const sessions = await this.list();
-    const withShared = (target: NotebookSession | undefined) => target && {
+    // marimo reports real paths; resolve ours the same way (macOS /tmp is /private/tmp).
+    const real = new Map<NotebookSession, string>();
+    for (const s of sessions) real.set(s, await this.real(s.path));
+    const shared = (target: NotebookSession | undefined): Target | undefined => target && {
       ...target,
-      shared: sessions.filter((s) => s.url === target.url && samePath(s.path, target.path)).length > 1,
+      shared: sessions.filter((s) => s.url === target.url && real.get(s) === real.get(target)).length > 1,
     };
+    // Several sessions can hold one file (a closed tab's session lingers);
+    // marimo lists them oldest first, so the newest wins.
     if (mode.kind === "pinned") {
-      // Several sessions can hold one file (a closed tab's session lingers);
-      // marimo lists them oldest first, so prefer the newest.
-      const matches = sessions.filter((s) => samePath(s.path, mode.path)).reverse();
-      return withShared(matches.find((s) => s.url === mode.url) ?? matches[0]);
+      const path = await this.real(mode.path);
+      const matches = sessions.filter((s) => real.get(s) === path).reverse();
+      return shared(matches.find((s) => s.url === mode.url) ?? matches[0]);
     }
-    const local = sessions.filter((s) => within(s.path, this.options.cwd));
-    // One entry per file, the newest session winning (see above).
-    const unique = [...new Map(local.map((s) => [real(s.path), s])).values()];
+    this.realCwd ??= await this.real(this.options.cwd);
+    const local = sessions.filter((s) => within(real.get(s)!, this.realCwd!));
+    const unique = [...new Map(local.map((s) => [real.get(s)!, s])).values()];
     this.candidates = unique.length > 1 ? unique : [];
-    return withShared(unique.length === 1 ? unique[0] : undefined);
+    return shared(unique.length === 1 ? unique[0] : undefined);
   }
 
   private async pause(ms: number): Promise<void> {
-    const wake = new AbortController();
-    this.wake = wake;
-    await new Promise<void>((done) => {
-      const timer = setTimeout(done, ms);
-      wake.signal.addEventListener("abort", () => { clearTimeout(timer); done(); }, { once: true });
-    });
+    const sleep = this.options.io.sleep(ms);
+    this.wake = sleep.cancel;
+    await sleep.done;
   }
 
   private async run(): Promise<void> {
@@ -137,14 +131,15 @@ export class MarimoWatcher {
     while (!this.stopped) {
       if (this.mode.kind === "off") {
         this.notebook.reset();
+        this.scanned = true;
         this.set("idle");
         await this.pause(60_000);
         continue;
       }
       const target = await this.resolveTarget().catch(() => undefined);
       if (this.stopped) break;
-      if (!target) this.scanned = true;
       if (!target) {
+        this.scanned = true;
         this.notebook.reset();
         const pinned = this.mode.kind === "pinned" ? this.mode : undefined;
         this.set(this.candidates.length ? "ambiguous" : "searching", pinned ? { url: pinned.url ?? "", sessionId: "", path: pinned.path } : undefined);
@@ -155,37 +150,31 @@ export class MarimoWatcher {
       this.seesBrowserEdits = !target.shared;
       this.notebook.reset();
       this.set("connecting", attachment);
-      const controller = new AbortController();
-      this.wake = controller;
-      let dropped = false;
-      try {
-        const result = await streamSession({
-          url: target.url,
-          // marimo names a consumer after the session id it connected with and
-          // does not echo a browser's own edits back to that id. Connecting
-          // under our own id (marimo then finds the session by file) receives
-          // them. That lookup takes the oldest session for the file, so when
-          // several hold it, connect by the exact id and miss browser edits.
-          sessionId: target.shared ? target.sessionId : this.consumerId,
-          file: target.path,
-          token: this.options.token,
-          fetch: this.options.fetch,
-          signal: controller.signal,
-          onMessage: (op, data) => {
-            const changed = this.notebook.apply(op, data);
-            if (op === "kernel-ready") { this.scanned = true; this.set("connected", attachment); }
-            if (changed) this.options.onChange();
-          },
-        });
-        dropped = result.kind === "ended";
-      } catch {
-        // Aborted, refused or unreachable: rescan below.
-      }
+      let cancelled = false;
+      const stream = streamSession({
+        io: this.options.io,
+        url: target.url,
+        // marimo names a consumer after the session id it connected with and
+        // does not echo a browser's own edits back to that id. Connecting
+        // under our own id (marimo then finds the session by file) receives
+        // them. That lookup takes the oldest session for the file, so when
+        // several hold it, connect by the exact id and miss browser edits.
+        sessionId: target.shared ? target.sessionId : this.consumerId,
+        file: target.path,
+        token: this.options.token,
+        onMessage: (op, data) => {
+          const changed = this.notebook.apply(op, data);
+          if (op === "kernel-ready") { this.scanned = true; this.set("connected", attachment); }
+          if (changed) this.options.onChange();
+        },
+      });
+      this.wake = () => { cancelled = true; stream.cancel(); };
+      const result = await stream.done.catch(() => ({ kind: "http-error" as const }));
       this.scanned = true;
       if (this.stopped) break;
       this.set("disconnected", attachment);
       // A dropped stream reconnects quickly; a refused one waits for the next poll.
-      if (!controller.signal.aborted) await this.pause(dropped ? 1000 : pollMs);
+      if (!cancelled) await this.pause(result.kind === "ended" ? 1000 : pollMs);
     }
     this.set("idle");
   }

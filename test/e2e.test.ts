@@ -4,6 +4,7 @@ import { mkdtempSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, expect, test } from "vitest";
+import { nodeIo } from "../src/core/node-io.js";
 import { MarimoWatcher } from "../src/core/watcher.js";
 
 const hasMarimo = (() => {
@@ -90,7 +91,7 @@ test.skipIf(!hasMarimo)("follows a live notebook's running section", async () =>
     .catch(() => undefined);
 
   let changes = 0;
-  const watcher = new MarimoWatcher({ cwd: dir, pollMs: 300, onChange: () => changes++ });
+  const watcher = new MarimoWatcher({ io: nodeIo(), cwd: dir, pollMs: 300, onChange: () => changes++ });
   watcher.start();
   try {
     await until(() => watcher.connection === "connected");

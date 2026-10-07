@@ -6,7 +6,8 @@
 // session's current state (kernel-ready, then every cell's last messages), so
 // a fresh NotebookState is complete after the replay.
 
-import { authHeaders, type Fetch } from "./registry.js";
+import type { Cancellable, Io } from "./io.js";
+import { authHeaders } from "./registry.js";
 
 export interface SseEvent {
   event?: string;
@@ -49,42 +50,36 @@ export interface StreamResult {
 }
 
 export interface StreamOptions {
+  io: Io;
   url: string;
   sessionId: string;
   file?: string;
   token?: string;
-  signal: AbortSignal;
-  fetch?: Fetch;
-  onOpen?: () => void;
   onMessage: (op: string, data: unknown) => void;
 }
 
-export async function streamSession(options: StreamOptions): Promise<StreamResult> {
-  const params = new URLSearchParams({ session_id: options.sessionId, kiosk: "true" });
-  if (options.file) params.set("file", options.file);
-  if (options.token) params.set("access_token", options.token);
-  const doFetch = options.fetch ?? fetch;
-  const response = await doFetch(`${options.url}/sse?${params}`, {
-    headers: { Accept: "text/event-stream", ...authHeaders(options.token) },
-    signal: options.signal,
-  });
-  if (!response.ok || !response.body) return { kind: "http-error", code: response.status };
-  options.onOpen?.();
+export function streamSession(options: StreamOptions): Cancellable<StreamResult> {
+  const query: Record<string, string> = { session_id: options.sessionId, kiosk: "true" };
+  if (options.file) query.file = options.file;
+  if (options.token) query.access_token = options.token;
+  const params = Object.entries(query).map(([k, v]) => `${k}=${encodeURIComponent(v)}`).join("&");
   const parser = new SseParser();
-  const decoder = new TextDecoder();
-  const reader = response.body.getReader();
-  try {
-    for (;;) {
-      const { value, done } = await reader.read();
-      if (done) return { kind: "ended" };
-      for (const event of parser.push(decoder.decode(value, { stream: true }))) {
+  let closed: StreamResult | undefined;
+  const stream = options.io.stream(
+    `${options.url}/sse?${params}`,
+    { Accept: "text/event-stream", ...authHeaders(options.token) },
+    (text) => {
+      if (closed) return;
+      for (const event of parser.push(text)) {
         if (event.event === "close") {
           try {
             const body = JSON.parse(event.data) as { code?: number; reason?: string };
-            return { kind: "closed", code: body.code, reason: body.reason };
+            closed = { kind: "closed", code: body.code, reason: body.reason };
           } catch {
-            return { kind: "closed" };
+            closed = { kind: "closed" };
           }
+          stream.cancel();
+          return;
         }
         if (event.event && event.event !== "message") continue;
         let message: { op?: unknown; data?: unknown };
@@ -95,8 +90,8 @@ export async function streamSession(options: StreamOptions): Promise<StreamResul
         }
         if (typeof message.op === "string") options.onMessage(message.op, message.data);
       }
-    }
-  } finally {
-    reader.releaseLock();
-  }
+    },
+  );
+  const done = stream.done.then((end): StreamResult => closed ?? (end.ok ? { kind: "ended" } : { kind: "http-error", code: end.status }));
+  return { done, cancel: stream.cancel };
 }
