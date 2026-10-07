@@ -16,8 +16,8 @@ export function mdLiterals(code: string): string[] {
   const out: string[] = [];
   CALL.lastIndex = 0;
   for (let match = CALL.exec(code); match; match = CALL.exec(code)) {
-    const prefix = match[1].toLowerCase();
-    const quote = match[2];
+    const prefix = (match[1] ?? "").toLowerCase();
+    const quote = match[2] ?? '"';
     const start = match.index + match[0].length;
     const raw = prefix.includes("r");
     let i = start;
@@ -65,15 +65,16 @@ export function headingsFromMarkdown(markdown: string): Heading[] {
   for (const line of dedent(markdown).split("\n")) {
     const fenceMatch = /^\s{0,3}(`{3,}|~{3,})/.exec(line);
     if (fenceMatch) {
-      if (fence === null) fence = fenceMatch[1][0];
-      else if (fenceMatch[1][0] === fence) fence = null;
+      const marker = (fenceMatch[1] ?? "`").charAt(0);
+      if (fence === null) fence = marker;
+      else if (marker === fence) fence = null;
       continue;
     }
     if (fence !== null) continue;
     const heading = /^\s{0,3}(#{1,6})\s+(.+)$/.exec(line);
     if (!heading) continue;
-    const text = plainHeading(heading[2]);
-    if (text) headings.push({ level: heading[1].length, text });
+    const text = plainHeading(heading[2] ?? "");
+    if (text) headings.push({ level: (heading[1] ?? "#").length, text });
   }
   return headings;
 }

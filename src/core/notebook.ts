@@ -289,7 +289,7 @@ export class NotebookState {
     const stack: Heading[] = [];
     for (const cell of this.ordered()) {
       for (const heading of this.headings(cell)) {
-        while (stack.length && stack[stack.length - 1].level >= heading.level) stack.pop();
+        while (stack.length && stack[stack.length - 1]!.level >= heading.level) stack.pop();
         stack.push(heading);
       }
       if (cell.id === cellId) break;

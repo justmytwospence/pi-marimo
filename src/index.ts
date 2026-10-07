@@ -22,7 +22,7 @@ type Entry = { type?: string; customType?: string; data?: unknown };
 function savedMode(entries: readonly Entry[]): Mode | undefined {
   for (let i = entries.length - 1; i >= 0; i--) {
     const entry = entries[i];
-    if (entry.type !== "custom" || entry.customType !== ENTRY) continue;
+    if (entry?.type !== "custom" || entry.customType !== ENTRY) continue;
     const mode = (entry.data as { mode?: Mode } | undefined)?.mode;
     if (mode && (mode.kind === "auto" || mode.kind === "off" || (mode.kind === "pinned" && typeof mode.path === "string"))) return mode;
   }
@@ -43,7 +43,7 @@ export function moveStateBreakpoint(payload: unknown): unknown {
   const messages = body?.messages;
   if (!Array.isArray(messages)) return undefined;
   for (let m = messages.length - 1; m >= 0; m--) {
-    const content = messages[m].content;
+    const content = messages[m]?.content;
     if (!Array.isArray(content)) continue;
     const b = content.findIndex((block) => typeof block?.text === "string" && block.text.startsWith(`<${STATE_TAG}`));
     if (b < 0) continue;
@@ -168,7 +168,7 @@ export default function piMarimo(pi: ExtensionAPI): void {
       else if (choice === off) setMode({ kind: "off" });
       else {
         const notebook = notebooks[labels.indexOf(choice)];
-        setMode({ kind: "pinned", path: notebook.path, url: notebook.url });
+        if (notebook) setMode({ kind: "pinned", path: notebook.path, url: notebook.url });
       }
     },
   });
