@@ -93,6 +93,9 @@ describe("render", () => {
       "marimo: nb.py · running Data loading › Slow model fit (12s) · 1 queued",
     );
     expect(statusText(statusParts(nb, attachment, "disconnected"))).toBe("marimo: nb.py · disconnected");
+    expect(statusText(statusParts(nb, attachment, "connected", since + 1000, 2))).toBe(
+      "marimo: nb.py · running Data loading › Slow model fit (1s) · 1 queued · +2 open",
+    );
   });
 
   test("snapshot outline", () => {

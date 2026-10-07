@@ -1,6 +1,6 @@
 // Against a real marimo server: needs `marimo` on PATH (skipped otherwise).
 import { type ChildProcess, execFileSync, spawn } from "node:child_process";
-import { mkdtempSync, realpathSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, expect, test } from "vitest";
@@ -73,42 +73,65 @@ async function until<T>(check: () => T | undefined | false, ms = 20_000): Promis
   }
 }
 
-test.skipIf(!hasMarimo)("follows a live notebook's running section", async () => {
+function openInBrowser(url: string, file: string, id: string): void {
+  // Stand in for the browser: the main consumer that creates the session.
+  const browser = new AbortController();
+  aborts.push(browser);
+  void fetch(`${url}/sse?session_id=${id}&file=${encodeURIComponent(file)}`, { signal: browser.signal })
+    .then(async (r) => { for await (const _ of r.body!) { /* drain */ } })
+    .catch(() => undefined);
+}
+
+function runAll(url: string, file: string): void {
+  const run = spawn("marimo", ["pair", "execute", "--url", url, "--file", file, "--code-file", "-"], { stdio: ["pipe", "ignore", "ignore"] });
+  run.stdin!.end("import marimo._code_mode as cm\nasync with cm.get_context() as ctx:\n    for c in ctx.cells:\n        ctx.run_cell(c.id)\n");
+}
+
+test.skipIf(!hasMarimo)("follows the notebooks open under the cwd, the most recently used one current", async () => {
   const dir = realpathSync(mkdtempSync(join(tmpdir(), "pi-marimo-")));
   const file = join(dir, "nb.py");
+  const other = join(dir, "other.py");
+  const hidden = join(dir, ".worktrees", "branch", "nb.py");
   writeFileSync(file, NOTEBOOK);
-  server = spawn("marimo", ["edit", file, "--no-token", "--headless", "--port", String(port)], { cwd: dir, stdio: "ignore" });
+  writeFileSync(other, NOTEBOOK.replace("## Slow step", "## Other step"));
+  mkdirSync(join(dir, ".worktrees", "branch"), { recursive: true });
+  writeFileSync(hidden, NOTEBOOK);
+  server = spawn("marimo", ["edit", dir, "--no-token", "--headless", "--port", String(port)], { cwd: dir, stdio: "ignore" });
   const url = `http://127.0.0.1:${port}`;
   for (let i = 0; i < 100; i++) {
     try { if ((await fetch(`${url}/health`)).ok) break; } catch { /* starting */ }
     await new Promise((r) => setTimeout(r, 200));
   }
-  // Stand in for the browser: the main consumer that creates the session.
-  const browser = new AbortController();
-  aborts.push(browser);
-  void fetch(`${url}/sse?session_id=browser1&file=${encodeURIComponent(file)}`, { signal: browser.signal })
-    .then(async (r) => { for await (const _ of r.body!) { /* drain */ } })
-    .catch(() => undefined);
+  openInBrowser(url, file, "browser1");
+  openInBrowser(url, other, "browser2");
+  openInBrowser(url, hidden, "browser3");
 
   let changes = 0;
   const watcher = new MarimoWatcher({ io: nodeIo(), cwd: dir, pollMs: 300, onChange: () => changes++ });
   watcher.start();
   try {
-    await until(() => watcher.connection === "connected");
-    expect(watcher.attachment?.path).toBe(file);
+    await until(() => watcher.connection === "connected" && watcher.others().length === 1);
+    // The checkout under a hidden directory is left out.
+    expect([watcher.attachment!.path, ...watcher.others().map((o) => o.path)].sort()).toEqual([file, other]);
     expect(watcher.notebook.order).toHaveLength(4);
 
-    const run = spawn("marimo", ["pair", "execute", "--url", url, "--file", file, "--code-file", "-"], { stdio: ["pipe", "ignore", "ignore"] });
-    run.stdin!.end("import marimo._code_mode as cm\nasync with cm.get_context() as ctx:\n    for c in ctx.cells:\n        ctx.run_cell(c.id)\n");
+    runAll(url, file);
     const running = await until(() => {
       const r = watcher.notebook.running();
       return r?.section.length === 2 ? r : undefined;
     });
+    expect(watcher.attachment?.path).toBe(file);
     expect(running.section).toEqual(["Loading", "Slow step"]);
     await until(() => watcher.notebook.defs.get(running.cell.id)?.includes("y") && !watcher.notebook.running());
     expect(changes).toBeGreaterThan(3);
 
-    // An edit typed in the browser reaches us (marimo does not echo it to the browser's own id).
+    // Running the other notebook makes it current.
+    runAll(url, other);
+    await until(() => watcher.attachment?.path === other && watcher.notebook.running()?.section.join() === "Loading,Other step");
+    await until(() => !watcher.notebook.running());
+
+    // An edit typed in the browser reaches us (marimo does not echo it to the
+    // browser's own id), and makes its notebook current again.
     expect(watcher.seesBrowserEdits).toBe(true);
     const html = await (await fetch(`${url}/?file=${encodeURIComponent(file)}`)).text();
     const serverToken = /marimo-server-token data-token="([^"]+)"/.exec(html)![1];
@@ -118,7 +141,7 @@ test.skipIf(!hasMarimo)("follows a live notebook's running section", async () =>
       body: JSON.stringify({ changes: [{ type: "set-code", cellId: running.cell.id, code: "time.sleep(3)\ny = 2" }] }),
     });
     expect(edit.ok).toBe(true);
-    const cell = await until(() => watcher.notebook.cells.get(running.cell.id)?.editedBy === "frontend" && watcher.notebook.cells.get(running.cell.id));
+    const cell = await until(() => watcher.attachment?.path === file && watcher.notebook.cells.get(running.cell.id)?.editedBy === "frontend" && watcher.notebook.cells.get(running.cell.id));
     expect(watcher.notebook.edited(cell)).toBe(true);
   } finally {
     await watcher.stop();

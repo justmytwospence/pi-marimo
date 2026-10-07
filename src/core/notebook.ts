@@ -78,6 +78,13 @@ export class NotebookState {
   ready = false;
   /** Increments on every document change. */
   seq = 0;
+  /**
+   * When the notebook was last used (ms since epoch): the latest cell run the
+   * kernel reports (replayed on connect, so a notebook's history counts), or an
+   * edit seen live.
+   */
+  lastActivity = 0;
+  private readyAt = 0;
   private headingCache = new Map<string, Heading[]>();
 
   reset(): void {
@@ -85,6 +92,8 @@ export class NotebookState {
     this.cells.clear();
     this.defs.clear();
     this.ready = false;
+    this.lastActivity = 0;
+    this.readyAt = 0;
     this.headingCache.clear();
   }
 
@@ -144,6 +153,7 @@ export class NotebookState {
     });
     this.order = ids;
     this.ready = true;
+    this.readyAt = Date.now();
     return true;
   }
 
@@ -161,6 +171,8 @@ export class NotebookState {
   private transaction(tx: Record<string, unknown>): boolean {
     const source = typeof tx.source === "string" ? tx.source : "unknown";
     const changes = Array.isArray(tx.changes) ? tx.changes.map(record) : [];
+    // An edit counts as use when it arrives live, not in the replay on connect.
+    if (source !== "kernel" && changes.length && this.readyAt && Date.now() - this.readyAt > 1500) this.lastActivity = Date.now();
     let changed = false;
     for (const change of changes) {
       const id = typeof change.cellId === "string" ? change.cellId : "";
@@ -228,6 +240,9 @@ export class NotebookState {
     if (!id || isInternal(id) || !this.cells.has(id)) return false;
     const cell = this.ensure(id);
     let changed = false;
+    if (typeof data.status === "string" && typeof data.timestamp === "number") {
+      this.lastActivity = Math.max(this.lastActivity, data.timestamp * 1000);
+    }
     if (typeof data.status === "string" && data.status !== cell.status) {
       cell.status = data.status;
       if (data.status === "queued") {

@@ -73,11 +73,10 @@ export default function piMarimo(pi: ExtensionAPI): void {
 
   const statusLine = (): string | undefined => {
     if (!watcher) return undefined;
-    const { connection, attachment, mode, candidates } = watcher;
-    if (connection === "ambiguous") return `marimo: ${candidates.length} notebooks open here · /marimo to pick one`;
+    const { connection, attachment, mode } = watcher;
     if (!attachment) return undefined;
     if (connection === "searching") return mode.kind === "pinned" ? statusText({ notebook: attachment.path.split("/").pop()!, connection: "not open", queued: 0, errors: 0 }) : undefined;
-    return statusText(statusParts(watcher.notebook, attachment, connection));
+    return statusText(statusParts(watcher.notebook, attachment, connection, Date.now(), watcher.others().length));
   };
 
   const render = (): void => {
@@ -133,7 +132,7 @@ export default function piMarimo(pi: ExtensionAPI): void {
 
   pi.on("context", (event) => {
     if (!watcher?.attachment || watcher.connection !== "connected" || !watcher.notebook.ready) return undefined;
-    const text = snapshot(watcher.notebook, watcher.attachment, { seenSeq });
+    const text = snapshot(watcher.notebook, watcher.attachment, { seenSeq, others: watcher.others() });
     return {
       messages: [
         ...event.messages,
@@ -151,15 +150,15 @@ export default function piMarimo(pi: ExtensionAPI): void {
     handler: async (args, ctx) => {
       if (!watcher) return;
       const arg = args.trim();
-      if (arg === "auto") { setMode({ kind: "auto" }); ctx.ui.notify("marimo: following notebooks open under this directory", "info"); return; }
+      if (arg === "auto") { setMode({ kind: "auto" }); ctx.ui.notify("marimo: following the notebook used most recently under this directory", "info"); return; }
       if (arg === "off") { setMode({ kind: "off" }); ctx.ui.notify("marimo: off", "info"); return; }
       if (arg === "show") {
         if (!watcher.attachment || watcher.connection !== "connected") { ctx.ui.notify(statusLine() ?? "marimo: no notebook attached", "info"); return; }
-        ctx.ui.notify(snapshot(watcher.notebook, watcher.attachment, { seenSeq }), "info");
+        ctx.ui.notify(snapshot(watcher.notebook, watcher.attachment, { seenSeq, others: watcher.others() }), "info");
         return;
       }
       const notebooks = await watcher.list();
-      const auto = `Auto: the notebook open under ${ctx.cwd}`;
+      const auto = `Auto: the notebook used most recently under ${ctx.cwd}`;
       const off = "Off";
       const labels = notebooks.map((n) => `${n.path}  (${n.url})`);
       const choice = await ctx.ui.select("Notebook for Pi to follow", [...labels, auto, off]);

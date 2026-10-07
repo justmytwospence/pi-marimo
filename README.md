@@ -3,9 +3,9 @@
 A [Pi](https://pi.dev) extension that follows the [marimo](https://marimo.io) notebook you are
 working in, so Pi knows what it looks like and what it is doing without being asked.
 
-- **Footer:** `marimo: fit.py · running Data loading › Model fit (12s) · 2 queued · 1 error`. The
-  running part is the markdown section (heading path) the running cell sits under, so you can tell
-  roughly what is running.
+- **Footer:** `marimo: fit.py · running Data loading › Model fit (12s) · 2 queued · 1 error · +2 open`.
+  The running part is the markdown section (heading path) the running cell sits under, so you can
+  tell roughly what is running; `+2 open` counts the other notebooks it follows.
 - **Context:** before every model request, the notebook's current state is appended as the last
   message: its outline (markdown headings), one line per code cell with what it defines, and what
   needs attention (running, queued, errors, stale, edited but not rerun, changed by you in the
@@ -27,11 +27,14 @@ the cell document (`notebook-document-transaction`), each cell's status and erro
 the dataflow graph (`variables`). Outputs are dropped. Nothing runs in the kernel, so it keeps
 working while a long cell runs.
 
-**Which notebook.** By default (`auto`) it follows the notebook open under Pi's working directory,
-found through marimo's server registry (`$XDG_STATE_HOME/marimo/servers`, written by servers started
-with `--no-token`) and each server's `/api/sessions`. With several open there, the footer asks you to
-pick one with `/marimo`. A picked notebook is remembered in the Pi session and followed across page
-reloads and server restarts. Token-protected servers are reached with `MARIMO_TOKEN`.
+**Which notebook.** By default (`auto`) it follows every notebook open under Pi's working directory
+(up to eight), found through marimo's server registry (`$XDG_STATE_HOME/marimo/servers`, written by
+servers started with `--no-token`) and each server's `/api/sessions`. Notebooks in a hidden
+directory there (`.worktrees/`, `.claude/worktrees/`: other checkouts) are left out. The current one,
+shown in the footer and in context, is the one used most recently: a running cell first, then the
+latest cell run (replayed on connect, so history counts) or edit; the others are named in the state
+block. `/marimo` pins one instead, remembered in the Pi session and followed across page reloads and
+server restarts. Token-protected servers are reached with `MARIMO_TOKEN`.
 
 **Browser edits.** marimo does not echo an edit back to the consumer whose session id sent it, so
 pi-marimo connects under its own id and lets marimo find the session by file. When several sessions
@@ -50,8 +53,8 @@ nothing.
 The status is published with `ctx.ui.setStatus("marimo", text)`, so it appears in Pi's built-in
 footer and in any footer that shows extension statuses. Its shape is stable for footers that want
 to lay it out themselves: `marimo: <file>` followed by ` · `-separated parts, `running <a › b>
-(<elapsed>)`, `<n> queued`, `<n> error(s)`, or a connection note (`connecting`, `disconnected`,
-`not open`). [pi-status-footer](https://github.com/justmytwospence/pi-status-footer) gives it its own
+(<elapsed>)`, `<n> queued`, `<n> error(s)`, `+<n> open`, or a connection note (`connecting`,
+`disconnected`, `not open`). [pi-status-footer](https://github.com/justmytwospence/pi-status-footer) gives it its own
 row under the context row, shortening the section to its deepest heading when narrow; any other
 shape stays in its status row.
 
