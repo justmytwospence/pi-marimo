@@ -143,6 +143,11 @@ test.skipIf(!hasMarimo)("follows the notebooks open under the cwd, the most rece
     expect(edit.ok).toBe(true);
     const cell = await until(() => watcher.attachment?.path === file && watcher.notebook.cells.get(running.cell.id)?.editedBy === "frontend" && watcher.notebook.cells.get(running.cell.id));
     expect(watcher.notebook.edited(cell)).toBe(true);
+
+    // Pinning follows exactly the pinned notebooks, the hidden one included.
+    watcher.setMode({ kind: "pinned", paths: [other, hidden] });
+    const paths = () => watcher.followed().map((f) => f.attachment.path).sort().join();
+    await until(() => paths() === [hidden, other].sort().join() && watcher.followed().every((f) => f.connection === "connected"));
   } finally {
     await watcher.stop();
   }

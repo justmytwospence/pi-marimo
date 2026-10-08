@@ -1,8 +1,9 @@
 // Keeps the live state of the notebooks you work in current. It finds them,
 // subscribes to each one's session as a kiosk consumer, follows them across
 // page reloads (which change the session id) and server restarts, and reports
-// every change. One of them is current: the pinned one, or in auto mode the
-// one used most recently (a cell run or an edit).
+// every change. The followed notebooks are the pinned ones, or in auto mode
+// every one open under the cwd; the current one is the one used most recently
+// (a running cell, then the latest cell run or edit).
 
 import { type Cancellable, type Io, normalize, within } from "./io.js";
 import { NotebookState } from "./notebook.js";
@@ -12,7 +13,7 @@ import { streamSession } from "./sse.js";
 
 export type Mode =
   | { kind: "auto" }
-  | { kind: "pinned"; path: string; url?: string }
+  | { kind: "pinned"; paths: string[] }
   | { kind: "off" };
 
 export type Connection = "idle" | "searching" | "connecting" | "connected" | "disconnected";
@@ -31,6 +32,23 @@ export interface WatcherOptions {
 type Target = NotebookSession & { real: string; shared: boolean };
 
 const consumerId = (): string => `pi-marimo-${Math.random().toString(36).slice(2, 10)}`;
+
+/** A followed notebook, as the hosts see it. */
+export interface Followed {
+  attachment: Attachment;
+  notebook: NotebookState;
+  connection: Connection;
+  current: boolean;
+}
+
+/** Read a saved or configured mode, accepting the single-notebook form `{ kind: "pinned", path }`. */
+export function parseMode(raw: unknown): Mode | undefined {
+  const mode = raw as { kind?: unknown; path?: unknown; paths?: unknown } | undefined;
+  if (mode?.kind === "auto" || mode?.kind === "off") return { kind: mode.kind };
+  if (mode?.kind !== "pinned") return undefined;
+  const paths = Array.isArray(mode.paths) ? mode.paths.filter((p): p is string => typeof p === "string") : typeof mode.path === "string" ? [mode.path] : [];
+  return paths.length ? { kind: "pinned", paths } : undefined;
+}
 
 /** One notebook's subscription, reconnecting until stopped. */
 class Follower {
@@ -121,16 +139,25 @@ export class MarimoWatcher {
 
   constructor(private readonly options: WatcherOptions) {}
 
-  /** The current notebook: the pinned one, or the one used most recently. */
+  /** Followers, the current one first, then by most recent use. */
+  private ranked(): Follower[] {
+    const rank = (x: Follower): number[] => [x.connection === "connected" ? 1 : 0, x.notebook.running() ? 1 : 0, x.notebook.lastActivity];
+    const cmp = (a: Follower, b: Follower): number => {
+      const [x, y] = [rank(a), rank(b)];
+      for (let i = 0; i < x.length; i++) if (x[i] !== y[i]) return y[i]! - x[i]!;
+      return 0;
+    };
+    return [...this.followers.values()].sort(cmp);
+  }
+
+  /** The current notebook: the one used most recently. */
   private get active(): Follower | undefined {
-    let best: Follower | undefined;
-    for (const f of this.followers.values()) {
-      if (!best) { best = f; continue; }
-      const rank = (x: Follower) => [x.connection === "connected" ? 1 : 0, x.notebook.running() ? 1 : 0, x.notebook.lastActivity];
-      const [a, b] = [rank(f), rank(best)];
-      if (a[0]! > b[0]! || (a[0] === b[0] && (a[1]! > b[1]! || (a[1] === b[1] && a[2]! > b[2]!)))) best = f;
-    }
-    return best;
+    return this.ranked()[0];
+  }
+
+  /** Every followed notebook, the current one first, then by most recent use. */
+  followed(): Followed[] {
+    return this.ranked().map((f, i) => ({ attachment: f.attachment, notebook: f.notebook, connection: f.connection, current: i === 0 }));
   }
 
   get notebook(): NotebookState {
@@ -140,7 +167,7 @@ export class MarimoWatcher {
   get attachment(): Attachment | undefined {
     const active = this.active;
     if (active) return active.attachment;
-    return this.mode.kind === "pinned" ? { url: this.mode.url ?? "", sessionId: "", path: this.mode.path } : undefined;
+    return this.mode.kind === "pinned" ? { url: "", sessionId: "", path: this.mode.paths[0]! } : undefined;
   }
 
   get connection(): Connection {
@@ -153,10 +180,9 @@ export class MarimoWatcher {
     return this.active?.seesBrowserEdits ?? false;
   }
 
-  /** The other notebooks followed besides the current one. */
+  /** The other notebooks followed besides the current one, most recently used first. */
   others(): Attachment[] {
-    const active = this.active;
-    return [...this.followers.values()].filter((f) => f !== active).map((f) => f.attachment);
+    return this.ranked().slice(1).map((f) => f.attachment);
   }
 
   start(): void {
@@ -223,10 +249,11 @@ export class MarimoWatcher {
       out.set(`${s.url} ${path}`, { ...s, real: path, shared });
     };
     if (mode.kind === "pinned") {
-      const path = await this.real(mode.path);
-      const matches = sessions.filter((s) => real.get(s) === path);
-      const chosen = matches.filter((s) => s.url === mode.url).pop() ?? matches.pop();
-      if (chosen) add(chosen);
+      for (const pinned of mode.paths) {
+        const path = await this.real(pinned);
+        const chosen = sessions.filter((s) => real.get(s) === path).pop();
+        if (chosen) add(chosen);
+      }
       return out;
     }
     this.realCwd ??= await this.real(this.options.cwd);

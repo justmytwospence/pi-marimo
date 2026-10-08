@@ -1,17 +1,17 @@
 // pi-marimo: keeps Pi aware of the marimo notebook you are working in.
 //
-// - Footer: `marimo: <file> · running <section> (12s) · 2 queued · 1 error`
+// - Footer: `marimo: <current file> · running <section> (12s) · 2 queued · 1 error · also <file>, <file>`
 //   through ctx.ui.setStatus("marimo", ...), so it shows in Pi's own footer and
 //   any footer that reads extension statuses.
-// - Context: the notebook's state, taken when you send a prompt, sits right
+// - Context: the notebooks' state, taken when you send a prompt, sits right
 //   after that prompt for the whole turn. It is never stored in the session, so
 //   the model sees only the current turn's copy and old copies never pile up.
-// - /marimo: pick the notebook, follow notebooks under the cwd, or turn it off.
+// - /marimo: pin notebooks, follow every notebook under the cwd, or turn it off.
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { snapshot, STATE_TAG, statusParts, statusText } from "./core/render.js";
 import { nodeIo } from "./core/node-io.js";
-import { MarimoWatcher, type Mode } from "./core/watcher.js";
+import { MarimoWatcher, type Mode, parseMode } from "./core/watcher.js";
 
 const ENTRY = "pi-marimo";
 const STATUS_KEY = "marimo";
@@ -23,8 +23,8 @@ function savedMode(entries: readonly Entry[]): Mode | undefined {
   for (let i = entries.length - 1; i >= 0; i--) {
     const entry = entries[i];
     if (entry?.type !== "custom" || entry.customType !== ENTRY) continue;
-    const mode = (entry.data as { mode?: Mode } | undefined)?.mode;
-    if (mode && (mode.kind === "auto" || mode.kind === "off" || (mode.kind === "pinned" && typeof mode.path === "string"))) return mode;
+    const mode = parseMode((entry.data as { mode?: unknown } | undefined)?.mode);
+    if (mode) return mode;
   }
   return undefined;
 }
@@ -51,7 +51,8 @@ export function insertState<M extends { role?: string; timestamp?: number }>(mes
 export default function piMarimo(pi: ExtensionAPI): void {
   let watcher: MarimoWatcher | undefined;
   let ctxRef: ExtensionContext | undefined;
-  let seenSeq = 0;
+  // Per notebook path: browser edits after this change number are flagged as new.
+  const seen = new Map<string, number>();
   let pending: ReturnType<typeof setTimeout> | undefined;
   let ticker: ReturnType<typeof setInterval> | undefined;
   let lastStatus: string | undefined;
@@ -62,8 +63,10 @@ export default function piMarimo(pi: ExtensionAPI): void {
     if (!watcher) return undefined;
     const { connection, attachment, mode } = watcher;
     if (!attachment) return undefined;
-    if (connection === "searching") return mode.kind === "pinned" ? statusText({ notebook: attachment.path.split("/").pop()!, connection: "not open", queued: 0, errors: 0 }) : undefined;
-    return statusText(statusParts(watcher.notebook, attachment, connection, Date.now(), watcher.others().length));
+    if (connection === "searching") {
+      return mode.kind === "pinned" ? statusText({ notebook: mode.paths.map((p) => p.split("/").pop()).join(", "), connection: "not open", queued: 0, errors: 0 }) : undefined;
+    }
+    return statusText(statusParts(watcher.notebook, attachment, connection, Date.now(), watcher.others()));
   };
 
   const render = (): void => {
@@ -82,6 +85,12 @@ export default function piMarimo(pi: ExtensionAPI): void {
   const schedule = (): void => {
     pending ??= setTimeout(render, 150);
   };
+
+  /** The followed notebooks that are connected, the current one first. */
+  const stateEntries = () =>
+    (watcher?.followed() ?? [])
+      .filter((f) => f.connection === "connected" && f.notebook.ready)
+      .map((f) => ({ notebook: f.notebook, attachment: f.attachment, current: f.current, seenSeq: seen.get(f.attachment.path) ?? 0 }));
 
   const setMode = (mode: Mode): void => {
     pi.appendEntry(ENTRY, { mode });
@@ -112,13 +121,13 @@ export default function piMarimo(pi: ExtensionAPI): void {
     if (!watcher) return;
     watcher.refresh();
     await watcher.settle(2000);
-    if (!watcher.attachment || watcher.connection !== "connected" || !watcher.notebook.ready) return;
-    turn = { text: snapshot(watcher.notebook, watcher.attachment, { seenSeq, others: watcher.others(), refresh: "prompt" }) };
+    const entries = stateEntries();
+    turn = entries.length ? { text: snapshot(entries, { refresh: "prompt" }) } : undefined;
   });
 
   // Browser edits made after this point are flagged as new in the next turn.
   pi.on("agent_end", () => {
-    if (watcher) seenSeq = watcher.notebook.seq;
+    for (const f of watcher?.followed() ?? []) seen.set(f.attachment.path, f.notebook.seq);
   });
 
   pi.on("context", (event) => {
@@ -130,30 +139,37 @@ export default function piMarimo(pi: ExtensionAPI): void {
   });
 
   pi.registerCommand("marimo", {
-    description: "Choose the marimo notebook Pi follows (auto, off, show)",
+    description: "Choose the marimo notebooks Pi follows (auto, off, show)",
     getArgumentCompletions: (prefix) =>
       ["auto", "off", "show"].filter((a) => a.startsWith(prefix.trim())).map((value) => ({ value, label: value })),
     handler: async (args, ctx) => {
       if (!watcher) return;
       const arg = args.trim();
-      if (arg === "auto") { setMode({ kind: "auto" }); ctx.ui.notify("marimo: following the notebook used most recently under this directory", "info"); return; }
+      if (arg === "auto") { setMode({ kind: "auto" }); ctx.ui.notify("marimo: following every notebook open under this directory", "info"); return; }
       if (arg === "off") { setMode({ kind: "off" }); ctx.ui.notify("marimo: off", "info"); return; }
       if (arg === "show") {
-        if (!watcher.attachment || watcher.connection !== "connected") { ctx.ui.notify(statusLine() ?? "marimo: no notebook attached", "info"); return; }
-        ctx.ui.notify(snapshot(watcher.notebook, watcher.attachment, { seenSeq, others: watcher.others(), refresh: "prompt" }), "info");
+        const entries = stateEntries();
+        ctx.ui.notify(entries.length ? snapshot(entries, { refresh: "prompt" }) : statusLine() ?? "marimo: no notebook attached", "info");
         return;
       }
-      const notebooks = await watcher.list();
-      const auto = `Auto: the notebook used most recently under ${ctx.cwd}`;
+      // A checklist: pick notebooks to pin one at a time, then Done.
+      const open = [...new Map((await watcher.list()).map((n) => [n.path, n])).values()];
+      const pinned = new Set(watcher.mode.kind === "pinned" ? watcher.mode.paths : []);
+      for (const p of pinned) if (!open.some((n) => n.path === p)) open.push({ url: "", sessionId: "", path: p });
+      const done = "Done";
+      const auto = `Auto: every notebook open under ${ctx.cwd}`;
       const off = "Off";
-      const labels = notebooks.map((n) => `${n.path}  (${n.url})`);
-      const choice = await ctx.ui.select("Notebook for Pi to follow", [...labels, auto, off]);
-      if (choice === undefined) return;
-      if (choice === auto) setMode({ kind: "auto" });
-      else if (choice === off) setMode({ kind: "off" });
-      else {
-        const notebook = notebooks[labels.indexOf(choice)];
-        if (notebook) setMode({ kind: "pinned", path: notebook.path, url: notebook.url });
+      for (;;) {
+        const labels = open.map((n) => `${pinned.has(n.path) ? "[x]" : "[ ]"} ${n.path}${n.url ? "" : "  (not open)"}`);
+        const choice = await ctx.ui.select("Notebooks for Pi to follow (pick to toggle)", [done, ...labels, auto, off]);
+        if (choice === undefined) return;
+        if (choice === auto) return setMode({ kind: "auto" });
+        if (choice === off) return setMode({ kind: "off" });
+        if (choice === done) return setMode(pinned.size ? { kind: "pinned", paths: [...pinned] } : { kind: "auto" });
+        const notebook = open[labels.indexOf(choice)];
+        if (!notebook) continue;
+        if (pinned.has(notebook.path)) pinned.delete(notebook.path);
+        else pinned.add(notebook.path);
       }
     },
   });

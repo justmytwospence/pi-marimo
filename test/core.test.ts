@@ -6,6 +6,7 @@ import { NotebookState } from "../src/core/notebook.js";
 import { snapshot, statusParts, statusText } from "../src/core/render.js";
 import { SseParser } from "../src/core/sse.js";
 import { normalize, within } from "../src/core/io.js";
+import { parseMode } from "../src/core/watcher.js";
 
 const attachment = { url: "http://127.0.0.1:2799", sessionId: "s1", path: "/tmp/pmt/nb.py" };
 
@@ -79,9 +80,9 @@ describe("notebook state from a recorded stream", () => {
     expect(nb.order).toEqual(["Hbol", "MJUe", "vblA", "bkHC", "lEQa", "new1", "PKri"]);
     expect(nb.edited(nb.cells.get("vblA")!)).toBe(true);
     expect(nb.sectionPath("PKri")).toEqual(["Data loading", "Plots"]);
-    const text = snapshot(nb, attachment, { seenSeq: 0 });
+    const text = snapshot([{ notebook: nb, attachment, seenSeq: 0 }]);
     expect(text).toContain("vblA: defines x -- edited, not rerun; changed by the user in the browser");
-    expect(snapshot(nb, attachment, { seenSeq: nb.seq })).not.toContain("changed by the user");
+    expect(snapshot([{ notebook: nb, attachment, seenSeq: nb.seq }])).not.toContain("changed by the user");
   });
 });
 
@@ -93,13 +94,13 @@ describe("render", () => {
       "marimo: nb.py · running Data loading › Slow model fit (12s) · 1 queued",
     );
     expect(statusText(statusParts(nb, attachment, "disconnected"))).toBe("marimo: nb.py · disconnected");
-    expect(statusText(statusParts(nb, attachment, "connected", since + 1000, 2))).toBe(
-      "marimo: nb.py · running Data loading › Slow model fit (1s) · 1 queued · +2 open",
+    expect(statusText(statusParts(nb, attachment, "connected", since + 1000, [{ ...attachment, path: "/w/prep.py" }, { ...attachment, path: "/w/plots.py" }]))).toBe(
+      "marimo: nb.py · running Data loading › Slow model fit (1s) · 1 queued · also prep.py, plots.py",
     );
   });
 
   test("snapshot outline", () => {
-    const text = snapshot(replay("kiosk-run.sse"), attachment);
+    const text = snapshot([{ notebook: replay("kiosk-run.sse"), attachment }]);
     expect(text).toContain("# Data loading  [MJUe]");
     expect(text).toContain("## Slow model fit  [bkHC]");
     expect(text).toContain("  PKri: defines z -- ERROR ZeroDivisionError: division by zero");
@@ -112,7 +113,7 @@ describe("render", () => {
     nb.apply("kernel-ready", { cell_ids: ids, codes: ids.map((id) => `${id} = 1`), names: [], configs: [] });
     for (const id of ids.slice(1)) nb.apply("cell-op", { cell_id: id, status: "queued", timestamp: 1 });
     nb.apply("cell-op", { cell_id: "c0", status: "running", timestamp: 1 });
-    const text = snapshot(nb, attachment, { maxCells: 10, now: 2000 });
+    const text = snapshot([{ notebook: nb, attachment }], { maxCells: 10, now: 2000 });
     expect(text).toContain("Kernel: running c0, 19 queued.");
     expect(text).not.toContain("-- queued");
     expect(text).toContain("  c0: c0 = 1 -- RUNNING 1s\n  … 19 more cells");
@@ -122,9 +123,30 @@ describe("render", () => {
     const nb = new NotebookState();
     nb.apply("kernel-ready", { cell_ids: ["a", "b", "c"], codes: ["a = 1", "b = a", "c = b"], names: [], configs: [] });
     for (const id of ["a", "b"]) nb.apply("cell-op", { cell_id: id, stale_inputs: true });
-    const text = snapshot(nb, attachment);
+    const text = snapshot([{ notebook: nb, attachment }]);
     expect(text).toContain("Kernel: 2 of 3 cells stale (inputs changed, not rerun).");
     expect(text).not.toContain("-- stale");
+  });
+
+  test("several notebooks: the current one in full, the others as short outlines", () => {
+    const current = replay("kiosk-run.sse");
+    const other = new NotebookState();
+    other.apply("kernel-ready", {
+      cell_ids: ["m1", "a", "m2", "b", "c"],
+      codes: ['mo.md("# Prep")', "raw = load()", 'mo.md("### Deep detail")', "clean = fix(raw)", "z = 1 / 0"],
+      names: [], configs: [],
+    });
+    other.apply("cell-op", { cell_id: "c", status: "idle", output: { channel: "marimo-error", data: [{ type: "exception", exception_type: "ZeroDivisionError", msg: "division by zero" }] } });
+    const text = snapshot([
+      { notebook: current, attachment, current: true },
+      { notebook: other, attachment: { ...attachment, path: "/w/prep.py", sessionId: "s2" } },
+    ]);
+    expect(text).toContain('<marimo_notebook_state notebooks="2">');
+    expect(text).toContain("=== /tmp/pmt/nb.py (current; http://127.0.0.1:2799, session s1) ===");
+    expect(text).toContain("  lEQa: defines y");
+    const prep = text.slice(text.indexOf("=== /w/prep.py"));
+    expect(prep).toContain("(also followed; http://127.0.0.1:2799, session s2) ===\nKernel: 1 cell with errors.\n# Prep  [m1]\n  … 2 more cells\n  c: z = 1 / 0 -- ERROR ZeroDivisionError: division by zero");
+    expect(prep).not.toContain("Deep detail");
   });
 
   test("large notebooks fold quiet cells", () => {
@@ -132,7 +154,7 @@ describe("render", () => {
     const ids = Array.from({ length: 80 }, (_, i) => `c${i}`);
     nb.apply("kernel-ready", { cell_ids: ids, codes: ids.map((id, i) => (i % 20 === 0 ? `mo.md("# Part ${i / 20}")` : `${id} = ${i}`)), names: [], configs: [] });
     nb.apply("cell-op", { cell_id: "c45", status: "running", timestamp: 1 });
-    const text = snapshot(nb, attachment, { maxCells: 40, now: 3000 });
+    const text = snapshot([{ notebook: nb, attachment }], { maxCells: 40, now: 3000 });
     expect(text).toContain("# Part 2  [c40]\n  … 4 more cells\n  c45: c45 = 45 -- RUNNING 2s\n  … 14 more cells\n# Part 3");
   });
 });
@@ -155,4 +177,11 @@ test("paths", () => {
   expect(within("/a/b/c.py", "/a/")).toBe(true);
   expect(within("/ab/c.py", "/a")).toBe(false);
   expect(normalize("../x/./y.py", "/a/b")).toBe("/a/x/y.py");
+});
+
+test("modes, including the single-notebook form saved by older versions", () => {
+  expect(parseMode({ kind: "pinned", path: "/a.py", url: "u" })).toEqual({ kind: "pinned", paths: ["/a.py"] });
+  expect(parseMode({ kind: "pinned", paths: ["/a.py", "/b.py"] })).toEqual({ kind: "pinned", paths: ["/a.py", "/b.py"] });
+  expect(parseMode({ kind: "pinned", paths: [] })).toBeUndefined();
+  expect(parseMode({ kind: "auto" })).toEqual({ kind: "auto" });
 });

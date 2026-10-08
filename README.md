@@ -1,18 +1,21 @@
 # pi-marimo
 
-A [Pi](https://pi.dev) extension that follows the [marimo](https://marimo.io) notebook you are
-working in, so Pi knows what it looks like and what it is doing without being asked.
+A [Pi](https://pi.dev) extension that follows the [marimo](https://marimo.io) notebooks you are
+working in, so Pi knows what they look like and what they are doing without being asked.
 
-- **Footer:** `marimo: fit.py · running Data loading › Model fit (12s) · 2 queued · 1 error · +2 open`.
-  The running part is the markdown section (heading path) the running cell sits under, so you can
-  tell roughly what is running; `+2 open` counts the other notebooks it follows.
-- **Context:** when you send a prompt, the notebook's state is taken once and placed right after
-  that prompt for every model request of the turn: its outline (markdown headings), one line per
-  code cell with what it defines, and what needs attention (running, queued, errors, stale, edited
-  but not rerun, changed by you in the browser since Pi's last turn). The block is never stored in
-  the session, so the model sees only the current turn's copy and old copies never pile up.
-- **`/marimo`:** pick which notebook to follow; `/marimo auto`, `/marimo off`; `/marimo show`
-  prints the block the model sees.
+- **Footer:** `marimo: fit.py · running Data loading › Model fit (12s) · 2 queued · 1 error · also prep.py, plots.py`.
+  It names every notebook it follows. The first is the current one (used most recently), with what
+  its kernel is doing: the running part is the markdown section (heading path) the running cell sits
+  under, so you can tell roughly what is running. `also` names the others.
+- **Context:** when you send a prompt, the state of every followed notebook is taken once and
+  placed right after that prompt for every model request of the turn. The current notebook comes
+  first and in full: its outline (markdown headings), one line per code cell with what it defines,
+  and what needs attention (running, queued, errors, stale, edited but not rerun, changed by you in
+  the browser since Pi's last turn). The others follow as short outlines (headings down to `##`)
+  with only the cells that need attention. The block is never stored in the session, so the model
+  sees only the current turn's copy and old copies never pile up.
+- **`/marimo`:** a checklist of open notebooks to pin (any number, from anywhere); `/marimo auto`,
+  `/marimo off`; `/marimo show` prints the block the model sees.
 
 It pairs with the [marimo-pair](https://github.com/marimo-team/marimo-pair) skill, which is how the
 agent inspects and changes the notebook; this extension only reads.
@@ -33,8 +36,8 @@ servers started with `--no-token`) and each server's `/api/sessions`. Notebooks 
 directory there (`.worktrees/`, `.claude/worktrees/`: other checkouts) are left out. The current one,
 shown in the footer and in context, is the one used most recently: a running cell first, then the
 latest cell run (replayed on connect, so history counts) or edit; the others are named in the state
-block. `/marimo` pins one instead, remembered in the Pi session and followed across page reloads and
-server restarts. Token-protected servers are reached with `MARIMO_TOKEN`.
+block. `/marimo` pins a set instead, remembered in the Pi session and followed across page reloads
+and server restarts. Token-protected servers are reached with `MARIMO_TOKEN`.
 
 **Browser edits.** marimo does not echo an edit back to the consumer whose session id sent it, so
 pi-marimo connects under its own id and lets marimo find the session by file. When several sessions
@@ -55,8 +58,8 @@ while the agent runs cells; it sees their results through marimo-pair.
 The status is published with `ctx.ui.setStatus("marimo", text)`, so it appears in Pi's built-in
 footer and in any footer that shows extension statuses. Its shape is stable for footers that want
 to lay it out themselves: `marimo: <file>` followed by ` · `-separated parts, `running <a › b>
-(<elapsed>)`, `<n> queued`, `<n> error(s)`, `+<n> open`, or a connection note (`connecting`,
-`disconnected`, `not open`). [pi-status-footer](https://github.com/justmytwospence/pi-status-footer) gives it its own
+(<elapsed>)`, `<n> queued`, `<n> error(s)`, or a connection note (`connecting`, `disconnected`,
+`not open`) about the current notebook, and last `also <file>, <file>` naming the others. [pi-status-footer](https://github.com/justmytwospence/pi-status-footer) gives it its own
 row under the context row, shortening the section to its deepest heading when narrow; any other
 shape stays in its status row.
 
