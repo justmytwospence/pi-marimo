@@ -42,6 +42,8 @@ export interface Followed {
   notebook: NotebookState;
   connection: Connection;
   current: boolean;
+  /** When this session's agent last worked in it (0: never). */
+  touchedAt: number;
 }
 
 /** Read a saved or configured mode, accepting the single-notebook form `{ kind: "pinned", path }`. */
@@ -162,7 +164,7 @@ export class MarimoWatcher {
 
   /** Every followed notebook, the current one first, then by most recent use. */
   followed(): Followed[] {
-    return this.ranked().map((f, i) => ({ attachment: f.attachment, notebook: f.notebook, connection: f.connection, current: i === 0 }));
+    return this.ranked().map((f, i) => ({ attachment: f.attachment, notebook: f.notebook, connection: f.connection, current: i === 0, touchedAt: f.touchedAt }));
   }
 
   get notebook(): NotebookState {

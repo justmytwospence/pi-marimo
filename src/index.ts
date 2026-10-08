@@ -7,12 +7,16 @@
 //   after that prompt for the whole turn. It is never stored in the session, so
 //   the model sees only the current turn's copy and old copies never pile up.
 // - /marimo: pin notebooks, follow every notebook under the cwd, or turn it off.
+// - herdr: when a turn ends with a cell the agent started still running, the pane token `marimo`
+//   says what runs until the kernel goes quiet, then a notification says it finished (herdr.ts).
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { KernelHold } from "./core/hold.js";
 import { snapshot, STATE_TAG, statusParts, statusText } from "./core/render.js";
 import { nodeIo } from "./core/node-io.js";
 import { pairTargets } from "./core/touch.js";
 import { MarimoWatcher, type Mode, parseMode } from "./core/watcher.js";
+import { HerdrHold, herdrTarget } from "./herdr.js";
 
 const ENTRY = "pi-marimo";
 const STATUS_KEY = "marimo";
@@ -59,6 +63,9 @@ export default function piMarimo(pi: ExtensionAPI): void {
   let lastStatus: string | undefined;
   // The state taken when the current turn's prompt was sent, and that prompt's timestamp.
   let turn: { text: string; anchor?: number } | undefined;
+  // A cell the agent started that outlives its turn, shown in herdr (interactive sessions only).
+  const hold = new KernelHold();
+  let herdr: HerdrHold | undefined;
 
   const statusLine = (): string | undefined => {
     if (!watcher) return undefined;
@@ -72,6 +79,7 @@ export default function piMarimo(pi: ExtensionAPI): void {
 
   const render = (): void => {
     pending = undefined;
+    if (hold.active && watcher) void herdr?.apply(hold.update(watcher.followed(), Date.now()));
     const text = statusLine();
     if (text !== lastStatus) {
       lastStatus = text;
@@ -101,6 +109,7 @@ export default function piMarimo(pi: ExtensionAPI): void {
 
   pi.on("session_start", async (_event, ctx) => {
     ctxRef = ctx;
+    herdr = ctx.mode === "tui" ? new HerdrHold("pi", herdrTarget()) : undefined;
     await watcher?.stop();
     watcher = new MarimoWatcher({ io: nodeIo(), cwd: ctx.cwd, token: process.env.MARIMO_TOKEN, onChange: schedule });
     watcher.mode = savedMode(ctx.sessionManager.getBranch() as Entry[]) ?? { kind: "auto" };
@@ -111,6 +120,7 @@ export default function piMarimo(pi: ExtensionAPI): void {
     if (pending) clearTimeout(pending);
     if (ticker) clearInterval(ticker);
     pending = ticker = undefined;
+    await herdr?.apply(hold.release());
     await watcher?.stop();
     watcher = undefined;
     ctxRef?.ui.setStatus(STATUS_KEY, undefined);
@@ -132,6 +142,16 @@ export default function piMarimo(pi: ExtensionAPI): void {
     const targets = pairTargets(JSON.stringify(event.input ?? {}));
     if (targets.length) watcher?.touch(targets);
     return undefined;
+  });
+
+  pi.on("agent_start", () => {
+    void herdr?.apply(hold.begin(Date.now()));
+  });
+
+  // The agent is done for now: a cell it started that still runs holds the pane's attention.
+  pi.on("agent_settled", (_event, ctx) => {
+    if (!watcher || ctx.isIdle() !== true) return;
+    void herdr?.apply(hold.end(watcher.followed(), Date.now()));
   });
 
   // Browser edits made after this point are flagged as new in the next turn.

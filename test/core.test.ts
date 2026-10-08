@@ -203,3 +203,41 @@ PY`;
     expect(pairTargets("ls -la")).toEqual([]);
   });
 });
+
+describe("the kernel hold after a turn", async () => {
+  const { KernelHold } = await import("../src/core/hold.js");
+  const running = () => replay("kiosk-run.sse", (op, data) => op === "cell-op" && data.cell_id === "lEQa" && data.status === "running");
+  const followed = (notebook: NotebookState, touchedAt: number, connection: "connected" | "disconnected" = "connected") =>
+    [{ attachment, notebook, connection, current: true, touchedAt }];
+
+  test("holds while a notebook the agent worked in this turn runs, then finishes", () => {
+    const hold = new KernelHold();
+    const nb = running();
+    expect(hold.begin(1000)).toEqual({ kind: "none" });
+    expect(hold.end(followed(nb, 1500), 2000)).toEqual({ kind: "held", value: "nb.py: Slow model fit" });
+    expect(hold.active).toBe(true);
+    expect(hold.update(followed(nb, 1500), 2500)).toEqual({ kind: "none" });
+    const done = replay("kiosk-run.sse");
+    expect(hold.update(followed(done, 1500), 2000 + 75_000)).toEqual({ kind: "finished", title: "nb.py finished", body: "ran 1m15s · 1 error" });
+    expect(hold.active).toBe(false);
+  });
+
+  test("no hold for a notebook the agent did not touch this turn, or a quiet one", () => {
+    const hold = new KernelHold();
+    hold.begin(1000);
+    expect(hold.end(followed(running(), 500), 2000)).toEqual({ kind: "none" });
+    hold.begin(3000);
+    expect(hold.end(followed(replay("kiosk-run.sse"), 3500), 4000)).toEqual({ kind: "none" });
+    // A turn end without a seen start (an extension reloaded mid-turn) holds nothing.
+    expect(hold.end(followed(running(), 3500), 5000)).toEqual({ kind: "none" });
+  });
+
+  test("a new turn releases it; a disconnect ends it as stopped", () => {
+    const hold = new KernelHold();
+    hold.begin(1000);
+    hold.end(followed(running(), 1500), 2000);
+    expect(hold.begin(3000)).toEqual({ kind: "released" });
+    hold.end(followed(running(), 3500), 4000);
+    expect(hold.update(followed(running(), 3500, "disconnected"), 5000)).toEqual({ kind: "finished", title: "nb.py stopped", body: "ran 1s · disconnected" });
+  });
+});

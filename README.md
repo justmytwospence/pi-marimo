@@ -16,6 +16,8 @@ working in, so Pi knows what they look like and what they are doing without bein
   sees only the current turn's copy and old copies never pile up.
 - **`/marimo`:** a checklist of open notebooks to pin (any number, from anywhere); `/marimo auto`,
   `/marimo off`; `/marimo show` prints the block the model sees.
+- **herdr:** when a turn ends while a cell the agent started is still running, the pane says what
+  runs until the kernel goes quiet, then a notification says it finished (see below).
 
 It pairs with the [marimo-pair](https://github.com/marimo-team/marimo-pair) skill, which is how the
 agent inspects and changes the notebook; this extension only reads.
@@ -66,6 +68,20 @@ to lay it out themselves: `marimo: <file>` followed by ` · `-separated parts, `
 `not open`) about the current notebook, and last `also <file>, <file>` naming the others. [pi-status-footer](https://github.com/justmytwospence/pi-status-footer) gives it its own
 row under the context row, shortening the section to its deepest heading when narrow; any other
 shape stays in its status row.
+
+## herdr
+
+Inside a [herdr](https://herdr.dev) pane, a turn that ends while a notebook the agent worked in
+during that turn is still running or has cells queued starts a *kernel hold*. It lasts until every
+such notebook is quiet (or disconnects), or until the next prompt. During it the pane token
+`marimo` names the file and what runs (`fit.py: Model fit`, or `fit.py: 3 queued`); add `$marimo` to
+a row in `[ui.sidebar.agents]` to show it. At the end the token is cleared and a herdr notification
+(`fit.py finished`, `ran 4m12s · 1 error`) plays the done sound, unless the pane is focused.
+
+The pane's state stays `idle`: herdr's pi integration is the sole authority over it, and its
+sequence numbers leave no room for another reporter, so pi-marimo only adds the token and the
+notification. The [Claude Code port](https://github.com/justmytwospence/claude-marimo) can keep its
+pane `working` through the hold, because herdr reads Claude Code's state from the screen.
 
 ## Install
 
