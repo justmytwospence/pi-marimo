@@ -3,7 +3,7 @@
 // each cell's run state and errors (cell-op), and the dataflow graph
 // (variables). Only what an agent needs is kept; outputs are dropped.
 
-import { type Heading, headingsFromCode, isMarkdownCell } from "./markdown.js";
+import { type Heading, headingsFromCode, isMarkdownCell, sameCode } from "./markdown.js";
 
 export type EditSource = "frontend" | "code-mode" | "kernel" | string;
 
@@ -171,8 +171,6 @@ export class NotebookState {
   private transaction(tx: Record<string, unknown>): boolean {
     const source = typeof tx.source === "string" ? tx.source : "unknown";
     const changes = Array.isArray(tx.changes) ? tx.changes.map(record) : [];
-    // An edit counts as use when it arrives live, not in the replay on connect.
-    if (source !== "kernel" && changes.length && this.readyAt && Date.now() - this.readyAt > 1500) this.lastActivity = Date.now();
     let changed = false;
     for (const change of changes) {
       const id = typeof change.cellId === "string" ? change.cellId : "";
@@ -210,7 +208,9 @@ export class NotebookState {
         case "set-code": {
           const cell = this.ensure(id);
           const code = typeof change.code === "string" ? change.code : "";
-          if (cell.code !== code) {
+          // The browser respelling a markdown cell is not an edit.
+          if (cell.code !== code && sameCode(cell.code, code)) cell.code = code;
+          else if (cell.code !== code) {
             cell.code = code;
             cell.editedBy = source;
             cell.editSeq = ++this.seq;
@@ -232,6 +232,8 @@ export class NotebookState {
         }
       }
     }
+    // An edit counts as use when it arrives live, not in the replay on connect.
+    if (source !== "kernel" && changed && this.readyAt && Date.now() - this.readyAt > 1500) this.lastActivity = Date.now();
     return changed;
   }
 
@@ -327,6 +329,6 @@ export class NotebookState {
 
   /** Code changed since the kernel last ran it (only known once a run was seen). */
   edited(cell: Cell): boolean {
-    return cell.lastRunCode !== undefined && cell.lastRunCode !== cell.code;
+    return cell.lastRunCode !== undefined && !sameCode(cell.lastRunCode, cell.code);
   }
 }

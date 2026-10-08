@@ -90,3 +90,20 @@ export function isMarkdownCell(code: string): boolean {
   const literals = mdLiterals(trimmed);
   return literals.length === 1 && /\)\s*$/.test(trimmed);
 }
+
+/** The markdown a markdown cell renders, whatever quoting and indentation spell it; undefined for other cells. */
+export function markdownText(code: string): string | undefined {
+  if (!isMarkdownCell(code)) return undefined;
+  return dedent(mdLiterals(code.trim())[0] ?? "").split("\n").map((line) => line.trimEnd()).join("\n").trim();
+}
+
+/**
+ * The same code, or two spellings of the same markdown. marimo's editor rewrites a markdown cell
+ * into its own form (`mo.md("""` on its own line, dedented) as soon as a browser shows it, and
+ * posts that as a browser edit, though no one typed anything.
+ */
+export function sameCode(a: string, b: string): boolean {
+  if (a === b) return true;
+  const markdown = markdownText(a);
+  return markdown !== undefined && markdown === markdownText(b);
+}

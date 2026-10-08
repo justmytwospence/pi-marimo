@@ -86,6 +86,56 @@ describe("notebook state from a recorded stream", () => {
   });
 });
 
+describe("the browser respelling markdown cells", () => {
+  // Recorded from marimo 0.25: code mode creates markdown cells, the open browser posts each one
+  // back in its own form as a frontend set-code, with no one typing.
+  const created = [
+    ["dqNf", 'mo.md("Single line markdown.")', 'mo.md("""\nSingle line markdown.\n""")'],
+    ["Urrc", 'mo.md("""\n    Indented markdown\n    second line\n""")', 'mo.md("""\nIndented markdown\nsecond line\n""")'],
+    ["SKsZ", 'mo.md(\n    """\n    ## Heading\n    Text.\n    """\n)', 'mo.md("""\n## Heading\nText.\n""")'],
+    ["XLKe", "mo.md(\'\'\'\nsingle quotes\n\'\'\')", 'mo.md("""\nsingle quotes\n""")'],
+  ];
+
+  test("is neither a browser edit nor an edit since the last run", () => {
+    const nb = new NotebookState();
+    nb.apply("kernel-ready", { cell_ids: [], codes: [], names: [], configs: [] });
+    nb.apply("notebook-document-transaction", {
+      transaction: { source: "code-mode", changes: created.map(([cellId, code]) => ({ type: "create-cell", cellId, code, name: "", config: {} })) },
+    });
+    for (const [cellId] of created) {
+      nb.apply("cell-op", { cell_id: cellId, status: "running", timestamp: 1 });
+      nb.apply("cell-op", { cell_id: cellId, status: "idle", timestamp: 2 });
+    }
+    const seen = nb.seq;
+    nb.apply("notebook-document-transaction", {
+      transaction: { source: "frontend", changes: created.map(([cellId, , code]) => ({ type: "set-code", cellId, code })) },
+    });
+    for (const [cellId, , code] of created) {
+      const cell = nb.cells.get(cellId!)!;
+      expect(cell.code).toBe(code);
+      expect(cell.editedBy).toBe("code-mode");
+      expect(nb.edited(cell)).toBe(false);
+    }
+    expect(nb.sectionPath("SKsZ")).toEqual(["Heading"]);
+    expect(snapshot([{ notebook: nb, attachment, seenSeq: seen }])).not.toMatch(/edited|changed by the user/);
+  });
+
+  test("a real change to the markdown still counts", () => {
+    const nb = new NotebookState();
+    nb.apply("kernel-ready", { cell_ids: ["a"], codes: ['mo.md("Old text.")'], names: ["_"], configs: [], last_executed_code: { a: 'mo.md("Old text.")' } });
+    nb.apply("notebook-document-transaction", { transaction: { source: "frontend", changes: [{ type: "set-code", cellId: "a", code: 'mo.md("""\nNew text.\n""")' }] } });
+    const cell = nb.cells.get("a")!;
+    expect(cell.editedBy).toBe("frontend");
+    expect(nb.edited(cell)).toBe(true);
+  });
+
+  test("a reconnect after the respelling does not read as edited", () => {
+    const nb = new NotebookState();
+    nb.apply("kernel-ready", { cell_ids: ["a"], codes: ['mo.md("""\nText.\n""")'], names: ["_"], configs: [], last_executed_code: { a: 'mo.md("Text.")' } });
+    expect(nb.edited(nb.cells.get("a")!)).toBe(false);
+  });
+});
+
 describe("render", () => {
   test("status line while running", () => {
     const nb = replay("kiosk-run.sse", (op, data) => op === "cell-op" && data.cell_id === "lEQa" && data.status === "running");
