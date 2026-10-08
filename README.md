@@ -78,10 +78,11 @@ such notebook is quiet (or disconnects), or until the next prompt. During it the
 a row in `[ui.sidebar.agents]` to show it. At the end the token is cleared and a herdr notification
 (`fit.py finished`, `ran 4m12s · 1 error`) plays the done sound, unless the pane is focused.
 
-The pane's state stays `idle`: herdr's pi integration is the sole authority over it, and its
-sequence numbers leave no room for another reporter, so pi-marimo only adds the token and the
-notification. The [Claude Code port](https://github.com/justmytwospence/claude-marimo) can keep its
-pane `working` through the hold, because herdr reads Claude Code's state from the screen.
+The pane's state stays `idle`. herdr (0.9) lets no one but an agent's own integration change it:
+the pi and opencode integrations number their reports from a counter set at load, so a report
+wedged between them either is dropped or shuts the integration out, and for Claude Code herdr
+ignores state reported under its integration's source and refuses other sources once the session
+is known. So every port adds only the token and the notification.
 
 ## Install
 
