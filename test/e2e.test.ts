@@ -144,6 +144,18 @@ test.skipIf(!hasMarimo)("follows the notebooks open under the cwd, the most rece
     const cell = await until(() => watcher.attachment?.path === file && watcher.notebook.cells.get(running.cell.id)?.editedBy === "frontend" && watcher.notebook.cells.get(running.cell.id));
     expect(watcher.notebook.edited(cell)).toBe(true);
 
+    // This session's agent working in other.py keeps it current, even while the user runs fit.py.
+    expect(watcher.touch([{ url: url.replace("127.0.0.1", "localhost"), file: "other.py" }])).toBe(true);
+    expect(watcher.attachment?.path).toBe(other);
+    runAll(url, file);
+    await until(() => watcher.followed().find((f) => f.attachment.path === file)?.notebook.running());
+    expect(watcher.attachment?.path).toBe(other);
+    await until(() => !watcher.followed().some((f) => f.notebook.running()));
+    // By session id too; a target matching nothing changes nothing.
+    expect(watcher.touch([{ url, session: "browser1" }])).toBe(true);
+    expect(watcher.attachment?.path).toBe(file);
+    expect(watcher.touch([{ url, file: "missing.py" }])).toBe(false);
+
     // Pinning follows exactly the pinned notebooks, the hidden one included.
     watcher.setMode({ kind: "pinned", paths: [other, hidden] });
     const paths = () => watcher.followed().map((f) => f.attachment.path).sort().join();

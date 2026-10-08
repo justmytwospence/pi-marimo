@@ -34,8 +34,13 @@ working while a long cell runs.
 (up to eight), found through marimo's server registry (`$XDG_STATE_HOME/marimo/servers`, written by
 servers started with `--no-token`) and each server's `/api/sessions`. Notebooks in a hidden
 directory there (`.worktrees/`, `.claude/worktrees/`: other checkouts) are left out. The current one,
-first in the footer and in full in context, is the one used most recently: a running cell first,
-then the latest cell run (replayed on connect, so history counts) or edit. `/marimo` pins a set instead, remembered in the Pi session and followed across page reloads
+first in the footer and in full in context, is the one this session's agent last worked in: Pi's
+tool calls are read for marimo-pair commands (`execute-code.sh` or `marimo pair execute`, by
+`--file`, `--session`, or `--url` when only one followed notebook is on that server), including
+calls made from codemode scripts. Two Pi sessions in two notebooks therefore each keep their own
+current notebook, whatever the other session or the browser does. Before the agent has touched
+any, it is the one used most recently by anyone: a running cell first, then the latest cell run
+(replayed on connect, so history counts) or edit. `/marimo` pins a set instead, remembered in the Pi session and followed across page reloads
 and server restarts. Token-protected servers are reached with `MARIMO_TOKEN`.
 
 **Browser edits.** marimo does not echo an edit back to the consumer whose session id sent it, so

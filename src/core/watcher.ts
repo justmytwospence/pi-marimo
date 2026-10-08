@@ -2,14 +2,17 @@
 // subscribes to each one's session as a kiosk consumer, follows them across
 // page reloads (which change the session id) and server restarts, and reports
 // every change. The followed notebooks are the pinned ones, or in auto mode
-// every one open under the cwd; the current one is the one used most recently
-// (a running cell, then the latest cell run or edit).
+// every one open under the cwd. The current one is the one this session's agent
+// worked in last (through marimo-pair), so two sessions in two notebooks each
+// keep their own; before the agent touches any, the one used most recently by
+// anyone (a running cell, then the latest cell run or edit).
 
 import { type Cancellable, type Io, normalize, within } from "./io.js";
 import { NotebookState } from "./notebook.js";
 import { findNotebooks, type NotebookSession } from "./registry.js";
 import type { Attachment } from "./render.js";
 import { streamSession } from "./sse.js";
+import { type PairTarget, sameServer } from "./touch.js";
 
 export type Mode =
   | { kind: "auto" }
@@ -56,6 +59,8 @@ class Follower {
   connection: Connection = "connecting";
   /** Whether browser edits reach us (false when connected by the browser's own session id). */
   seesBrowserEdits = false;
+  /** When this session's agent last worked in the notebook (0: never). */
+  touchedAt = 0;
   private stopped = false;
   private current?: Cancellable<unknown>;
   private sleep?: Cancellable<void>;
@@ -141,7 +146,7 @@ export class MarimoWatcher {
 
   /** Followers, the current one first, then by most recent use. */
   private ranked(): Follower[] {
-    const rank = (x: Follower): number[] => [x.connection === "connected" ? 1 : 0, x.notebook.running() ? 1 : 0, x.notebook.lastActivity];
+    const rank = (x: Follower): number[] => [x.connection === "connected" ? 1 : 0, x.touchedAt, x.notebook.running() ? 1 : 0, x.notebook.lastActivity];
     const cmp = (a: Follower, b: Follower): number => {
       const [x, y] = [rank(a), rank(b)];
       for (let i = 0; i < x.length; i++) if (x[i] !== y[i]) return y[i]! - x[i]!;
@@ -178,6 +183,31 @@ export class MarimoWatcher {
 
   get seesBrowserEdits(): boolean {
     return this.active?.seesBrowserEdits ?? false;
+  }
+
+  /**
+   * Note that this session's agent works in these notebooks (from its marimo-pair calls), making
+   * the last one current for this session. A target names its notebook by session id, by file
+   * (as marimo-pair takes it: absolute, or relative to the server's directory), or by server
+   * alone when only one followed notebook is on it. Returns whether any followed notebook matched.
+   */
+  touch(targets: PairTarget[], now = Date.now()): boolean {
+    let touched = false;
+    targets.forEach((t, i) => {
+      let matches = [...this.followers.values()];
+      if (t.url) matches = matches.filter((f) => sameServer(f.target.url, t.url!));
+      if (t.session) matches = matches.filter((f) => f.target.sessionId === t.session);
+      else if (t.file) {
+        const file = t.file.replace(/^\.\//, "");
+        matches = matches.filter((f) => f.target.path === file || f.target.real === file || f.target.path.endsWith(`/${file}`) || f.target.real.endsWith(`/${file}`));
+      } else if (!t.url) matches = [];
+      if (matches.length !== 1) return;
+      // Later calls in one tool call win.
+      matches[0]!.touchedAt = now + i;
+      touched = true;
+    });
+    if (touched) this.options.onChange();
+    return touched;
   }
 
   /** The other notebooks followed besides the current one, most recently used first. */

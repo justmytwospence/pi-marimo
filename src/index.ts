@@ -11,6 +11,7 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { snapshot, STATE_TAG, statusParts, statusText } from "./core/render.js";
 import { nodeIo } from "./core/node-io.js";
+import { pairTargets } from "./core/touch.js";
 import { MarimoWatcher, type Mode, parseMode } from "./core/watcher.js";
 
 const ENTRY = "pi-marimo";
@@ -123,6 +124,14 @@ export default function piMarimo(pi: ExtensionAPI): void {
     await watcher.settle(2000);
     const entries = stateEntries();
     turn = entries.length ? { text: snapshot(entries, { refresh: "prompt" }) } : undefined;
+  });
+
+  // The notebook this session's agent works in (through marimo-pair) becomes current for this
+  // session, whatever other sessions or the browser do. Nested calls (codemode) arrive here too.
+  pi.on("tool_call", (event) => {
+    const targets = pairTargets(JSON.stringify(event.input ?? {}));
+    if (targets.length) watcher?.touch(targets);
+    return undefined;
   });
 
   // Browser edits made after this point are flagged as new in the next turn.

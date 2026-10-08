@@ -185,3 +185,21 @@ test("modes, including the single-notebook form saved by older versions", () => 
   expect(parseMode({ kind: "pinned", paths: [] })).toBeUndefined();
   expect(parseMode({ kind: "auto" })).toEqual({ kind: "auto" });
 });
+
+describe("which notebook a tool call works in", async () => {
+  const { pairTargets } = await import("../src/core/touch.js");
+
+  test("marimo-pair calls, as bash commands and as JSON tool input", () => {
+    const bash = `cd /w && S=.agents/skills/marimo-pair/scripts; bash $S/execute-code.sh --url http://localhost:2730 - <<'PY' 2>&1 | tail -3
+import marimo._code_mode as cm
+PY
+sleep 10; bash $S/execute-code.sh --url http://localhost:2718 --file spencer/notebooks/fit.py - <<'PY'
+PY`;
+    expect(pairTargets(bash)).toEqual([{ url: "http://localhost:2730" }, { url: "http://localhost:2718", file: "spencer/notebooks/fit.py" }]);
+    expect(pairTargets(JSON.stringify({ command: `marimo pair execute --url "http://127.0.0.1:2718" --session s_ab12 --code-file -` }))).toEqual([
+      { url: "http://127.0.0.1:2718", session: "s_ab12" },
+    ]);
+    expect(pairTargets(`marimo pair execute --url $URL --file="$F" -c 'x'`)).toEqual([{}]);
+    expect(pairTargets("ls -la")).toEqual([]);
+  });
+});
