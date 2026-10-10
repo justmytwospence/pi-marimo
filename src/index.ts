@@ -10,7 +10,8 @@
 // - herdr (through pi-herdr): when a turn ends with a cell the agent started still running, the pane
 //   token `marimo` says what runs until the kernel goes quiet, then a notification says it finished
 //   (herdr.ts).
-// - pi-bg: a busy notebook is outside work `bg_wait marimo:<file>` can wait on, and a run a pi-bg
+// - pi-bg: a busy notebook is outside work `bg_wait marimo:<path>` can wait on, pi-bg tasks that serve
+//   or drive a followed notebook get its kernel state (bg:annotate), and a run a pi-bg
 //   job drives (and will wake the agent about) gets no separate "finished" notification (bg.ts).
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
@@ -86,6 +87,7 @@ export default function piMarimo(pi: ExtensionAPI): void {
   pi.events?.on("bg:tasks", (data) => {
     bg.onTasks((data as { tasks?: unknown } | undefined)?.tasks);
     if (hold.active) bg.noteCovered(hold.paths);
+    if (watcher && ctxRef) bg.annotate(watcher.followed(), ctxRef.cwd);
   });
 
   const statusLine = (): string | undefined => {
@@ -107,7 +109,10 @@ export default function piMarimo(pi: ExtensionAPI): void {
       if (change.kind === "finished" && bg.coversAll(held)) change = { kind: "released" };
       void herdr?.apply(change);
     }
-    if (watcher && ctxRef) bg.external(watcher.followed(), ctxRef.cwd);
+    if (watcher && ctxRef) {
+      bg.external(watcher.followed(), ctxRef.cwd);
+      bg.annotate(watcher.followed(), ctxRef.cwd);
+    }
     const text = statusLine();
     if (text !== lastStatus) {
       lastStatus = text;

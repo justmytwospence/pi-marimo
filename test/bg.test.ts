@@ -123,3 +123,52 @@ describe("the bg_wait hint in the state block", () => {
     expect(withWaitHint(block, [], listening)).toBe(block);
   });
 });
+
+describe("ids that stay put", () => {
+  test("a nested notebook keeps its path id when another of the same name is followed", () => {
+    const b = bus();
+    const bridge = new BgBridge(b, () => []);
+    bridge.external([followed("/p/nb/fit.py", { running: "Fit" })], "/p", 0);
+    bridge.external([followed("/p/nb/fit.py"), followed("/p/old/fit.py", { running: "Fit" })], "/p", 1_000);
+    expect(b.sent.map(([, d]) => [d.id, d.state])).toEqual([
+      ["marimo:nb/fit.py", "running"],
+      ["marimo:nb/fit.py", "done"],
+      ["marimo:old/fit.py", "running"],
+    ]);
+    expect(BgBridge.id("/elsewhere/x.py", "/p")).toBe("marimo:/elsewhere/x.py");
+  });
+});
+
+describe("pi-bg's tasks annotated with the kernel state", () => {
+  const nb = (state: Parameters<typeof followed>[1] = {}) => followed("/p/nb/fit.py", state);
+  const task = (over: Record<string, unknown>) => ({ id: "t", kind: "service", cwd: "/p", command: "marimo edit --no-token nb/fit.py", status: "running", origin: "agent", willWake: false, ...over });
+
+  test("a server by the notebook it serves, a job by what it targets; only changes are sent", () => {
+    const b = bus();
+    const bridge = new BgBridge(b, (command) => (command.includes("execute-code") ? ["/p/nb/fit.py"] : []));
+    bridge.onTasks([task({}), task({ id: "j", kind: "job", command: "bash execute-code.sh --file nb/fit.py", willWake: true }), task({ id: "other", command: "npm run dev" })]);
+    bridge.annotate([nb({ running: "Model fit", errors: 1 })], "/p");
+    bridge.annotate([nb({ running: "Model fit", errors: 1 })], "/p");
+    expect(b.sent).toEqual([
+      ["bg:annotate", { task: "t", by: "pi-marimo", detail: "fit.py: running Model fit · 1 error", wait: ["marimo:nb/fit.py"] }],
+      ["bg:annotate", { task: "j", by: "pi-marimo", detail: "fit.py: running Model fit · 1 error", wait: ["marimo:nb/fit.py"] }],
+    ]);
+    // The notebook is no longer followed: cleared, once.
+    bridge.annotate([], "/p");
+    bridge.annotate([], "/p");
+    expect(b.sent.slice(2)).toEqual([
+      ["bg:annotate", { task: "t", by: "pi-marimo" }],
+      ["bg:annotate", { task: "j", by: "pi-marimo" }],
+    ]);
+  });
+
+  test("a server's notebook is found from its own directory; queued, idle and disconnected read plainly", () => {
+    const b = bus();
+    const bridge = new BgBridge(b, () => []);
+    bridge.onTasks([task({ cwd: "/p/nb", command: "uvx marimo edit fit.py --headless" })]);
+    bridge.annotate([nb({ queued: 2 })], "/p");
+    bridge.annotate([nb()], "/p");
+    bridge.annotate([nb({ connection: "disconnected" })], "/p");
+    expect(b.sent.map(([, d]) => d.detail)).toEqual(["fit.py: 2 queued", "fit.py: idle", "fit.py: disconnected"]);
+  });
+});

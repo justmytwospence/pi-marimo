@@ -282,6 +282,16 @@ describe("the kernel hold after a turn", async () => {
     expect(hold.end(followed(running(), 3500), 5000)).toEqual({ kind: "none" });
   });
 
+  test("paths: the held notebooks, until the hold ends", () => {
+    const hold = new KernelHold();
+    hold.begin(1000);
+    expect(hold.paths).toEqual([]);
+    hold.end(followed(running(), 1500), 2000);
+    expect(hold.paths).toEqual([attachment.path]);
+    hold.update(followed(replay("kiosk-run.sse"), 1500), 3000);
+    expect(hold.paths).toEqual([]);
+  });
+
   test("a new turn releases it; a disconnect ends it as stopped", () => {
     const hold = new KernelHold();
     hold.begin(1000);

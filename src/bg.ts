@@ -7,6 +7,13 @@
 //   agent when it ends. When every notebook of a kernel hold is driven by such a job, the hold's
 //   "finished" notification is left out: the wake-up, and herdr's own done at the end of that
 //   turn, already say so. pi-bg publishes its tasks as `bg:tasks` snapshots.
+// - A pi-bg task tied to a followed notebook gets its kernel state (`bg:annotate`): a `marimo edit
+//   nb.py` server, or a job whose marimo-pair calls target it. pi-bg shows the state in the task's
+//   row, lists the notebook under the task, and bg_wait on a server that is up waits for its cells.
+//
+// A notebook's id is `marimo:` and its path relative to the cwd (absolute outside it), so it stays
+// the same whatever else is followed; pi-bg also takes `marimo:<file>` when only one matches.
+import { resolve } from "node:path";
 import { busy, holdValue } from "./core/hold.js";
 import { basename } from "./core/io.js";
 import { elapsed } from "./core/render.js";
@@ -19,6 +26,8 @@ export interface EventBus {
 /** What pi-bg's `bg:tasks` snapshot says about a task (only the fields used here). */
 export interface BgTask {
   id: string;
+  kind?: string;
+  cwd?: string;
   command: string;
   origin: string;
   status: string;
@@ -38,8 +47,31 @@ interface Run {
 /** How long a run survives the notebook disconnecting (a browser reload reconnects within seconds). */
 export const DISCONNECT_GRACE_MS = 8_000;
 
+/** The notebook a `marimo edit`/`marimo run` command serves, when it names one (pi-bg's marimo.ts reads it the same way). */
+export function servedNotebook(command: string): string | undefined {
+  const m = /(?:^|[\s;&|(/])marimo\s+(?:-\S+\s+)*(?:edit|run)\b([^;&|]*)/u.exec(command);
+  return (m?.[1] ?? "").split(/\s+/u).find((w) => /\.(?:py|md)$/u.test(w) && !w.startsWith("-"))?.replace(/^["']|["']$/gu, "");
+}
+
+/** A notebook's kernel in a few words: `fit.py: running Model fit · 2 queued`, `fit.py: idle · 1 error`. */
+export function kernelState(f: Followed): string {
+  const file = basename(f.attachment.path);
+  if (f.connection !== "connected") return `${file}: ${f.connection}`;
+  const parts: string[] = [];
+  const run = f.notebook.running();
+  const queued = f.notebook.queued();
+  if (run) parts.push(`running ${run.section[run.section.length - 1] ?? `cell ${run.cell.name !== "_" ? run.cell.name : run.cell.id}`}`);
+  if (queued) parts.push(`${queued} queued`);
+  if (!parts.length) parts.push("idle");
+  const errors = f.notebook.errors().length;
+  if (errors) parts.push(`${errors} error${errors === 1 ? "" : "s"}`);
+  return `${file}: ${parts.join(" · ")}`;
+}
+
 export class BgBridge {
   private tasks: BgTask[] = [];
+  /** What each task was last annotated with, to send only changes. */
+  private notes = new Map<string, string>();
   /** Held notebooks, each with the waking pi-bg jobs that drove it during the hold. */
   private covered = new Map<string, Set<string>>();
   private runs = new Map<string, Run>();
@@ -88,13 +120,28 @@ export class BgBridge {
     this.covered.clear();
   }
 
-  /** `marimo:<file>`, or the path relative to the cwd when two followed notebooks share a name. */
-  static id(f: Followed, all: Followed[], cwd: string): string {
-    const name = basename(f.attachment.path);
-    const shared = all.some((o) => o !== f && basename(o.attachment.path) === name);
-    if (!shared) return `marimo:${name}`;
-    const rel = f.attachment.path.startsWith(`${cwd}/`) ? f.attachment.path.slice(cwd.length + 1) : f.attachment.path;
-    return `marimo:${rel}`;
+  /** `marimo:` and the notebook's path relative to the cwd (absolute outside it): the same whatever else is followed. */
+  static id(path: string, cwd: string): string {
+    return `marimo:${path.startsWith(`${cwd}/`) ? path.slice(cwd.length + 1) : path}`;
+  }
+
+  /** Tells pi-bg the kernel state of the notebooks its running tasks serve or drive. */
+  annotate(followed: Followed[], cwd: string): void {
+    const byPath = new Map(followed.map((f) => [f.attachment.path, f]));
+    const live = new Set<string>();
+    for (const t of this.tasks) {
+      if (t.status !== "running" || typeof t.command !== "string") continue;
+      live.add(t.id);
+      const served = t.kind === "service" ? servedNotebook(t.command) : undefined;
+      const paths = served ? [resolve(t.cwd ?? cwd, served)] : t.kind === "job" ? this.targeted(t.command) : [];
+      const hits = [...new Set(paths)].map((p) => byPath.get(p)).filter((f): f is Followed => f !== undefined);
+      const note = hits.length ? { task: t.id, by: "pi-marimo", detail: hits.map(kernelState).join(" · "), wait: hits.map((f) => BgBridge.id(f.attachment.path, cwd)) } : { task: t.id, by: "pi-marimo" };
+      const key = JSON.stringify(note);
+      if ((this.notes.get(t.id) ?? JSON.stringify({ task: t.id, by: "pi-marimo" })) === key) continue;
+      this.notes.set(t.id, key);
+      this.emit("bg:annotate", note);
+    }
+    for (const id of this.notes.keys()) if (!live.has(id)) this.notes.delete(id);
   }
 
   /** Reports busy notebooks to pi-bg as outside work, and their end. */
@@ -109,10 +156,10 @@ export class BgBridge {
         const label = holdValue(f);
         if (run) run.lostAt = undefined;
         if (run && run.label === label) continue;
-        const id = run?.id ?? BgBridge.id(f, followed, cwd);
+        const id = run?.id ?? BgBridge.id(path, cwd);
         const startErrors = run?.startErrors ?? new Set(f.notebook.errors().map((c) => c.id));
         this.runs.set(path, { id, since: run?.since ?? now, label, startErrors });
-        this.emit({ id, label, state: "running" });
+        this.emit("bg:external", { id, label, state: "running" });
         continue;
       }
       if (!run) continue;
@@ -127,18 +174,18 @@ export class BgBridge {
       const parts = [`ran ${elapsed(now - run.since)}`];
       if (errors) parts.push(`${errors} error${errors === 1 ? "" : "s"}`);
       if (!connected) parts.push("disconnected");
-      this.emit({ id: run.id, label: basename(path), state: errors || !connected ? "failed" : "done", summary: parts.join(" · ") });
+      this.emit("bg:external", { id: run.id, label: basename(path), state: errors || !connected ? "failed" : "done", summary: parts.join(" · ") });
     }
     for (const [path, run] of this.runs) {
       if (seen.has(path)) continue;
       this.runs.delete(path);
-      this.emit({ id: run.id, label: basename(path), state: "failed", summary: `ran ${elapsed(now - run.since)} · no longer followed` });
+      this.emit("bg:external", { id: run.id, label: basename(path), state: "failed", summary: `ran ${elapsed(now - run.since)} · no longer followed` });
     }
   }
 
   /** pi-marimo stops following (session end): every run still reported as running ends. */
   stopAll(now = Date.now()): void {
-    for (const run of this.runs.values()) this.emit({ id: run.id, label: run.label.split(":")[0] ?? run.id, state: "failed", summary: `ran ${elapsed(now - run.since)} · pi-marimo stopped following it` });
+    for (const run of this.runs.values()) this.emit("bg:external", { id: run.id, label: run.label.split(":")[0] ?? run.id, state: "failed", summary: `ran ${elapsed(now - run.since)} · pi-marimo stopped following it` });
     this.runs.clear();
   }
 
@@ -152,9 +199,9 @@ export class BgBridge {
     return [...this.runs.values()].map((r) => r.id);
   }
 
-  private emit(data: unknown): void {
+  private emit(channel: string, data: unknown): void {
     try {
-      this.events?.emit("bg:external", data);
+      this.events?.emit(channel, data);
     } catch {
       // A failing listener must not break the watcher.
     }

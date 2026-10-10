@@ -92,8 +92,9 @@ With [pi-bg](https://github.com/justmytwospence/pi-bg) loaded (everything goes t
 bus; without it nothing happens):
 
 - **Waiting on a notebook.** While a followed notebook has a cell running or queued, it is outside
-  work pi-bg's `bg_wait` can wait on, under the id `marimo:<file>` (the path from the cwd when two
-  followed notebooks share a name). It ends as `done`, or `failed` when cells broke during the run
+  work pi-bg's `bg_wait` can wait on, under the id `marimo:` and its path from the cwd
+  (`marimo:nb.py`, `marimo:notebooks/fit.py`; absolute outside the cwd), which stays the same
+  whatever else is followed; pi-bg also takes `marimo:fit.py` when only one matches. It ends as `done`, or `failed` when cells broke during the run
   (errors already there when it began do not count) or the notebook stayed disconnected for 8
   seconds (a browser reload reconnects sooner and the run goes on), with what the run took
   (`ran 4m12s · 1 error`). When a notebook is running at the prompt, the
@@ -104,6 +105,13 @@ bus; without it nothing happens):
   hold is driven by such a job, the hold keeps its `$marimo` token but skips its "finished"
   notification: the wake-up, and herdr's own done at the end of that turn, already say so. If you
   stop that job, it wakes no one, so the notification comes back.
+- **Tasks that are notebooks.** A pi-bg task tied to a followed notebook gets its kernel state
+  (`bg:annotate`): a `marimo edit nb.py` (or `marimo run`) server by the notebook it serves,
+  resolved from the task's directory, and a job by the notebook its marimo-pair calls target. pi-bg
+  shows the state in the task's row (`nb.py: running Model fit · 2 queued`, `nb.py: idle · 1
+  error`), lists the notebook under the task in `bg_logs`, and `bg_wait` on a server that is up
+  waits for its running cells. Without pi-marimo, pi-bg still names such a server after its
+  notebook and knows when it is up.
 
 ## Install
 
