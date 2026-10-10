@@ -53,10 +53,9 @@ export function servedNotebook(command: string): string | undefined {
   return (m?.[1] ?? "").split(/\s+/u).find((w) => /\.(?:py|md)$/u.test(w) && !w.startsWith("-"))?.replace(/^["']|["']$/gu, "");
 }
 
-/** A notebook's kernel in a few words: `fit.py: running Model fit · 2 queued`, `fit.py: idle · 1 error`. */
-export function kernelState(f: Followed): string {
-  const file = basename(f.attachment.path);
-  if (f.connection !== "connected") return `${file}: ${f.connection}`;
+/** What a notebook's kernel does: `running Model fit`, `2 queued`, `idle`, `1 error`, or its connection. */
+export function kernelStateParts(f: Followed): string[] {
+  if (f.connection !== "connected") return [f.connection];
   const parts: string[] = [];
   const run = f.notebook.running();
   const queued = f.notebook.queued();
@@ -65,7 +64,12 @@ export function kernelState(f: Followed): string {
   if (!parts.length) parts.push("idle");
   const errors = f.notebook.errors().length;
   if (errors) parts.push(`${errors} error${errors === 1 ? "" : "s"}`);
-  return `${file}: ${parts.join(" · ")}`;
+  return parts;
+}
+
+/** A notebook's kernel in a few words: `fit.py: running Model fit · 2 queued`, `fit.py: idle · 1 error`. */
+export function kernelState(f: Followed): string {
+  return `${basename(f.attachment.path)}: ${kernelStateParts(f).join(" · ")}`;
 }
 
 export class BgBridge {

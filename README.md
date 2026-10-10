@@ -14,6 +14,18 @@ working in, so Pi knows what they look like and what they are doing without bein
   the browser since Pi's last turn). The others follow as short outlines (headings down to `##`)
   with only the cells that need attention. The block is never stored in the session, so the model
   sees only the current turn's copy and old copies never pile up.
+- **Notebook view and pill:** while a notebook runs a cell (or has cells queued), a pill under the
+  prompt says `1 notebook`, and `1 failed` in the error color when a run broke cells, until your
+  next message. `↓` then Enter (or `/marimo view`) opens the notebook full screen, under a banner that
+  says it is not your main session: its outline, one line per code cell with its status, what it
+  defines and its error, live, following the running cell. `x` twice interrupts the kernel (as
+  the stop button in the browser does), `o` opens the notebook in the browser, Tab goes to the next
+  followed notebook, `j`/`k` scroll, `h` or Esc goes back. Idle notebooks show no pill.
+- **With pi-bg or pi-subagents:** the notebooks are one more source of background work (the
+  activity protocol, `src/activity.ts`, shared with both). pi-bg's `/tasks` view lists them beside
+  the shells and agents, tagged `notebook` (Enter opens the notebook view, `x` twice interrupts);
+  the pill joins pi-bg's (`2 shells · 1 notebook`) or ends pi-subagents' list under the prompt
+  instead of drawing its own.
 - **`/marimo`:** a checklist of open notebooks to pin (any number, from anywhere); `/marimo auto`,
   `/marimo off`; `/marimo show` prints the block the model sees.
 - **herdr:** when a turn ends while a cell the agent started is still running, the pane says what

@@ -22,6 +22,13 @@ import { nodeIo } from "./core/node-io.js";
 import { pairTargets } from "./core/touch.js";
 import { MarimoWatcher, type Mode, parseMode } from "./core/watcher.js";
 import { HerdrHold } from "./herdr.js";
+import { spawn } from "node:child_process";
+import { ACTIVITY_CHANGED, ACTIVITY_GONE, ACTIVITY_HOST, ACTIVITY_SECTION } from "./activity.js";
+import { FULL_SCREEN } from "./ui/frame.js";
+import { interruptKernel } from "./ui/interrupt.js";
+import { PillView } from "./ui/pill.js";
+import { NotebookSource } from "./ui/source.js";
+import { NotebookView, type ViewActions } from "./ui/view.js";
 
 const ENTRY = "pi-marimo";
 const STATUS_KEY = "marimo";
@@ -90,6 +97,48 @@ export default function piMarimo(pi: ExtensionAPI): void {
     if (watcher && ctxRef) bg.annotate(watcher.followed(), ctxRef.cwd);
   });
 
+  // The notebooks as background work (ui/source.ts): rows in pi-bg's /tasks view, a pill under the
+  // prompt while one is busy, and a full-screen view of each (ui/view.ts).
+  const viewActions: ViewActions = {
+    followed: () => watcher?.followed() ?? [],
+    interrupt: (f) => interruptKernel(f.attachment, process.env.MARIMO_TOKEN),
+    openInBrowser: (f) => {
+      const url = `${f.attachment.url}/?file=${encodeURIComponent(f.attachment.path)}`;
+      try {
+        spawn(process.platform === "darwin" ? "open" : "xdg-open", [url], { detached: true, stdio: "ignore" }).on("error", () => undefined).unref();
+      } catch {
+        // No opener: nothing to do.
+      }
+    },
+  };
+  const openView = (path: string, ui: unknown): Promise<void> =>
+    (ui as ExtensionContext["ui"]).custom<void>((tui, theme, _keys, done) => new NotebookView(tui, theme, path, viewActions, () => done(undefined)), FULL_SCREEN);
+  const source: NotebookSource = new NotebookSource({
+    followed: viewActions.followed,
+    open: openView,
+    interrupt: viewActions.interrupt,
+    changed: () => {
+      pi.events?.emit(ACTIVITY_CHANGED, { id: source.section.id });
+      ownPill.update();
+    },
+    hostedChanged: () => bindPill(),
+  });
+  const ownPill = new PillView({
+    pill: (now) => source.pill(now),
+    open: () => {
+      if (ctxRef) void source.section.openDialog?.(ctxRef.ui).catch(() => undefined);
+    },
+  });
+  /** pi-marimo draws its own pill only in the TUI, and only while no host (pi-subagents, pi-bg) shows it. */
+  const bindPill = () => {
+    ownPill.setUI(ctxRef?.mode === "tui" && !source.hosted ? (ctxRef.ui as never) : undefined);
+    ownPill.update();
+  };
+  const offer = () => {
+    if (ctxRef?.mode === "tui") pi.events?.emit(ACTIVITY_SECTION, { section: source.section });
+  };
+  pi.events?.on(ACTIVITY_HOST, () => offer());
+
   const statusLine = (): string | undefined => {
     if (!watcher) return undefined;
     const { connection, attachment, mode } = watcher;
@@ -112,6 +161,7 @@ export default function piMarimo(pi: ExtensionAPI): void {
     if (watcher && ctxRef) {
       bg.external(watcher.followed(), ctxRef.cwd);
       bg.annotate(watcher.followed(), ctxRef.cwd);
+      source.update(watcher.followed());
     }
     const text = statusLine();
     if (text !== lastStatus) {
@@ -147,6 +197,14 @@ export default function piMarimo(pi: ExtensionAPI): void {
     watcher = new MarimoWatcher({ io: nodeIo(), cwd: ctx.cwd, token: process.env.MARIMO_TOKEN, onChange: schedule });
     watcher.mode = savedMode(ctx.sessionManager.getBranch() as Entry[]) ?? { kind: "auto" };
     watcher.start();
+    source.resetHosts();
+    bindPill();
+    offer();
+  });
+
+  // The user's next message: failed runs they had a chance to see stop alerting.
+  pi.on("input", (event) => {
+    if ((event as { source?: string }).source === "interactive") source.seen();
   });
 
   pi.on("session_shutdown", async () => {
@@ -155,6 +213,9 @@ export default function piMarimo(pi: ExtensionAPI): void {
     pending = ticker = undefined;
     await herdr?.apply(hold.release());
     bg.stopAll();
+    if (ctxRef?.mode === "tui") pi.events?.emit(ACTIVITY_GONE, { id: source.section.id });
+    ownPill.dispose();
+    source.resetHosts();
     await watcher?.stop();
     watcher = undefined;
     ctxRef?.ui.setStatus(STATUS_KEY, undefined);
@@ -206,14 +267,20 @@ export default function piMarimo(pi: ExtensionAPI): void {
   });
 
   pi.registerCommand("marimo", {
-    description: "Choose the marimo notebooks Pi follows (auto, off, show)",
+    description: "Choose the marimo notebooks Pi follows (view, auto, off, show)",
     getArgumentCompletions: (prefix) =>
-      ["auto", "off", "show"].filter((a) => a.startsWith(prefix.trim())).map((value) => ({ value, label: value })),
+      ["view", "auto", "off", "show"].filter((a) => a.startsWith(prefix.trim())).map((value) => ({ value, label: value })),
     handler: async (args, ctx) => {
       if (!watcher) return;
       const arg = args.trim();
       if (arg === "auto") { setMode({ kind: "auto" }); ctx.ui.notify("marimo: following every notebook open under this directory", "info"); return; }
       if (arg === "off") { setMode({ kind: "off" }); ctx.ui.notify("marimo: off", "info"); return; }
+      if (arg === "view") {
+        const path = source.busiest();
+        if (!path) ctx.ui.notify("marimo: no notebook followed", "info");
+        else await openView(path, ctx.ui);
+        return;
+      }
       if (arg === "show") {
         const entries = stateEntries();
         ctx.ui.notify(entries.length ? snapshot(entries, { refresh: "prompt" }) : statusLine() ?? "marimo: no notebook attached", "info");

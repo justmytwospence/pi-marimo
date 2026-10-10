@@ -70,13 +70,32 @@ function setup() {
     registerCommand: () => undefined,
     appendEntry: () => undefined,
   };
-  const ctx = { cwd: CWD, mode: "tui", isIdle: () => true, ui: { setStatus: () => undefined, notify: () => undefined }, sessionManager: { getBranch: () => [] } };
+  const widgets = new Map<string, any>();
+  const customs: any[] = [];
+  const ui = {
+    setStatus: () => undefined,
+    notify: () => undefined,
+    setWidget: (key: string, w: unknown) => void (w ? widgets.set(key, w) : widgets.delete(key)),
+    onTerminalInput: () => () => undefined,
+    getEditorText: () => "",
+    custom: (factory: any, options: unknown) => {
+      const view = factory({ requestRender: () => undefined, terminal: { rows: 30 } }, { fg: (_c: string, t: string) => t, bold: (t: string) => t }, {}, () => undefined);
+      customs.push({ view, options });
+      return Promise.resolve();
+    },
+  };
+  const ctx = { cwd: CWD, mode: "tui", isIdle: () => true, ui, sessionManager: { getBranch: () => [] } };
   piMarimo(pi as never);
   const fire = async (name: string, event: unknown = {}) => {
     for (const h of handlers.get(name) ?? []) await h(event, ctx);
   };
   const of = (ch: string) => sent.filter(([c]) => c === ch).map(([, d]) => d);
-  return { pi, fire, sent, of };
+  /** The pill widget's text, as pi would draw it. */
+  const pillText = () => {
+    const w = widgets.get("pi-marimo-pill") ?? [...widgets.values()][0];
+    return w ? w({ requestRender: () => undefined }, { fg: (_c: string, t: string) => t, bold: (t: string) => t }).render(80).join("\n") : undefined;
+  };
+  return { pi, fire, sent, of, widgets, customs, pillText, ui };
 }
 
 const pair = `bash .agents/skills/marimo-pair/scripts/execute-code.sh --url ${SERVER} --file nb.py - <<'PY'\nfit()\nPY`;
@@ -135,4 +154,52 @@ test("a stopped covering job brings the notice back", async () => {
   await until(() => x.of("herdr:notify").length > 0);
   expect(x.of("herdr:notify")[0]).toMatchObject({ title: "nb.py finished", sound: "done" });
   await x.fire("session_shutdown");
+});
+
+test("the notebooks as background work: a source for the hosts, its own pill alone, a full-screen view with interrupt", async () => {
+  const calls: Array<[string, any]> = [];
+  vi.stubGlobal("fetch", async (url: string, init?: any) => {
+    calls.push([url, init]);
+    return { ok: true, status: 200, text: async () => '<html data-token="tok123">' };
+  });
+  const x = setup();
+  await startRun(x);
+  // Offered to hosts.
+  const section = x.of("activity:section")[0]?.section;
+  expect(section).toMatchObject({ id: "marimo", title: "notebooks", noun: "notebook" });
+  const entries = section.entries(Date.now());
+  expect(entries).toEqual([expect.objectContaining({ key: `${CWD}/nb.py`, label: "nb.py", status: "running", detail: "running Slow model fit · 1 queued" })]);
+  // Alone, its own pill; hosted (by pi-bg, then pi-subagents too), none; the last host leaving brings it back.
+  await until(() => /1 notebook/u.test(x.pillText() ?? ""));
+  section.setHosted(true, "pi-bg");
+  expect(x.widgets.size).toBe(0);
+  section.setHosted(true);
+  section.setHosted(false, "pi-bg");
+  expect(x.widgets.size).toBe(0);
+  section.setHosted(false);
+  await until(() => /1 notebook/u.test(x.pillText() ?? ""));
+  // The view: the outline, the running cell, and x twice interrupts the kernel.
+  await section.open(`${CWD}/nb.py`, x.ui);
+  const view = x.customs.at(-1)?.view;
+  expect(x.customs.at(-1)?.options).toMatchObject({ overlay: true, overlayOptions: { width: "100%" } });
+  const screen = view.render(100).join("\n");
+  expect(screen).toMatch(/◀ esc · Notebook nb\.py · not your main session/u);
+  expect(screen).toMatch(/Data loading[\s\S]*Slow model fit[\s\S]*● lEQa {2}→ y {2}running/u);
+  view.handleInput("x");
+  expect(view.render(100).join("\n")).toMatch(/x again to interrupt/u);
+  view.handleInput("x");
+  await until(() => calls.some(([u]) => u.endsWith("/api/kernel/interrupt")));
+  const post = calls.find(([u]) => u.endsWith("/api/kernel/interrupt"))?.[1];
+  expect(post.headers).toMatchObject({ "Marimo-Session-Id": "s1", "Marimo-Server-Token": "tok123" });
+  view.dispose();
+  // The run ends with an error: failed in the pill until the user's next message.
+  server.feeds.at(-1)!(rest);
+  await until(() => /failed/u.test(x.pillText() ?? ""));
+  expect(section.entries(Date.now())[0]).toMatchObject({ status: "failed", stats: expect.stringMatching(/^ran \d+s · 1 error/u) });
+  await x.fire("input", { source: "interactive" });
+  await until(() => x.widgets.size === 0 || !/failed/u.test(x.pillText() ?? ""));
+  expect(section.entries(Date.now())[0]).toMatchObject({ status: "done" });
+  await x.fire("session_shutdown");
+  expect(x.of("activity:gone")).toEqual([{ id: "marimo" }]);
+  vi.unstubAllGlobals();
 });
