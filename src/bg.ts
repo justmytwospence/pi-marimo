@@ -29,12 +29,19 @@ interface Run {
   id: string;
   since: number;
   label: string;
+  /** Cells already in error when the run began: only new errors make it `failed`. */
+  startErrors: Set<string>;
+  /** When the notebook stopped being connected; the run ends only after a grace period. */
+  lostAt?: number;
 }
+
+/** How long a run survives the notebook disconnecting (a browser reload reconnects within seconds). */
+export const DISCONNECT_GRACE_MS = 8_000;
 
 export class BgBridge {
   private tasks: BgTask[] = [];
-  /** Held notebooks a waking pi-bg job drove at some point during the hold. */
-  private covered = new Set<string>();
+  /** Held notebooks, each with the waking pi-bg jobs that drove it during the hold. */
+  private covered = new Map<string, Set<string>>();
   private runs = new Map<string, Run>();
 
   constructor(
@@ -45,22 +52,31 @@ export class BgBridge {
 
   onTasks(tasks: unknown): void {
     this.tasks = Array.isArray(tasks) ? (tasks as BgTask[]) : [];
+    // A covering job the user stopped wakes no one: its notebook is no longer covered.
+    const stopped = new Set(this.tasks.filter((t) => t.status === "killed").map((t) => t.id));
+    for (const [p, ids] of this.covered) {
+      for (const id of ids) if (stopped.has(id)) ids.delete(id);
+      if (!ids.size) this.covered.delete(p);
+    }
   }
 
-  /** Notebooks that a pi-bg job which will wake the agent is running cells in. */
-  waking(): Set<string> {
-    const out = new Set<string>();
+  /** Notebooks that pi-bg jobs which will wake the agent are running cells in, with those jobs. */
+  waking(): Map<string, Set<string>> {
+    const out = new Map<string, Set<string>>();
     for (const t of this.tasks) {
       if (!t.willWake || typeof t.command !== "string") continue;
-      for (const p of this.targeted(t.command)) out.add(p);
+      for (const p of this.targeted(t.command)) out.set(p, new Set([...(out.get(p) ?? []), t.id]));
     }
     return out;
   }
 
-  /** A hold began (or pi-bg's tasks changed during one): remember which of its notebooks are covered. */
+  /** A hold began (or pi-bg's tasks changed during one): remember which of its notebooks are covered, and by what. */
   noteCovered(held: string[]): void {
     const waking = this.waking();
-    for (const p of held) if (waking.has(p)) this.covered.add(p);
+    for (const p of held) {
+      const ids = waking.get(p);
+      if (ids) this.covered.set(p, new Set([...(this.covered.get(p) ?? []), ...ids]));
+    }
   }
 
   /** Whether a pi-bg wake-up reports the end of every one of these held notebooks. */
@@ -88,18 +104,26 @@ export class BgBridge {
       const path = f.attachment.path;
       seen.add(path);
       const run = this.runs.get(path);
+      const connected = f.connection === "connected";
       if (busy(f)) {
         const label = holdValue(f);
+        if (run) run.lostAt = undefined;
         if (run && run.label === label) continue;
         const id = run?.id ?? BgBridge.id(f, followed, cwd);
-        this.runs.set(path, { id, since: run?.since ?? now, label });
+        const startErrors = run?.startErrors ?? new Set(f.notebook.errors().map((c) => c.id));
+        this.runs.set(path, { id, since: run?.since ?? now, label, startErrors });
         this.emit({ id, label, state: "running" });
         continue;
       }
       if (!run) continue;
+      // Not connected (a browser reload, a server restart): unknown, not quiet, for a while.
+      if (!connected) {
+        run.lostAt ??= now;
+        if (now - run.lostAt < DISCONNECT_GRACE_MS) continue;
+      }
       this.runs.delete(path);
-      const connected = f.connection === "connected";
-      const errors = connected ? f.notebook.errors().length : 0;
+      // Only cells that broke during this run count.
+      const errors = connected ? f.notebook.errors().filter((c) => !run.startErrors.has(c.id)).length : 0;
       const parts = [`ran ${elapsed(now - run.since)}`];
       if (errors) parts.push(`${errors} error${errors === 1 ? "" : "s"}`);
       if (!connected) parts.push("disconnected");
@@ -110,6 +134,17 @@ export class BgBridge {
       this.runs.delete(path);
       this.emit({ id: run.id, label: basename(path), state: "failed", summary: `ran ${elapsed(now - run.since)} · no longer followed` });
     }
+  }
+
+  /** pi-marimo stops following (session end): every run still reported as running ends. */
+  stopAll(now = Date.now()): void {
+    for (const run of this.runs.values()) this.emit({ id: run.id, label: run.label.split(":")[0] ?? run.id, state: "failed", summary: `ran ${elapsed(now - run.since)} · pi-marimo stopped following it` });
+    this.runs.clear();
+  }
+
+  /** Whether a run waits out a disconnect: render again until it reconnects or its grace ends. */
+  needsTick(): boolean {
+    return [...this.runs.values()].some((r) => r.lostAt !== undefined);
   }
 
   /** The `bg_wait` ids of the notebooks running now. */

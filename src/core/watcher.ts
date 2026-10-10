@@ -188,12 +188,10 @@ export class MarimoWatcher {
   }
 
   /**
-   * Note that this session's agent works in these notebooks (from its marimo-pair calls), making
-   * the last one current for this session. A target names its notebook by session id, by file
-   * (as marimo-pair takes it: absolute, or relative to the server's directory), or by server
-   * alone when only one followed notebook is on it. Returns whether any followed notebook matched.
+   * The one followed notebook a marimo-pair call targets, if it is unambiguous: by session id, by
+   * file (as marimo-pair takes it: absolute, or relative to the server's directory), or by server
+   * alone when only one followed notebook is on it.
    */
-  /** The one followed notebook a marimo-pair call targets, if it is unambiguous. */
   private match(t: PairTarget) {
     let matches = [...this.followers.values()];
     if (t.url) matches = matches.filter((f) => sameServer(f.target.url, t.url!));
@@ -210,6 +208,10 @@ export class MarimoWatcher {
     return targets.map((t) => this.match(t)?.attachment.path).filter((p): p is string => p !== undefined);
   }
 
+  /**
+   * Note that this session's agent works in these notebooks (from its marimo-pair calls), making
+   * the last one current for this session. Returns whether any followed notebook matched.
+   */
   touch(targets: PairTarget[], now = Date.now()): boolean {
     let touched = false;
     targets.forEach((t, i) => {

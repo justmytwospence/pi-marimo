@@ -93,14 +93,17 @@ bus; without it nothing happens):
 
 - **Waiting on a notebook.** While a followed notebook has a cell running or queued, it is outside
   work pi-bg's `bg_wait` can wait on, under the id `marimo:<file>` (the path from the cwd when two
-  followed notebooks share a name). It ends as `done`, or `failed` with errors or a disconnect,
-  with what the run took (`ran 4m12s · 1 error`). When a notebook is running at the prompt, the
+  followed notebooks share a name). It ends as `done`, or `failed` when cells broke during the run
+  (errors already there when it began do not count) or the notebook stayed disconnected for 8
+  seconds (a browser reload reconnects sooner and the run goes on), with what the run took
+  (`ran 4m12s · 1 error`). When a notebook is running at the prompt, the
   state block names the ids, so the agent can wait inside its turn (and show as working) instead
   of ending it.
 - **One notice per run.** A long marimo-pair call is often a pi-bg job (`bg_run` of the
   `execute-code` call) that wakes the agent when the cells finish. When every notebook of a kernel
   hold is driven by such a job, the hold keeps its `$marimo` token but skips its "finished"
-  notification: the wake-up, and herdr's own done at the end of that turn, already say so.
+  notification: the wake-up, and herdr's own done at the end of that turn, already say so. If you
+  stop that job, it wakes no one, so the notification comes back.
 
 ## Install
 

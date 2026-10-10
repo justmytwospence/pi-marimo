@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { BgBridge } from "../src/bg.js";
+import { BgBridge, DISCONNECT_GRACE_MS } from "../src/bg.js";
 import { withWaitHint } from "../src/index.js";
 
 function bus() {
@@ -17,7 +17,7 @@ function followed(path: string, state: { running?: string; queued?: number; erro
     notebook: {
       running: () => (state.running ? { section: [state.running], cell: { name: "_", id: "c1" } } : undefined),
       queued: () => state.queued ?? 0,
-      errors: () => Array.from({ length: state.errors ?? 0 }, () => ({})),
+      errors: () => Array.from({ length: state.errors ?? 0 }, (_, i) => ({ id: `e${i}` })),
     },
   };
 }
@@ -52,6 +52,41 @@ describe("pi-bg: busy notebooks as outside work", () => {
   });
 });
 
+test("stopping ends every run still reported", () => {
+  const b = bus();
+  const bridge = new BgBridge(b, () => []);
+  bridge.external([followed("/p/fit.py", { running: "Model fit" })], "/p", 0);
+  bridge.stopAll(4_000);
+  expect(b.sent.at(-1)).toEqual(["bg:external", { id: "marimo:fit.py", label: "fit.py", state: "failed", summary: "ran 4s · pi-marimo stopped following it" }]);
+  expect(bridge.runningIds()).toEqual([]);
+});
+
+describe("pi-bg: runs survive what is not their end", () => {
+  test("a disconnect shorter than the grace (a browser reload) does not end the run", () => {
+    const b = bus();
+    const bridge = new BgBridge(b, () => []);
+    bridge.external([followed("/p/fit.py", { running: "Fit" })], "/p", 0);
+    bridge.external([followed("/p/fit.py", { connection: "disconnected" })], "/p", 1_000);
+    expect(bridge.needsTick()).toBe(true);
+    bridge.external([followed("/p/fit.py", { running: "Fit" })], "/p", 3_000);
+    expect(bridge.needsTick()).toBe(false);
+    bridge.external([followed("/p/fit.py")], "/p", 10_000);
+    expect(b.sent.map(([, d]) => [d.state, d.summary])).toEqual([["running", undefined], ["done", "ran 10s"]]);
+  });
+
+  test("a disconnect past the grace ends it as failed; errors from before the run do not count", () => {
+    const b = bus();
+    const bridge = new BgBridge(b, () => []);
+    bridge.external([followed("/p/a.py", { running: "A", errors: 1 }), followed("/p/b.py", { running: "B" })], "/p", 0);
+    bridge.external([followed("/p/a.py", { errors: 1 }), followed("/p/b.py", { connection: "disconnected" })], "/p", 1_000);
+    bridge.external([followed("/p/a.py", { errors: 1 }), followed("/p/b.py", { connection: "disconnected" })], "/p", 1_000 + DISCONNECT_GRACE_MS);
+    expect(b.sent.slice(2).map(([, d]) => [d.id, d.state, d.summary])).toEqual([
+      ["marimo:a.py", "done", "ran 1s"],
+      ["marimo:b.py", "failed", "ran 9s · disconnected"],
+    ]);
+  });
+});
+
 describe("pi-bg: no second notice for a run a waking job drives", () => {
   test("covered only by a job that will wake the agent and targets that notebook", () => {
     const bridge = new BgBridge(undefined, (command) => (command.includes("fit") ? ["/p/fit.py"] : []));
@@ -66,6 +101,12 @@ describe("pi-bg: no second notice for a run a waking job drives", () => {
     expect(bridge.coversAll(["/p/fit.py"])).toBe(false);
     bridge.onTasks([{ id: "y", command: "execute-code.sh --file fit.py", origin: "agent", status: "running", willWake: false }]);
     bridge.noteCovered(["/p/fit.py"]);
+    expect(bridge.coversAll(["/p/fit.py"])).toBe(false);
+    // The user stops the covering job: it wakes no one, so the hold's own notice is needed again.
+    bridge.onTasks([{ id: "z", command: "execute-code.sh --file fit.py", origin: "agent", status: "running", willWake: true }]);
+    bridge.noteCovered(["/p/fit.py"]);
+    expect(bridge.coversAll(["/p/fit.py"])).toBe(true);
+    bridge.onTasks([{ id: "z", command: "execute-code.sh --file fit.py", origin: "agent", status: "killed", willWake: false }]);
     expect(bridge.coversAll(["/p/fit.py"])).toBe(false);
   });
 });

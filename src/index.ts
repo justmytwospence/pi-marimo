@@ -113,8 +113,8 @@ export default function piMarimo(pi: ExtensionAPI): void {
       lastStatus = text;
       ctxRef?.ui.setStatus(STATUS_KEY, text);
     }
-    // Tick the elapsed time while a cell runs.
-    const running = watcher?.connection === "connected" && watcher.notebook.running();
+    // Tick the elapsed time while a cell runs, and while a run waits out a disconnect.
+    const running = (watcher?.connection === "connected" && watcher.notebook.running()) || bg.needsTick();
     if (running && !ticker) ticker = setInterval(render, 1000);
     if (!running && ticker) { clearInterval(ticker); ticker = undefined; }
   };
@@ -149,6 +149,7 @@ export default function piMarimo(pi: ExtensionAPI): void {
     if (ticker) clearInterval(ticker);
     pending = ticker = undefined;
     await herdr?.apply(hold.release());
+    bg.stopAll();
     await watcher?.stop();
     watcher = undefined;
     ctxRef?.ui.setStatus(STATUS_KEY, undefined);
@@ -161,6 +162,8 @@ export default function piMarimo(pi: ExtensionAPI): void {
     watcher.refresh();
     await watcher.settle(2000);
     const entries = stateEntries();
+    // Bring the running list up to date first: a cell may have started within the last render's debounce.
+    if (ctxRef) bg.external(watcher.followed(), ctxRef.cwd);
     turn = entries.length ? { text: withWaitHint(snapshot(entries, { refresh: "prompt" }), bg.runningIds(), pi) } : undefined;
   });
 
