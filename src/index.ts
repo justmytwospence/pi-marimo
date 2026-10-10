@@ -7,8 +7,9 @@
 //   after that prompt for the whole turn. It is never stored in the session, so
 //   the model sees only the current turn's copy and old copies never pile up.
 // - /marimo: pin notebooks, follow every notebook under the cwd, or turn it off.
-// - herdr: when a turn ends with a cell the agent started still running, the pane token `marimo`
-//   says what runs until the kernel goes quiet, then a notification says it finished (herdr.ts).
+// - herdr (through pi-herdr): when a turn ends with a cell the agent started still running, the pane
+//   token `marimo` says what runs until the kernel goes quiet, then a notification says it finished
+//   (herdr.ts).
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { KernelHold } from "./core/hold.js";
@@ -16,7 +17,7 @@ import { snapshot, STATE_TAG, statusParts, statusText } from "./core/render.js";
 import { nodeIo } from "./core/node-io.js";
 import { pairTargets } from "./core/touch.js";
 import { MarimoWatcher, type Mode, parseMode } from "./core/watcher.js";
-import { HerdrHold, herdrTarget } from "./herdr.js";
+import { HerdrHold } from "./herdr.js";
 
 const ENTRY = "pi-marimo";
 const STATUS_KEY = "marimo";
@@ -66,6 +67,7 @@ export default function piMarimo(pi: ExtensionAPI): void {
   // A cell the agent started that outlives its turn, shown in herdr (interactive sessions only).
   const hold = new KernelHold();
   let herdr: HerdrHold | undefined;
+  pi.events?.on("herdr:ready", () => herdr?.resend());
 
   const statusLine = (): string | undefined => {
     if (!watcher) return undefined;
@@ -109,7 +111,7 @@ export default function piMarimo(pi: ExtensionAPI): void {
 
   pi.on("session_start", async (_event, ctx) => {
     ctxRef = ctx;
-    herdr = ctx.mode === "tui" ? new HerdrHold("pi", herdrTarget()) : undefined;
+    herdr = ctx.mode === "tui" ? new HerdrHold(pi.events) : undefined;
     await watcher?.stop();
     watcher = new MarimoWatcher({ io: nodeIo(), cwd: ctx.cwd, token: process.env.MARIMO_TOKEN, onChange: schedule });
     watcher.mode = savedMode(ctx.sessionManager.getBranch() as Entry[]) ?? { kind: "auto" };

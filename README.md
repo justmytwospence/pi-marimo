@@ -71,7 +71,8 @@ shape stays in its status row.
 
 ## herdr
 
-Inside a [herdr](https://herdr.dev) pane, a turn that ends while a notebook the agent worked in
+Inside a [herdr](https://herdr.dev) pane, with [pi-herdr](https://github.com/justmytwospence/pi-herdr)
+installed (it does the herdr work through its event-bus bridge), a turn that ends while a notebook the agent worked in
 during that turn is still running or has cells queued starts a *kernel hold*. It lasts until every
 such notebook is quiet (or disconnects), or until the next prompt. During it the pane token
 `marimo` names the file and what runs (`fit.py: Model fit`, or `fit.py: 3 queued`); add `$marimo` to
