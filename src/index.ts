@@ -10,8 +10,11 @@
 // - herdr (through pi-herdr): when a turn ends with a cell the agent started still running, the pane
 //   token `marimo` says what runs until the kernel goes quiet, then a notification says it finished
 //   (herdr.ts).
+// - pi-bg: a busy notebook is outside work `bg_wait marimo:<file>` can wait on, and a run a pi-bg
+//   job drives (and will wake the agent about) gets no separate "finished" notification (bg.ts).
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { BgBridge } from "./bg.js";
 import { KernelHold } from "./core/hold.js";
 import { snapshot, STATE_TAG, statusParts, statusText } from "./core/render.js";
 import { nodeIo } from "./core/node-io.js";
@@ -54,6 +57,17 @@ export function insertState<M extends { role?: string; timestamp?: number }>(mes
   return { messages: [...messages.slice(0, at + 1), block, ...messages.slice(at + 1)], anchor };
 }
 
+/** With pi-bg loaded and a notebook running, tell the agent how to wait for it. */
+export function withWaitHint(text: string, running: string[], pi: Pick<ExtensionAPI, "events">): string {
+  if (!running.length) return text;
+  let piBg = false;
+  pi.events?.emit("bg:probe", { reply: () => { piBg = true; } });
+  if (!piBg) return text;
+  const hint = `To wait for a running notebook inside your turn, call bg_wait with its id: ${running.join(", ")}.`;
+  const close = `</${STATE_TAG}>`;
+  return text.endsWith(close) ? `${text.slice(0, -close.length).replace(/\n?$/u, "\n")}${hint}\n${close}` : `${text}\n${hint}`;
+}
+
 export default function piMarimo(pi: ExtensionAPI): void {
   let watcher: MarimoWatcher | undefined;
   let ctxRef: ExtensionContext | undefined;
@@ -68,6 +82,11 @@ export default function piMarimo(pi: ExtensionAPI): void {
   const hold = new KernelHold();
   let herdr: HerdrHold | undefined;
   pi.events?.on("herdr:ready", () => herdr?.resend());
+  const bg = new BgBridge(pi.events, (command) => watcher?.targeted(pairTargets(command)) ?? []);
+  pi.events?.on("bg:tasks", (data) => {
+    bg.onTasks((data as { tasks?: unknown } | undefined)?.tasks);
+    if (hold.active) bg.noteCovered(hold.paths);
+  });
 
   const statusLine = (): string | undefined => {
     if (!watcher) return undefined;
@@ -81,7 +100,14 @@ export default function piMarimo(pi: ExtensionAPI): void {
 
   const render = (): void => {
     pending = undefined;
-    if (hold.active && watcher) void herdr?.apply(hold.update(watcher.followed(), Date.now()));
+    if (hold.active && watcher) {
+      const held = hold.paths;
+      let change = hold.update(watcher.followed(), Date.now());
+      // A pi-bg job that drove these runs wakes the agent about their end: no second notice.
+      if (change.kind === "finished" && bg.coversAll(held)) change = { kind: "released" };
+      void herdr?.apply(change);
+    }
+    if (watcher && ctxRef) bg.external(watcher.followed(), ctxRef.cwd);
     const text = statusLine();
     if (text !== lastStatus) {
       lastStatus = text;
@@ -135,7 +161,7 @@ export default function piMarimo(pi: ExtensionAPI): void {
     watcher.refresh();
     await watcher.settle(2000);
     const entries = stateEntries();
-    turn = entries.length ? { text: snapshot(entries, { refresh: "prompt" }) } : undefined;
+    turn = entries.length ? { text: withWaitHint(snapshot(entries, { refresh: "prompt" }), bg.runningIds(), pi) } : undefined;
   });
 
   // The notebook this session's agent works in (through marimo-pair) becomes current for this
@@ -148,12 +174,14 @@ export default function piMarimo(pi: ExtensionAPI): void {
 
   pi.on("agent_start", () => {
     void herdr?.apply(hold.begin(Date.now()));
+    bg.resetHold();
   });
 
   // The agent is done for now: a cell it started that still runs holds the pane's attention.
   pi.on("agent_settled", (_event, ctx) => {
     if (!watcher || ctx.isIdle() !== true) return;
     void herdr?.apply(hold.end(watcher.followed(), Date.now()));
+    bg.noteCovered(hold.paths);
   });
 
   // Browser edits made after this point are flagged as new in the next turn.

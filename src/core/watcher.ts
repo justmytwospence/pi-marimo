@@ -193,19 +193,30 @@ export class MarimoWatcher {
    * (as marimo-pair takes it: absolute, or relative to the server's directory), or by server
    * alone when only one followed notebook is on it. Returns whether any followed notebook matched.
    */
+  /** The one followed notebook a marimo-pair call targets, if it is unambiguous. */
+  private match(t: PairTarget) {
+    let matches = [...this.followers.values()];
+    if (t.url) matches = matches.filter((f) => sameServer(f.target.url, t.url!));
+    if (t.session) matches = matches.filter((f) => f.target.sessionId === t.session);
+    else if (t.file) {
+      const file = t.file.replace(/^\.\//, "");
+      matches = matches.filter((f) => f.target.path === file || f.target.real === file || f.target.path.endsWith(`/${file}`) || f.target.real.endsWith(`/${file}`));
+    } else if (!t.url) matches = [];
+    return matches.length === 1 ? matches[0] : undefined;
+  }
+
+  /** The paths of the followed notebooks these marimo-pair calls target. */
+  targeted(targets: PairTarget[]): string[] {
+    return targets.map((t) => this.match(t)?.attachment.path).filter((p): p is string => p !== undefined);
+  }
+
   touch(targets: PairTarget[], now = Date.now()): boolean {
     let touched = false;
     targets.forEach((t, i) => {
-      let matches = [...this.followers.values()];
-      if (t.url) matches = matches.filter((f) => sameServer(f.target.url, t.url!));
-      if (t.session) matches = matches.filter((f) => f.target.sessionId === t.session);
-      else if (t.file) {
-        const file = t.file.replace(/^\.\//, "");
-        matches = matches.filter((f) => f.target.path === file || f.target.real === file || f.target.path.endsWith(`/${file}`) || f.target.real.endsWith(`/${file}`));
-      } else if (!t.url) matches = [];
-      if (matches.length !== 1) return;
+      const match = this.match(t);
+      if (!match) return;
       // Later calls in one tool call win.
-      matches[0]!.touchedAt = now + i;
+      match.touchedAt = now + i;
       touched = true;
     });
     if (touched) this.options.onChange();

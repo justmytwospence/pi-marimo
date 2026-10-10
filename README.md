@@ -18,6 +18,7 @@ working in, so Pi knows what they look like and what they are doing without bein
   `/marimo off`; `/marimo show` prints the block the model sees.
 - **herdr:** when a turn ends while a cell the agent started is still running, the pane says what
   runs until the kernel goes quiet, then a notification says it finished (see below).
+- **pi-bg:** a running notebook is something `bg_wait` can wait on (see below).
 
 It pairs with the [marimo-pair](https://github.com/marimo-team/marimo-pair) skill, which is how the
 agent inspects and changes the notebook; this extension only reads.
@@ -84,6 +85,22 @@ the pi and opencode integrations number their reports from a counter set at load
 wedged between them either is dropped or shuts the integration out, and for Claude Code herdr
 ignores state reported under its integration's source and refuses other sources once the session
 is known. So every port adds only the token and the notification.
+
+## pi-bg
+
+With [pi-bg](https://github.com/justmytwospence/pi-bg) loaded (everything goes through pi's event
+bus; without it nothing happens):
+
+- **Waiting on a notebook.** While a followed notebook has a cell running or queued, it is outside
+  work pi-bg's `bg_wait` can wait on, under the id `marimo:<file>` (the path from the cwd when two
+  followed notebooks share a name). It ends as `done`, or `failed` with errors or a disconnect,
+  with what the run took (`ran 4m12s · 1 error`). When a notebook is running at the prompt, the
+  state block names the ids, so the agent can wait inside its turn (and show as working) instead
+  of ending it.
+- **One notice per run.** A long marimo-pair call is often a pi-bg job (`bg_run` of the
+  `execute-code` call) that wakes the agent when the cells finish. When every notebook of a kernel
+  hold is driven by such a job, the hold keeps its `$marimo` token but skips its "finished"
+  notification: the wake-up, and herdr's own done at the end of that turn, already say so.
 
 ## Install
 

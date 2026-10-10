@@ -48,6 +48,11 @@ export class KernelHold {
     return this.held.size > 0;
   }
 
+  /** The notebooks held, by path. */
+  get paths(): string[] {
+    return [...this.held];
+  }
+
   /** A turn began: the agent is working again, so any hold ends. */
   begin(now: number): HoldChange {
     this.turnStartedAt = now;
