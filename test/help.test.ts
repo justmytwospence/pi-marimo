@@ -153,7 +153,7 @@ test("j/k, arrows, page keys, first/last and wheel clamp at the viewport ends", 
   help.render(46, 12, theme);
   help.handleInput("\x1b[6~", 7);
   // Page navigation uses the rendered content rectangle, excluding help chrome.
-  expect(help.state.scroll).toBe(6);
+  expect(help.state.scroll).toBe(7);
   help.handleInput("\x1b[5~", 7);
   expect(help.state.scroll).toBe(0);
   help.handleInput("\x1b[B", 7);
@@ -166,7 +166,7 @@ test("j/k, arrows, page keys, first/last and wheel clamp at the viewport ends", 
   help.wheel(10000);
   help.handleInput("j", 7);
   expect(help.state.scroll).toBe(last);
-  expect(help.render(46, 12, theme).join("\n")).toContain("ending_0_12");
+  expect(help.render(46, 12, theme).join("\n")).toContain("Navigation action 12");
   help.wheel(-10000);
   help.handleInput("k", 7);
   expect(help.state.scroll).toBe(0);
@@ -177,24 +177,22 @@ test("j/k, arrows, page keys, first/last and wheel clamp at the viewport ends", 
 });
 
 describe.each([46, 80, 100, 120, 180])("complete help at width %i", (width) => {
-  test("every wrapped command row and its final words are reachable", () => {
+  test("every key and action is reachable without repeating long descriptions", () => {
     const help = new Help();
-    const rows = collect(help, width);
-    const commands = COMMANDS.filter((command) => command.group === "Navigation");
-    const column = width < 100 ? width : Math.floor((width - 3) / 2);
-    for (const command of commands) {
-      for (const line of wrapTextWithAnsi(textOf(command), column)) {
-        expect([...rows].some((row) => width < 100 ? row === line : row.includes(line))).toBe(true);
-      }
+    const rows = [...collect(help, width)];
+    for (const command of COMMANDS.filter((entry) => entry.group === "Navigation")) {
+      expect(rows.some((row) => row.includes(command.keys.join(" / ")))).toBe(true);
+      expect(rows.some((row) => row.includes(command.label))).toBe(true);
     }
-    expect([...rows].some((row) => row.includes(" │ "))).toBe(width >= 100);
+    expect(rows.join("\n")).not.toContain("Description 0_12:");
+    expect(rows.some((row) => row.includes(" │ "))).toBe(width >= 100);
   });
 });
 
 test.each([0, 1, 2, 3, 4, 5, 12])("short height %i preserves the height bound and reachable final content", (height) => {
   const help = new Help();
   const rows = collect(help, 46, height);
-  if (height) expect([...rows].join("\n")).toContain("ending_0_12");
+  if (height) expect([...rows].join("\n")).toContain("Navigation action 12");
   else expect(rows.size).toBe(0);
 });
 

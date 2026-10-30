@@ -1,7 +1,7 @@
 // Searchable notebook controls, sourced exclusively from the command registry.
 import { matchesKey, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import type { FrameTheme } from "../frame.ts";
-import { COMMANDS, GROUPS, commandFor, commandToken } from "./keys.js";
+import { COMMANDS, GROUPS, commandFor } from "./keys.js";
 
 export interface HelpState {
   group: string;
@@ -17,6 +17,14 @@ const CONTEXT: Readonly<Record<string, string>> = {
 
 function commandText(command: (typeof COMMANDS)[number]): string {
   return `${command.modes.includes("message") ? "Message view: " : ""}${command.keys.join(" / ")} · ${command.label}${command.description === command.label ? "" : ` — ${command.description}`}`;
+}
+
+function compactCommand(command: (typeof COMMANDS)[number], width: number): string[] {
+  const keys = command.keys.join(" / ");
+  const keyWidth = Math.min(Math.max(12, Math.floor(width * 0.38)), 24);
+  if (visibleWidth(keys) >= keyWidth) return [...wrapTextWithAnsi(keys, width), ...wrapTextWithAnsi(`  ${command.label}`, width)];
+  const prefix = keys + " ".repeat(keyWidth - visibleWidth(keys));
+  return wrapTextWithAnsi(command.label, Math.max(1, width - keyWidth)).map((line, index) => `${index ? " ".repeat(keyWidth) : prefix}${line}`);
 }
 
 export class Help {
@@ -84,14 +92,14 @@ export class Help {
     const commands = COMMANDS.filter((command) => query
       ? [command.keys.join(" "), command.label, command.description].some((text) => text.toLocaleLowerCase().includes(query))
       : command.group === this.state.group);
-    const entries = commands.map((command) => commandText(command));
     const body: string[] = [];
-    if (layoutWidth < 100) for (const entry of entries) body.push(...wrap(entry));
+    if (query) for (const command of commands) body.push(...wrap(commandText(command)));
+    else if (layoutWidth < 100) for (const command of commands) body.push(...compactCommand(command, width));
     else {
       const column = Math.floor((width - 3) / 2);
-      for (let i = 0; i < entries.length; i += 2) {
-        const left = wrap(entries[i]!, column);
-        const right = entries[i + 1] ? wrap(entries[i + 1]!, column) : [];
+      for (let i = 0; i < commands.length; i += 2) {
+        const left = compactCommand(commands[i]!, column);
+        const right = commands[i + 1] ? compactCommand(commands[i + 1]!, column) : [];
         for (let row = 0; row < Math.max(left.length, right.length); row++) {
           const a = left[row] ?? "";
           body.push(right[row] === undefined ? a : `${a}${" ".repeat(column - visibleWidth(a))} │ ${right[row]}`);
@@ -100,14 +108,13 @@ export class Help {
     }
     if (!body.length) body.push("No matching commands");
 
-    // Always leave at least one content row, even on a one-line terminal.
     const heading = [
       ...wrap(theme.bold(theme.fg("accent", "Notebook controls"))),
       ...wrap(theme.bold(query ? "All categories" : this.state.group)),
-      ...wrap(this.state.typing || query ? `Search: ${this.state.query}${this.state.typing ? "_" : ""}` : "/ search all categories"),
+      ...wrap(this.state.typing || query ? `Search: ${this.state.query}${this.state.typing ? "_" : ""}` : "/ search · Tab categories"),
       ...(where ? wrap(theme.fg("dim", where)) : []),
     ];
-    const hints = wrap(theme.fg("dim", ["help-down", "help-next-category", "help-search", "help-back", "help-close"].map(commandToken).join(" · ")));
+    const hints = wrap(theme.fg("dim", "j/k scroll · Tab/⇧Tab categories · / search · Esc back · ? close"));
     const chrome = Math.min(height - 1, heading.length + hints.length);
     const top = heading.slice(0, Math.min(heading.length, chrome));
     const bottom = hints.slice(0, chrome - top.length);
