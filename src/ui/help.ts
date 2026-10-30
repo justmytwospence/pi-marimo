@@ -52,7 +52,7 @@ function commandRows(command: (typeof COMMANDS)[number], width: number, theme: F
     const right = wrap(label, width - keyWidth - 2);
     rows = Array.from({ length: Math.max(left.length, right.length) }, (_, i) => {
       const key = left[i] ?? "";
-      return `${theme.fg("accent", key)}${" ".repeat(keyWidth - visibleWidth(key) + 2)}${right[i] ?? ""}`;
+      return `${" ".repeat(Math.max(0, keyWidth - visibleWidth(key)))}${theme.fg("accent", key)}  ${right[i] ?? ""}`;
     });
   }
   if (search && command.description !== command.label) rows.push(...wrap(command.description).map(line => theme.fg("dim", line)));
