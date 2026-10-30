@@ -297,8 +297,8 @@ test("STEP2 expanded detail retains all logical source lines and trailing whites
   const rows = detailRows(f.notebook, theme, 0, { cell: f.notebook.cells.get("a")!, width: 80, codeOpen: true, section: false, diff: false, lineNumbers: true, tabstop: 8 }).rows.filter(r => r.sourceLine !== undefined);
   expect(rows).toHaveLength(10004);
   expect(rows.at(-3)?.text).toContain("value_10001");
-  expect(rows.at(-2)?.text).toBe("  10003   ");
-  expect(rows.at(-1)?.text).toBe("  10004 ");
+  expect(rows.at(-2)?.text.trimEnd()).toBe("  10003");
+  expect(rows.at(-1)?.text.trimEnd()).toBe("  10004");
 });
 
 test("STEP2 H/L/0 offsets and session line numbers survive view transfers", () => {
@@ -358,7 +358,7 @@ test("STEP2 section code appears only after explicit opening", () => {
   } finally { v.dispose(); }
 });
 
-test("the header is one line: state, the agent, the last run and where the server is; the path and URL are on the ? page", () => {
+test("the header shows state and server while help avoids repeated notebook metadata", () => {
   const f = nbWith([{ id: "a", code: "x = 1" }, { id: "b", code: "y = x" }, { id: "m", code: 'mo.md("# T")' }]);
   f.notebook.apply("cell-op", { cell_id: "b", status: "idle", stale_inputs: true, output: { channel: "marimo-error", mimetype: "application/vnd.marimo+error", data: [{ type: "exception", exception_type: "ValueError", msg: "bad" }] } });
   const v = make(f, { servers: () => ["nb-server"], lastRun: () => "ran 3s · 1 error · 1m ago" });
@@ -374,7 +374,7 @@ test("the header is one line: state, the agent, the last run and where the serve
     expect(text).not.toContain("/w/nb.py");
     expect(text).not.toContain("session s");
     v.handleInput("?");
-    expect(screen(v)).toContain("/w/nb.py · http://fixture.invalid · server nb-server");
+    expect(screen(v)).not.toContain("/w/nb.py · http://fixture.invalid · server nb-server");
   } finally { v.dispose(); }
 });
 
@@ -391,10 +391,11 @@ test("j/k move the cursor between cells; the detail shows the cell's output, fol
     expect(first).toContain("│ hi");
     expect(first).toContain("│ value & more");
     // Folded: a short preview retains both source lines.
-    expect(first).toContain("│ ▸ python");
+    expect(first).toContain("│   ▸ python");
     expect(first).toContain("│   print('hi')");
     expect(first).toContain("│   x = 1");
-    expect(v.render(100).slice(3, -3).join("\n")).toMatch(/│ code\s/u);
+    expect((v as any).lastParts.some((part: any) => part.kind === "code")).toBe(true);
+    expect(v.render(100).slice(3, -3).join("\n")).not.toMatch(/│ code\s/u);
     v.handleInput("j");
     expect(screen(v)).toMatch(/▌  second/u);
     expect(screen(v)).not.toContain("│ value & more");
@@ -403,10 +404,10 @@ test("j/k move the cursor between cells; the detail shows the cell's output, fol
     const open = screen(v);
     expect(open).toMatch(/▌  first/u);
     expect(open).toContain("│   x = 1");
-    expect(open).toContain("│ ▾ python");
+    expect(open).toContain("│   ▾ python");
     v.handleInput("B");
     expect(screen(v)).toContain("│   x = 1");
-    expect(screen(v)).toContain("│ ▸ python");
+    expect(screen(v)).toContain("│   ▸ python");
   } finally { v.dispose(); }
 });
 
@@ -794,13 +795,13 @@ test("? opens context help; navigation and unrelated keys do not close it", () =
   try {
     expect(screen(v)).toContain("? help");
     v.handleInput("?");
-    expect(screen(v)).toContain("Notebook controls");
+    expect(screen(v)).toContain("Keyboard shortcuts");
     expect(screen(v)).toContain("Navigation");
     v.handleInput("j");
     v.handleInput("x");
-    expect(screen(v)).toContain("Notebook controls");
+    expect(screen(v)).toContain("Keyboard shortcuts");
     v.handleInput("?");
-    expect(screen(v)).not.toContain("Notebook controls");
+    expect(screen(v)).not.toContain("Keyboard shortcuts");
   } finally { v.dispose(); }
 });
 
@@ -1175,7 +1176,8 @@ test("the detail of a failed cell shows its error, traceback and source", async 
     expect(text).toContain("KeyError: 'revenue'");
     expect(text).toContain("Traceback (most recent call last)");
     expect(text).toContain("│   model = boom(daily)");
-    expect(v.render(100).slice(3, -3).join("\n")).toMatch(/│ error\s[\s\S]*│ code\s/u);
+    expect((v as any).lastParts.map((part: any) => part.kind)).toEqual(["error", "code"]);
+    expect((v as any).lastDetail.filter((r: any) => /^─+$/u.test(plain(r.text)))).toHaveLength(2);
   } finally { v.dispose(); }
 });
 
@@ -1285,7 +1287,8 @@ test("n and p walk a cell's parts and B opens the code for reading", async () =>
   try {
     // Focus belongs to the short header, not the content rows.
     const focused = () => { screen(v); return (v as any).lastParts[(v as any).part]?.kind ?? ""; };
-    expect(v.render(100).slice(3, -3).map((l) => l.split(" │ ")[1] ?? "").join("\n")).toMatch(/\bprinted\b/u);
+    screen(v);
+    expect((v as any).lastDetail.some((r: any) => /^(code|printed|output|chart|table|widgets|markdown)$/.test(plain(r.text).trim()))).toBe(false);
     v.handleInput("n");
     expect(focused()).toBe("error");
     expect(screen(v)).toContain("│ KeyError: k");
@@ -1739,8 +1742,9 @@ test.each([46, 80, 100, 120, 180].flatMap(width => ["t", "w"].map(key => ({ widt
       const help = v.render(width);
       expect(help).toHaveLength(12);
       expect(help.every(line => visibleWidth(line) === width)).toBe(true);
-      expect(help.join("\n")).toContain("Notebook controls");
-      expect(footerText(help)).not.toMatch(/…|\.\.\./u);
+      expect(help.join("\n")).toContain("Keyboard shortcuts");
+      expect(help.join("\n").match(/Keyboard shortcuts/gu)).toHaveLength(1);
+      expect(footerText(help)).toBe("");
     } finally { v.dispose(); }
   },
 );
@@ -1792,9 +1796,9 @@ test.each([
     if (key === "w") expect(before.widget).toMatchObject({ cell: "a", index: 0 });
     v.handleInput("?");
     expect(v.snapshot().help).toEqual({ group, query: "", typing: false, scroll: 0 });
-    expect(screen(v)).toContain("Notebook controls");
+    expect(screen(v)).toContain("Keyboard shortcuts");
     moved = make(f, { initial: v.snapshot() });
-    expect(screen(moved)).toContain("Notebook controls");
+    expect(screen(moved)).toContain("Keyboard shortcuts");
     moved.handleInput("?"); screen(moved);
     expect(moved.snapshot()).toEqual(before);
   } finally { v.dispose(); moved?.dispose(); }
@@ -1818,7 +1822,7 @@ test("STEP6 help scrolls, cycles categories both ways, searches globally and Esc
     v.handleInput("\x1b[Z"); expect(v.snapshot().help?.group).toBe("Dock/Mouse");
     v.handleInput("/"); press(v, "scroll"); v.handleInput("\r"); v.render(46);
     expect(v.snapshot().help).toMatchObject({ group: "Dock/Mouse", query: "scroll", typing: false });
-    expect(v.render(46).join("\n")).toContain("All categories");
+    expect(v.render(46).join("\n")).toContain("Search: scroll");
     v.handleInput("j"); v.render(46);
     expect(v.snapshot().help!.scroll).toBeGreaterThan(0);
     const saved = v.snapshot();
@@ -1959,7 +1963,7 @@ test.each([46, 80, 100, 120, 180])("STEP6 bounded errors disclose a complete cap
   } finally { v.dispose(); }
 });
 
-test("STEP6 header preserves mode and active filter while help owns input", () => {
+test("help retains the underlying mode and filter without repeating their header", () => {
   const f = dataflow(); const v = make(f);
   try {
     v.handleInput("/"); press(v, "load");
@@ -1968,7 +1972,7 @@ test("STEP6 header preserves mode and active filter while help owns input", () =
     const moved = make(f, { initial: { ...v.snapshot(), typing: false } });
     try {
       moved.handleInput("?");
-      expect(plain(moved.render(120)[1]!)).toContain("help · load");
+      expect(plain(moved.render(120)[1]!).trim()).toBe("");
       expect(moved.snapshot().filter).toBe("load");
     } finally { moved.dispose(); }
     v.handleInput("\x1b"); v.handleInput("v");
@@ -2000,11 +2004,11 @@ test("STEP6 help supersedes timing and survives removal of the followed notebook
     v.render(80); v.handleInput("T");
     expect(screen(v)).toContain("Exact timing");
     v.handleInput("?");
-    expect(screen(v)).toContain("Notebook controls");
+    expect(screen(v)).toContain("Keyboard shortcuts");
     follows = [];
-    expect(screen(v)).toContain("Notebook controls");
+    expect(screen(v)).toContain("Keyboard shortcuts");
     v.handleInput("?");
-    expect(screen(v)).not.toContain("Notebook controls");
+    expect(screen(v)).not.toContain("Keyboard shortcuts");
   } finally { v.dispose(); }
 });
 

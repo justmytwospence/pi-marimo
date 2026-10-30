@@ -25,10 +25,10 @@ export interface Row {
   package?: string;
   progress?: { id: string };
   cell?: string;
-  /** The `▸ code` line of the detail, which a click opens or folds. */
+  /** A source panel row, which a click opens or folds. */
   code?: boolean;
   widget?: { cell: string; index: number };
-  /** A part label of the detail (its index in the parts list), or a line of a part the label heads. */
+  /** A part separator or content row in the detail (its index in the parts list). */
   part?: number;
   /** A body row of a table grid: its index within the page. */
   tableRow?: number;

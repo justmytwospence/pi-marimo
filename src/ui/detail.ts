@@ -11,9 +11,9 @@ import { duration, runTime } from "./time.js";
 import { progressRows } from "./progress.js";
 import type { FrameTheme } from "../frame.ts";
 import { clean, consoleLineText, outputRows } from "./outputs.js";
-import { type PaneTheme, cellGlyph, headingText, spinner } from "./outline.js";
+import { cellGlyph, headingText, spinner } from "./outline.js";
 import { MAX_WIDGETS, type Row, type RowOptions, diffLines } from "./rows.js";
-import { codeRows } from "./code.js";
+import { codePanelRows } from "./code.js";
 import { markdownRows } from "./markdown.js";
 import { cellTitle, sectionOf } from "./titles.js";
 import { oneLine } from "./text.js";
@@ -35,7 +35,7 @@ export interface DetailOptions extends RowOptions {
   /** The selected cell. */
   cell: Cell;
   width: number;
-  /** The selected cell's code shows (instead of `▸ code · N lines`). */
+  /** The selected cell's source is expanded instead of folded. */
   codeOpen: boolean;
   /** Explicitly opened cells in section mode (ordinary reading stays output-first). */
   sectionCodeOpen?: ReadonlySet<string>;
@@ -76,16 +76,15 @@ export function detailRows(nb: NotebookState, theme: FrameTheme, now: number, o:
   const parts: Part[] = [];
 
   /**
-   * A part of a cell (its error, what it printed, its output, its widgets, its code): no label, its rows
-   * share the pane's full body width. A short label marks the part without a per-row gutter.
+   * A focusable piece keeps its separator row and ownership without a textual caption.
+   * Its content shares the pane's full body width, without a per-row gutter.
    */
   const part = (kind: Part["kind"], cell: Cell) => {
     const index = parts.length;
     const focused = o.partFocus === index;
     parts.push({ kind, cell: cell.id, row: rows.length });
-    let label = focused ? theme.bold(theme.fg("accent", kind)) : dim(kind);
-    if (focused && (theme as PaneTheme).bg) label = (theme as PaneTheme).bg!("toolPendingBg", label);
-    rows.push({ text: label, part: index });
+    const separator = focused ? theme.fg("accent", "━".repeat(width)) : dim("─".repeat(width));
+    rows.push({ text: separator, part: index });
     const add = (text: string, extra: Partial<Row> = {}) => rows.push({ text, part: index, ...extra });
     return { index, focused, add };
   };
@@ -158,18 +157,7 @@ export function detailRows(nb: NotebookState, theme: FrameTheme, now: number, o:
       const offset = o.codeOffsets?.get(blockId)?.offset ?? 0;
       for (const text of diffLines(change.before, cell.code, { width, offset })) p.add(text, { code: true, blockId });
     } else {
-      const bg = (theme as PaneTheme).bg?.bind(theme);
-      const inset = 2;
-      const fill = (text: string) => bg ? bg("toolPendingBg", text + " ".repeat(Math.max(0, width - visibleWidth(text)))) : text;
-      const source = codeRows(cell.code, { ...sub, width: Math.max(1, width - inset * 2), blockId, language: "python", folded: !open });
-      const header = fill(source[0]!.text);
-      p.add(header, { ...source[0], text: header });
-      p.add(fill(""), { code: true, blockId });
-      for (const r of source.slice(1)) {
-        const text = fill(`${" ".repeat(inset)}${r.text}`);
-        p.add(text, { ...r, text });
-      }
-      p.add(fill(""), { code: true, blockId });
+      for (const r of codePanelRows(cell.code, { ...sub, theme: o.theme ?? theme, blockId, language: "python", folded: !open })) p.add(r.text, r);
     }
   };
 

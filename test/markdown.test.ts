@@ -43,9 +43,31 @@ describe("source mapped markdown", () => {
   it("does not reflow code and respects tabstop, offsets and numbers", () => {
     const source = '```py\n\t' + 'x'.repeat(2100) + 'TAIL\n```';
     const block = extractCodeBlocks(source).blocks[0]!;
-    const rows = plain(source, { width: 8, tabstop: 8, codeOffsets: new Map([[block.id, { offset: 2104 }]]) });
+    const rows = plain(source, { width: 8, tabstop: 8, codeOffsets: new Map([[block.id, { offset: 2108 }]]) });
     expect(rows.join('\n')).toContain('TAIL');
     expect(plain('```\na\tb\n```', { width: 80, tabstop: 8 }).join('\n')).toContain('a       b');
+  });
+  it("shares rectangular panels inside list/quote containers, keeping prefix outside the background", () => {
+    const source = "> - item\n>\n>   ```py\n>     x\n>\n>   ```";
+    const theme = { fg: (_: string, s: string) => s, bold: (s: string) => s, bg: (_: string, s: string) => `\x1b[44m${s}\x1b[49m` };
+    const rows = markdownRows(source, { width: 32, theme, blockPrefix: "cell", lineNumbers: true });
+    const panel = rows.filter(row => row.code);
+    expect(panel.length).toBeGreaterThan(4);
+    expect(panel.every(row => visibleWidth(row.text) === 32 && row.blockId?.startsWith("cell:markdown:"))).toBe(true);
+    expect(panel.every(row => row.text.indexOf("\x1b[44m") > 0)).toBe(true);
+    expect(panel.filter(row => row.sourceLine !== undefined).map(row => row.sourceLine)).toEqual([0, 1]);
+    expect(stripTerminalSequences(panel.find(row => row.sourceLine === 0)!.text)).toContain("1   x");
+  });
+  it("keeps separate fence offsets and line numbers with text as the default language", () => {
+    const source = "```\n" + "x".repeat(100) + "TAIL\n```\n\n```js\n" + "y".repeat(100) + "END\n```";
+    const blocks = extractCodeBlocks(source).blocks;
+    const offsets = new Map([[blocks[0]!.id, { offset: 10000 }], [blocks[1]!.id, { offset: 0 }]]);
+    const rows = markdownRows(source, { width: 20, codeOffsets: offsets, lineNumbers: true });
+    expect(rows.find(row => row.sourceLine === 0)?.text).toContain("TAIL");
+    expect(rows.filter(row => row.sourceLine === 0)[1]!.text).toContain("1 y");
+    expect(rows.find(row => row.code)?.text).toContain("text");
+    expect(rows.some(row => /▾ code|▾ python/u.test(row.text))).toBe(false);
+    expect(offsets.get(blocks[1]!.id)?.offset).toBe(0);
   });
   it("marks each Pi Markdown instance for full-width rendering", () => {
     const original = Markdown.prototype.render;

@@ -1636,6 +1636,7 @@ export class NotebookView implements Component, Focusable {
     const transientRows = messagePreview(transient, inner, Math.max(0, height - CHROME - dock.length));
     this.messageOverflow = !!transient && wrapTextWithAnsi(clean(transient), inner).length > transientRows.length;
     this.lastTransient = transientRows.length;
+    if (this.help && height < CHROME) return this.helpView.render(inner, height, th).map(row);
     if (height < CHROME || (height === CHROME && dock.length)) {
       this.lastPage = 0;
       this.lastRows = []; this.lastDetail = []; this.lastOutline = [];
@@ -1651,8 +1652,8 @@ export class NotebookView implements Component, Focusable {
       const rows = this.messageView.render(inner, page);
       for (let i = 0; i < page; i++) out.push(row(rows[i] ?? ""));
     } else if (this.help) {
-      out.push(row(f ? this.header(f, file, inner) : `${file} · help`), rule);
-      const rows = this.helpView.render(inner, page, th, width, f ? this.whereText(f) : undefined).map((text): Row => ({ text }));
+      out.push(row(""), rule);
+      const rows = this.helpView.render(inner, page, th).map((text): Row => ({ text }));
       this.lastRows = rows;
       for (let i = 0; i < page; i++) out.push(row(rows[i]?.text ?? ""));
     } else if (!f) {
@@ -1931,7 +1932,7 @@ export class NotebookView implements Component, Focusable {
     // Dock owns its focused prompt hints; never replace those with a key inventory.
     if (this.dock) return this.theme.fg("dim", "esc closes the prompt");
     const mode = this.commandMode();
-    if (this.help) return this.theme.fg("dim", footerTokens(inner, "help-search", `${this.helpView.state.scroll + 1}`, mode === "editor"));
+    if (this.help) return ""; // Help owns its single navigation footer.
     const focused = this.part === undefined ? undefined : this.lastParts[this.part];
     const cell = f ? this.cursorCell(f) : undefined;
     const contextual = focused?.kind ?? (cell?.output?.widgets?.length ? "widgets" : cell?.output?.table ? "table" : this.live.rects.length ? "chart" : undefined);

@@ -144,7 +144,20 @@ describe("structured source output", () => {
     const cell = nb.cells.get("a")!; cell.output = output;
     const rows = outputRows(cell, theme, { width: 100, pad: "" }, { textLines: 1, tableRows: 1 });
     expect(rows.filter(row => row.sourceLine !== undefined)).toHaveLength(source.split("\n").length);
-    expect(rows.map(row => row.text)).toContain("tail");
+    expect(rows.filter(row => row.sourceLine !== undefined).map(row => row.text.trimEnd())).toContain("  tail");
+    expect(rows.filter(row => row.code).every(row => visibleWidth(row.text) === 100)).toBe(true);
+    expect(rows.some(row => row.sourceLine === undefined && row.text.includes("python"))).toBe(true);
+  });
+  test("unlabeled preformatted values have no header or Python/code caption", () => {
+    const nb = new NotebookState(); nb.apply("kernel-ready", { cell_ids: ["a"], codes: ["pass"] });
+    const cell = nb.cells.get("a")!; cell.output = html("<pre>  raw\n\nTAIL\n</pre>");
+    const rows = outputRows(cell, theme, { width: 24 }, { textLines: 1, tableRows: 1 });
+    expect(rows).toHaveLength(6);
+    expect(rows.filter(row => row.sourceLine !== undefined).map(row => row.sourceLine)).toEqual([0, 1, 2, 3]);
+    expect(rows.every(row => visibleWidth(row.text) === 24)).toBe(true);
+    expect(rows.map(row => row.text).join("\n")).not.toMatch(/python|code|▾|▸/u);
+    expect(rows[1]!.text.trimEnd()).toBe("    raw");
+    nb.dispose();
   });
   test("mixed HTML renders authoritative leaves in order exactly once, with table and chart ownership", () => {
     const table = (id: string, value: string) => `<marimo-ui-element object-id='${id}'><marimo-table data-data='[{&quot;value&quot;:&quot;${value}&quot;}]' data-total-rows='1'></marimo-table></marimo-ui-element>`;
@@ -177,6 +190,15 @@ describe("structured source output", () => {
       expect(rows.every(row => row.tableObjectId === id)).toBe(true);
       expect(result.parts.some(part => part.kind === "table" && part.tableObjectId === id && part.output === leaf)).toBe(true);
     }
+    for (const [index, part] of result.parts.entries()) {
+      expect(result.rows[part.row]?.part).toBe(index);
+      expect(result.rows[part.row]?.text).toBe("─".repeat(120));
+      const focused = detailRows(nb, theme, 0, { cell, width: 120, codeOpen: false, diff: false, section: false, imageRows: 0, partFocus: index });
+      expect(focused.parts).toEqual(result.parts);
+      expect(focused.rows[part.row]?.text).toBe("━".repeat(120));
+      expect(focused.rows.filter(row => row.part === index).length).toBeGreaterThan(1);
+    }
+    expect(result.rows.some(row => /^(?:error|printed|output|table|chart|widgets|code|markdown)$/u.test(row.text))).toBe(false);
     const chart = output.blocks![7]!.output;
     expect(result.rows.some(row => row.output === chart)).toBe(true);
     expect(result.parts.some(part => part.kind === "chart" && part.output === chart)).toBe(true);
@@ -192,7 +214,7 @@ describe("structured source output", () => {
     const result = detailRows(nb, theme, 0, { cell, width: 100, codeOpen: false, diff: false, section });
     const sourceRows = result.rows.filter(row => row.output?.codeBlocks && row.sourceLine !== undefined);
     expect(sourceRows).toHaveLength(source.split("\n").length);
-    expect(sourceRows.at(-1)?.text).toBe("DYNAMIC_LONGTAIL");
+    expect(sourceRows.at(-1)?.text.trimEnd()).toBe("  DYNAMIC_LONGTAIL");
     expect(result.rows.filter(row => row.text.includes("DYNAMIC_PROSE"))).toHaveLength(1);
     nb.dispose();
   });
@@ -202,7 +224,8 @@ describe("structured source output", () => {
     expect(output?.mermaid?.[0]).toBe(source);
     const rows = mermaidRows(source, theme, { blockId: "diagram", imageRows: 0, width: 80 });
     expect(rows[0]!.text).toContain("Mermaid:");
-    expect(rows.at(-1)!.text).toBe("LAST");
+    expect(rows.filter(row => row.sourceLine !== undefined).at(-1)!.text.trimEnd()).toBe("  LAST");
+    expect(rows.slice(1).every(row => visibleWidth(row.text) === 80)).toBe(true);
     expect(rows.filter(row => row.sourceLine !== undefined)).toHaveLength(45_002);
   });
   test("malformed props and active content never become diagram sources", () => {

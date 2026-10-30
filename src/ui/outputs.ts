@@ -4,7 +4,7 @@ import { Image, getCapabilities, visibleWidth, sliceByColumn, foregroundAnsi, ba
 import type { Cell } from "../core/notebook.js";
 import type { CellOutput, ConsoleLine } from "../core/output.js";
 import type { MermaidAppearance, MermaidRenderer } from "../core/mermaid.js";
-import { codeRows } from "./code.js";
+import { codePanelRows } from "./code.js";
 import type { FrameTheme } from "../frame.ts";
 import { liveGeometry } from "./live-charts.js";
 import type { Row, RowOptions } from "./rows.js";
@@ -99,7 +99,7 @@ export interface MermaidRowOptions extends RowOptions {
 /** Shared adapter for fences and mo.mermaid. Failed/unavailable images always retain every source line. */
 export function mermaidRows(source: string, theme: FrameTheme, opts: MermaidRowOptions): Row[] {
   const pad = opts.pad ?? "";
-  const sourceRows = () => codeRows(source.split("\t").map(clean).join("\t"), { ...opts, language: "mermaid" });
+  const sourceRows = () => codePanelRows(source.split("\t").map(clean).join("\t"), { ...opts, theme: opts.theme ?? theme, language: "mermaid" });
   let reason = "images unavailable in this terminal";
   if (getCapabilities().images && (opts.imageRows ?? IMAGE_ROWS) >= 2) {
     if (!opts.renderer) reason = "renderer unavailable";
@@ -148,7 +148,7 @@ export function outputRows(cell: Cell, theme: FrameTheme, opts: RowOptions, limi
     const options = { ...opts, blockId: `${opts.blockPrefix ?? cell.id}:mermaid:${index}` };
     return opts.diagramRows?.(source, options) ?? mermaidRows(source, theme, options);
   });
-  if (output?.codeBlocks) return output.codeBlocks.flatMap((block, index) => codeRows(block.source.split("\t").map(clean).join("\t"), { ...opts, language: block.language ? oneLine(block.language) : undefined, blockId: `${opts.blockPrefix ?? cell.id}:pre:${index}` }));
+  if (output?.codeBlocks) return output.codeBlocks.flatMap((block, index) => codePanelRows(block.source.split("\t").map(clean).join("\t"), { ...opts, theme: opts.theme ?? theme, language: block.language ? oneLine(block.language) : "text", header: !!block.language, blockId: `${opts.blockPrefix ?? cell.id}:pre:${index}` }));
   let chartNote: string | undefined;
   let whyStatic: string | undefined;
   if (output?.plotly) {

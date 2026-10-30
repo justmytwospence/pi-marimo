@@ -1,4 +1,4 @@
-import { visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import { visibleWidth } from "@earendil-works/pi-tui";
 import { describe, expect, test, vi } from "vitest";
 
 // Deliberately long entries exercise wrapping independently of registry copy edits.
@@ -13,11 +13,11 @@ vi.mock("../src/ui/keys.js", async (importOriginal) => {
   return { ...actual, GROUPS, COMMANDS };
 });
 
-import { Help, helpLines } from "../src/ui/help.js";
+import { Help, helpLines, formatHelpKey } from "../src/ui/help.js";
 import { COMMANDS, GROUPS } from "../src/ui/keys.js";
 
 const theme = { fg: (_: string, text: string) => text, bold: (text: string) => text };
-const textOf = (command: (typeof COMMANDS)[number]) => `${command.keys.join(" / ")} · ${command.label} — ${command.description}`;
+const textOf = (command: (typeof COMMANDS)[number]) => `${command.keys.map(formatHelpKey).join(" / ")} · ${command.label} — ${command.description}`;
 const enterSearch = (help: Help, query: string) => {
   expect(help.handleInput("/", 7)).toBe(true);
   expect(help.handleInput(query, 7)).toBe(true);
@@ -55,7 +55,7 @@ test.each([
   const help = new Help({ group: "Execution", query: "old", typing: true, scroll: 25 });
   help.open(mode);
   expect(help.state).toEqual({ group, query: "", typing: false, scroll: 0 });
-  expect(help.render(46, 12, theme)[1]).toBe(group);
+  expect(help.render(46, 12, theme)[1]).toContain(group);
 });
 
 test("snapshot restoration copies state rather than mutating the saved snapshot", () => {
@@ -88,8 +88,13 @@ test.each(["KEY8_12", "Charts action 12", "ending_8_12"])("search matches keys, 
   const help = new Help();
   enterSearch(help, query);
   const rows = collect(help, 46);
-  expect([...rows].join("\n")).toContain("All categories");
-  for (const line of wrapTextWithAnsi(textOf(COMMANDS.find((command) => command.id === "8-12")!), 46)) expect(rows.has(line)).toBe(true);
+  const text = [...rows].join("\n");
+  expect(text).toContain("Charts");
+  expect(text).toContain("1 match");
+  expect(text).toContain("key8_12");
+  expect(text).toContain("Ctrl+12");
+  expect(text).toContain("Charts action 12");
+  expect(text).toContain("ending_8_12.");
   expect([...rows].join("\n")).not.toContain("ending_0_0");
 });
 
@@ -120,7 +125,7 @@ test("Tab leaves search and visibly switches category even while typing", () => 
   help.handleInput("copy", 6);
   help.handleInput("\t", 6);
   expect(help.state).toMatchObject({ group: "Widgets", query: "", typing: false, scroll: 0 });
-  expect(help.render(46, 12, theme)[1]).toBe("Widgets");
+  expect(help.render(46, 12, theme)[1]).toContain("Widgets");
 });
 
 test("F1 closes help outside search but is not inserted into search", () => {
@@ -131,10 +136,13 @@ test("F1 closes help outside search but is not inserted into search", () => {
   expect(help.state.query).toBe("");
 });
 
-test("the view can choose two columns at total width100 with98 content columns", () => {
+test("rail uses actual content width and body height, never host width", () => {
   const help = new Help();
-  expect(help.render(98, 12, theme, 100).some(line => line.includes(" │ "))).toBe(true);
-  expect(help.render(98, 12, theme, 99).some(line => line.includes(" │ "))).toBe(false);
+  expect(help.render(89, 30, theme, 180).join("\n")).not.toContain("› Navigation");
+  expect(help.render(90, 12, theme).join("\n")).not.toContain("› Navigation");
+  expect(help.render(90, 13, theme).join("\n")).toContain("› Navigation");
+  help.open("chart");
+  expect(help.render(90, 13, theme).join("\n")).toContain("› Charts");
 });
 
 test("empty searches and no matches remain navigable without closing on unrelated keys", () => {
@@ -152,7 +160,7 @@ test("j/k, arrows, page keys, first/last and wheel clamp at the viewport ends", 
   const help = new Help();
   help.render(46, 12, theme);
   help.handleInput("\x1b[6~", 7);
-  // Page navigation uses the rendered content rectangle, excluding help chrome.
+  // A nine-row page is clamped to the seven remaining rows.
   expect(help.state.scroll).toBe(7);
   help.handleInput("\x1b[5~", 7);
   expect(help.state.scroll).toBe(0);
@@ -162,7 +170,7 @@ test("j/k, arrows, page keys, first/last and wheel clamp at the viewport ends", 
   expect(help.state.scroll).toBe(0);
   help.handleInput("G", 7);
   const last = help.state.scroll;
-  expect(last).toBeGreaterThan(7);
+  expect(last).toBe(7);
   help.wheel(10000);
   help.handleInput("j", 7);
   expect(help.state.scroll).toBe(last);
@@ -176,20 +184,20 @@ test("j/k, arrows, page keys, first/last and wheel clamp at the viewport ends", 
   expect(help.state.scroll).toBe(0);
 });
 
-describe.each([46, 80, 100, 120, 180])("complete help at width %i", (width) => {
+describe.each([24, 39, 40, 59, 60, 89, 90, 120, 180])("complete help at width %i", (width) => {
   test("every key and action is reachable without repeating long descriptions", () => {
     const help = new Help();
     const rows = [...collect(help, width)];
     for (const command of COMMANDS.filter((entry) => entry.group === "Navigation")) {
-      expect(rows.some((row) => row.includes(command.keys.join(" / ")))).toBe(true);
+      for (const key of command.keys) expect(rows.some(row => row.includes(formatHelpKey(key)))).toBe(true);
       expect(rows.some((row) => row.includes(command.label))).toBe(true);
     }
     expect(rows.join("\n")).not.toContain("Description 0_12:");
-    expect(rows.some((row) => row.includes(" │ "))).toBe(width >= 100);
+    expect(rows.some((row) => row.includes(" │ "))).toBe(false);
   });
 });
 
-test.each([0, 1, 2, 3, 4, 5, 12])("short height %i preserves the height bound and reachable final content", (height) => {
+test.each([0, 1, 6, 12, 30])("short height %i preserves the height bound and reachable final content", (height) => {
   const help = new Help();
   const rows = collect(help, 46, height);
   if (height) expect([...rows].join("\n")).toContain("Navigation action 12");
@@ -207,6 +215,43 @@ test("resize, new query and category changes clamp stale scroll offsets", () => 
   expect(help.state.scroll).toBe(0);
   help.render(46, 12, theme);
   expect(help.state.scroll).toBe(0);
+});
+
+test.each([24, 39, 40, 59, 60, 89, 90, 120, 180])("responsive chrome and body fit width %i at every height", width => {
+  for (const height of [0, 1, 6, 12, 30]) {
+    const help = new Help();
+    enterSearch(help, "Description");
+    const rows = help.render(width, height, theme, 180, "hidden/notebook.py");
+    expect(rows).toHaveLength(height);
+    for (const row of rows) expect(visibleWidth(row)).toBeLessThanOrEqual(width);
+    expect(rows.join("\n")).not.toContain("hidden/notebook.py");
+    if (height > 1) expect(rows.at(-1)).toContain(width >= 35 ? "Tab categories" : "/ search · Esc back");
+    expect(rows.filter(row => row.includes("Tab categories"))).toHaveLength(height > 1 && width >= 35 ? 1 : 0);
+  }
+});
+
+test("search groups multiple categories and keeps distinct descriptions discoverable", () => {
+  const help = new Help();
+  enterSearch(help, "Description");
+  const rows = [...collect(help, 120, 30)].join("\n");
+  for (const group of GROUPS) expect(rows).toContain(group);
+  expect(rows).toContain("ending_9_12.");
+});
+
+test("key column switches at 40 and 60 and never pairs unrelated actions", () => {
+  expect(new Help().render(39, 12, theme)[2]).toBe("key0_0 / Ctrl+0");
+  expect(new Help().render(40, 12, theme)[2]!.indexOf("Navigation action 0")).toBe(18);
+  expect(new Help().render(60, 12, theme)[2]!.indexOf("Navigation action 0")).toBe(24);
+});
+
+test("styles are recomputed after a theme change", () => {
+  const help = new Help();
+  help.render(90, 30, theme);
+  const changed = { fg: (color: string, value: string) => `\x1b[${color === "accent" ? 31 : 32}m${value}\x1b[0m`, bold: theme.bold };
+  const rows = help.render(90, 30, changed);
+  expect(rows.join("\n")).toContain("\x1b[31mkey0_0");
+  expect(rows.join("\n")).toContain("\x1b[31m› Navigation");
+  for (const row of rows) expect(visibleWidth(row)).toBeLessThanOrEqual(90);
 });
 
 test("ANSI styling obeys visible widths and compatibility help is registry-generated", () => {

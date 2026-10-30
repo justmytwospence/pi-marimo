@@ -15,16 +15,48 @@ const CONTEXT: Readonly<Record<string, string>> = {
   table: "Tables", widget: "Widgets", chart: "Charts",
 };
 
-function commandText(command: (typeof COMMANDS)[number]): string {
-  return `${command.modes.includes("message") ? "Message view: " : ""}${command.keys.join(" / ")} · ${command.label}${command.description === command.label ? "" : ` — ${command.description}`}`;
+/** Presentation only: canonical registry keys remain untouched for dispatch. */
+export function formatHelpKey(key: string): string {
+  const names: Record<string, string> = {
+    escape: "Esc", enter: "Enter", tab: "Tab", space: "Space", home: "Home", end: "End",
+    pageUp: "PageUp", pageDown: "PageDown", up: "↑", down: "↓", left: "←", right: "→",
+  };
+  return key.split("+").map((part, index, parts) => {
+    if (part === "ctrl") return "Ctrl";
+    if (part === "shift") return "Shift";
+    if (part === "alt") return "Alt";
+    return names[part] ?? (/^f\d+$/u.test(part) || (parts.length > 1 && index === parts.length - 1) ? part.toUpperCase() : part);
+  }).join("+");
 }
 
-function compactCommand(command: (typeof COMMANDS)[number], width: number): string[] {
-  const keys = command.keys.join(" / ");
-  const keyWidth = Math.min(Math.max(12, Math.floor(width * 0.38)), 24);
-  if (visibleWidth(keys) >= keyWidth) return [...wrapTextWithAnsi(keys, width), ...wrapTextWithAnsi(`  ${command.label}`, width)];
-  const prefix = keys + " ".repeat(keyWidth - visibleWidth(keys));
-  return wrapTextWithAnsi(command.label, Math.max(1, width - keyWidth)).map((line, index) => `${index ? " ".repeat(keyWidth) : prefix}${line}`);
+function displayKeys(command: (typeof COMMANDS)[number]): string {
+  return command.keys.map(formatHelpKey).join(" / ");
+}
+
+function commandText(command: (typeof COMMANDS)[number]): string {
+  return `${command.modes.includes("message") ? "Message view: " : ""}${displayKeys(command)} · ${command.label}${command.description === command.label ? "" : ` — ${command.description}`}`;
+}
+
+function commandRows(command: (typeof COMMANDS)[number], width: number, theme: FrameTheme, search: boolean): string[] {
+  const wrap = (text: string, room = width) => wrapTextWithAnsi(text, room);
+  const keys = displayKeys(command);
+  const label = `${command.modes.includes("message") ? "Message view: " : ""}${command.label}`;
+  const keyWidth = width >= 60 ? 22 : 16;
+  let rows: string[];
+  if (width < 40) rows = [
+    ...wrap(keys).map(line => theme.fg("accent", line)),
+    ...wrap(label),
+  ];
+  else {
+    const left = wrap(keys, keyWidth);
+    const right = wrap(label, width - keyWidth - 2);
+    rows = Array.from({ length: Math.max(left.length, right.length) }, (_, i) => {
+      const key = left[i] ?? "";
+      return `${theme.fg("accent", key)}${" ".repeat(keyWidth - visibleWidth(key) + 2)}${right[i] ?? ""}`;
+    });
+  }
+  if (search && command.description !== command.label) rows.push(...wrap(command.description).map(line => theme.fg("dim", line)));
+  return rows;
 }
 
 export class Help {
@@ -83,45 +115,55 @@ export class Help {
     return true;
   }
 
-  render(width: number, height: number, theme: FrameTheme, layoutWidth = width, where?: string): string[] {
+  render(width: number, height: number, theme: FrameTheme, _layoutWidth = width, _where?: string): string[] {
     width = Math.max(0, Math.floor(width));
     height = Math.max(0, Math.floor(height));
     if (!width || !height) return [];
-    const wrap = (text: string, room = width) => wrapTextWithAnsi(text, room);
+    const wrap = (text: string) => wrapTextWithAnsi(text, width);
     const query = this.state.query.toLocaleLowerCase();
-    const commands = COMMANDS.filter((command) => query
-      ? [command.keys.join(" "), command.label, command.description].some((text) => text.toLocaleLowerCase().includes(query))
+    const searching = this.state.typing || !!query;
+    const commands = COMMANDS.filter((command) => searching
+      ? [command.keys.join(" "), displayKeys(command), command.label, command.description].some((text) => text.toLocaleLowerCase().includes(query))
       : command.group === this.state.group);
-    const body: string[] = [];
-    if (query) for (const command of commands) body.push(...wrap(commandText(command)));
-    else if (layoutWidth < 100) for (const command of commands) body.push(...compactCommand(command, width));
-    else {
-      const column = Math.floor((width - 3) / 2);
-      for (let i = 0; i < commands.length; i += 2) {
-        const left = compactCommand(commands[i]!, column);
-        const right = commands[i + 1] ? compactCommand(commands[i + 1]!, column) : [];
-        for (let row = 0; row < Math.max(left.length, right.length); row++) {
-          const a = left[row] ?? "";
-          body.push(right[row] === undefined ? a : `${a}${" ".repeat(column - visibleWidth(a))} │ ${right[row]}`);
-        }
-      }
-    }
-    if (!body.length) body.push("No matching commands");
-
+    const groupIndex = GROUPS.findIndex(group => group === this.state.group);
     const heading = [
-      ...wrap(theme.bold(theme.fg("accent", "Notebook controls"))),
-      ...wrap(theme.bold(query ? "All categories" : this.state.group)),
-      ...wrap(this.state.typing || query ? `Search: ${this.state.query}${this.state.typing ? "_" : ""}` : "/ search · Tab categories"),
-      ...(where ? wrap(theme.fg("dim", where)) : []),
+      ...wrap(theme.bold(theme.fg("accent", "Keyboard shortcuts"))),
+      ...wrap(searching
+        ? `Search: ${this.state.query}${this.state.typing ? "_" : ""} · ${commands.length} ${commands.length === 1 ? "match" : "matches"}`
+        : `${this.state.group} · ${groupIndex + 1}/${GROUPS.length}`),
     ];
-    const hints = wrap(theme.fg("dim", "j/k scroll · Tab/⇧Tab categories · / search · Esc back · ? close"));
-    const chrome = Math.min(height - 1, heading.length + hints.length);
-    const top = heading.slice(0, Math.min(heading.length, chrome));
-    const bottom = hints.slice(0, chrome - top.length);
-    this.page = height - top.length - bottom.length;
+    // Reserve one body row first, then a single pinned footer; chrome yields on tiny screens.
+    const footerHeight = height > 1 ? 1 : 0;
+    const top = heading.slice(0, Math.max(0, height - footerHeight - 1));
+    this.page = height - top.length - footerHeight;
+    const rail = width >= 90 && this.page >= 10;
+    const listWidth = width - (rail ? 18 : 0);
+    const body: string[] = [];
+    for (const group of searching ? GROUPS : [this.state.group]) {
+      const entries = commands.filter(command => command.group === group);
+      if (!entries.length) continue;
+      if (searching) body.push(...wrapTextWithAnsi(group, listWidth).map(line => theme.bold(line)));
+      for (const command of entries) body.push(...commandRows(command, listWidth, theme, searching));
+    }
+    if (!body.length) body.push(...wrapTextWithAnsi("No matching commands", listWidth));
     this.maxScroll = Math.max(0, body.length - this.page);
     this.state.scroll = Math.max(0, Math.min(this.maxScroll, this.state.scroll));
-    return [...top, ...body.slice(this.state.scroll, this.state.scroll + this.page), ...bottom];
+    const visible = body.slice(this.state.scroll, this.state.scroll + this.page);
+    const railStart = Math.max(0, Math.min(groupIndex, GROUPS.length - this.page));
+    const rows = rail ? Array.from({ length: this.page }, (_, i) => {
+      const group = GROUPS[railStart + i];
+      const name = group ? `${group === this.state.group ? "› " : "  "}${group}` : "";
+      const styled = group === this.state.group ? theme.bold(theme.fg("accent", name)) : theme.fg("dim", name);
+      return `${styled}${" ".repeat(16 - visibleWidth(name))}  ${visible[i] ?? ""}`;
+    }) : Array.from({ length: this.page }, (_, i) => visible[i] ?? "");
+    const fullHint = "Tab categories · / search · Esc back";
+    const hint = visibleWidth(fullHint) <= width ? fullHint : ["/ search", "Esc back"].reduce((text, token) => {
+      const candidate = text ? `${text} · ${token}` : token;
+      return visibleWidth(candidate) <= width ? candidate : text;
+    }, "");
+    const range = ` · ${this.state.scroll + 1}–${Math.min(body.length, this.state.scroll + this.page)}/${body.length}`;
+    const footer = visibleWidth(hint + range) <= width ? hint + range : hint;
+    return [...top, ...rows, ...(footerHeight ? [theme.fg("dim", footer)] : [])];
   }
 
   private resetScroll(): void {

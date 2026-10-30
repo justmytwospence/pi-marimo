@@ -3,6 +3,7 @@ import type { Row, RowOptions } from "./rows.js";
 
 export interface CodeBlockState { offset: number }
 export interface CodeOptions extends RowOptions {
+  theme?: RowOptions["theme"] & { bg?: (color: string, text: string) => string };
   language?: string;
   blockId?: string;
   state?: CodeBlockState;
@@ -23,6 +24,31 @@ export function expandTabs(line: string, tabstop: number): string {
   }
   return result;
 }
+/** A rectangular source panel; the raw viewport keeps its logical line/offset contract. */
+export function codePanelRows(source: string, options: CodeOptions = {}): Row[] {
+  const width = Math.max(0, options.width ?? 80);
+  const inset = Math.min(2, Math.max(0, Math.floor((width - 1) / 2)));
+  const innerWidth = width - inset * 2;
+  const sourceRows = codeRows(source, { ...options, language: options.language ?? "text", width: innerWidth });
+  const id = options.blockId ?? "code";
+  const blank: Row = { text: "", blockId: id, code: true };
+  const header = options.header !== false ? sourceRows.shift() : undefined;
+  const rows = [...(header ? [header] : []), blank, ...sourceRows, blank];
+  const bg = options.theme?.bg?.bind(options.theme);
+  return rows.map(row => {
+    const content = row.text ? " ".repeat(inset) + row.text : "";
+    const clipped = sliceByColumn(content, 0, width, true);
+    const foreground = options.theme ? options.theme.fg(row.sourceLine === undefined ? "dim" : "toolOutput", clipped) : clipped;
+    // Theme.bg alone does not reopen its color after nested SGR resets. Apply it
+    // to each text run, leaving the original foreground/attribute sequences intact.
+    const padded = foreground + " ".repeat(Math.max(0, width - visibleWidth(foreground)));
+    const text = bg
+      ? padded.split(/(\x1b\[[0-9;:]*m)/u).map(run => run.startsWith("\x1b[") ? run : bg("toolPendingBg", run)).join("")
+      : padded;
+    return { ...row, text };
+  });
+}
+
 export function codeRows(source: string, options: CodeOptions = {}): Row[] {
   const id = options.blockId ?? "code";
   const sourceLines = source.split("\n");

@@ -1,7 +1,7 @@
 import { describe, expect, test } from "vitest";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { COMMANDS, GROUPS, commandFor, commandToken, footerTokens, type CommandMode } from "../src/ui/keys.js";
-import { helpLines, Help } from "../src/ui/help.js";
+import { helpLines, Help, formatHelpKey } from "../src/ui/help.js";
 
 const theme = { fg: (_: string, text: string) => text, bold: (text: string) => text };
 const modes: CommandMode[] = ["notebook", "variables", "packages", "table", "widget", "chart", "editor", "help", "message"];
@@ -83,7 +83,7 @@ test("every dispatched command and host shortcut is documented from the same ent
   for (const command of COMMANDS) {
     expect(lines, command.id).toContain(command.label);
     expect(lines, command.id).toContain(command.description);
-    for (const key of command.keys) expect(lines, command.id).toContain(key);
+    for (const key of command.keys) expect(lines, command.id).toContain(formatHelpKey(key));
   }
 });
 
@@ -110,9 +110,26 @@ for (const width of [46, 80, 100, 120, 180]) describe(`width ${width}`, () => {
       }
       // Wrapped prose need not preserve spaces at line boundaries.
       const compact = seen.join("").replace(/\s|│/gu, "");
-      expect(compact, command.id).toContain(command.keys[0]!.replace(/\s/gu, ""));
+      for (const key of command.keys) expect(compact, command.id).toContain(formatHelpKey(key).replace(/\s/gu, ""));
     }
   });
+});
+
+test.each([
+  ["ctrl+j", "Ctrl+J"], ["shift+tab", "Shift+Tab"], ["enter", "Enter"],
+  ["escape", "Esc"], ["up", "↑"], ["f8", "F8"], [":MarimoRun", ":MarimoRun"],
+])("help formats %s as %s without changing registry bindings", (key, expected) => {
+  expect(formatHelpKey(key)).toBe(expected);
+  const help = new Help({ group: "Navigation", query: expected, typing: false, scroll: 0 });
+  const seen: string[] = [];
+  for (let i = 0; i < 1000; i++) {
+    seen.push(...help.render(60, 12, theme));
+    const before = help.state.scroll;
+    help.wheel(1);
+    if (before === help.state.scroll) break;
+  }
+  expect(seen.join("\n")).not.toContain("No matching commands");
+  expect(seen.join("\n")).toContain(expected);
 });
 
 test("footer drops lowest priority first and never splits a token", () => {

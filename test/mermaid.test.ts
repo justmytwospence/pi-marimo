@@ -113,15 +113,15 @@ describe("Mermaid renderer", () => {
     const options = { blockId: "fence-2", renderer, width: 80, showSource: false };
     const rows = mermaidRows(source, theme, options);
     expect(rows[0]!.text).toContain("Mermaid: browser missing");
-    expect(rows.at(-1)!.text).toBe("LAST");
+    expect(rows.filter(row => row.sourceLine !== undefined).at(-1)!.text.trim()).toBe("LAST");
     expect(rows.filter(row => row.sourceLine !== undefined)).toHaveLength(10_002);
     request.mockReturnValue({ status: "rendering" });
-    expect(mermaidRows(source, theme, options).at(-1)!.text).toBe("LAST");
+    expect(mermaidRows(source, theme, options).filter(row => row.sourceLine !== undefined).at(-1)!.text.trim()).toBe("LAST");
     request.mockReturnValue({ status: "ready", png: "image" });
     const image = mermaidRows(source, theme, options);
     expect(image[0]).toMatchObject({ blockId: "fence-2", image: { index: 0, height: 2 } });
     expect(image[1]).toMatchObject({ image: { index: 1, height: 2 } });
-    expect(mermaidRows(source, theme, { ...options, showSource: true }).at(-1)!.text).toBe("LAST");
+    expect(mermaidRows(source, theme, { ...options, showSource: true }).filter(row => row.sourceLine !== undefined).at(-1)!.text.trim()).toBe("LAST");
     renderer.dispose();
   });
   test("oversize input is rejected without starting Chrome", () => {

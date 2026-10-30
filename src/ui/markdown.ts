@@ -1,7 +1,7 @@
 import MarkdownIt from "markdown-it";
 import { getMarkdownTheme } from "@earendil-works/pi-coding-agent";
 import { Markdown, getCellDimensions, sliceByColumn, stripTerminalSequences, visibleWidth, type MarkdownTheme } from "@earendil-works/pi-tui";
-import { codeRows } from "./code.js";
+import { codePanelRows } from "./code.js";
 import type { Row, RowOptions } from "./rows.js";
 
 export interface ExtractedCodeBlock {
@@ -100,8 +100,8 @@ export function markdownRows(text: string, options: RowOptions = {}): Row[] {
     const inner = { ...options, width: Math.max(1, width - prefixWidth), blockId: options.blockPrefix ? `${options.blockPrefix}:${block.id}` : block.id };
     const payload = block.content.endsWith("\n") ? block.content.slice(0, -1) : block.content;
     const body = block.language.toLowerCase() === "mermaid"
-      ? options.diagramRows?.(payload, inner) ?? [{ text: "Mermaid: diagram renderer unavailable", blockId: block.id }, ...codeRows(payload, { ...inner, language: "mermaid" })]
-      : codeRows(payload, { ...inner, language: block.language || "text" });
+      ? options.diagramRows?.(payload, inner) ?? [{ text: "Mermaid: diagram renderer unavailable", blockId: block.id }, ...codePanelRows(payload, { ...inner, language: "mermaid" })]
+      : codePanelRows(payload, { ...inner, language: block.language || "text" });
     for (let i = 0; i < body.length; i++) rows.push({ ...body[i]!, text: (i ? continuation : before) + sliceByColumn(body[i]!.text, 0, inner.width, true) });
   }
   const bytes = Buffer.byteLength(cacheKey) + rows.reduce((n, row) => n + Buffer.byteLength(row.text), 0);
