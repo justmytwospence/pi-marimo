@@ -159,10 +159,17 @@ export function detailRows(nb: NotebookState, theme: FrameTheme, now: number, o:
       for (const text of diffLines(change.before, cell.code, { width, offset })) p.add(text, { code: true, blockId });
     } else {
       const bg = (theme as PaneTheme).bg?.bind(theme);
-      for (const r of codeRows(cell.code, { ...sub, blockId, language: "python", folded: !open })) {
-        const text = bg ? bg("toolPendingBg", r.text) : r.text;
+      const inset = 2;
+      const fill = (text: string) => bg ? bg("toolPendingBg", text + " ".repeat(Math.max(0, width - visibleWidth(text)))) : text;
+      const source = codeRows(cell.code, { ...sub, width: Math.max(1, width - inset * 2), blockId, language: "python", folded: !open });
+      const header = fill(source[0]!.text);
+      p.add(header, { ...source[0], text: header });
+      p.add(fill(""), { code: true, blockId });
+      for (const r of source.slice(1)) {
+        const text = fill(`${" ".repeat(inset)}${r.text}`);
         p.add(text, { ...r, text });
       }
+      p.add(fill(""), { code: true, blockId });
     }
   };
 

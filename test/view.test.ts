@@ -63,7 +63,7 @@ test("^U/^D scroll the detail by half a page and the page keys by a whole one; j
     expect(text).toContain("│ line 9");
     expect(text).toMatch(/▌  long/u);
     view.handleInput("\x1b[6~");
-    expect(view.render(100).join("\n")).toContain("│ x = 1");
+    expect(view.render(100).join("\n")).toContain("│   x = 1");
     view.handleInput("\x15");
     view.handleInput("\x1b[5~");
     text = view.render(100).join("\n");
@@ -297,8 +297,8 @@ test("STEP2 expanded detail retains all logical source lines and trailing whites
   const rows = detailRows(f.notebook, theme, 0, { cell: f.notebook.cells.get("a")!, width: 80, codeOpen: true, section: false, diff: false, lineNumbers: true, tabstop: 8 }).rows.filter(r => r.sourceLine !== undefined);
   expect(rows).toHaveLength(10004);
   expect(rows.at(-3)?.text).toContain("value_10001");
-  expect(rows.at(-2)?.text).toBe("10003   ");
-  expect(rows.at(-1)?.text).toBe("10004 ");
+  expect(rows.at(-2)?.text).toBe("  10003   ");
+  expect(rows.at(-1)?.text).toBe("  10004 ");
 });
 
 test("STEP2 H/L/0 offsets and session line numbers survive view transfers", () => {
@@ -392,8 +392,8 @@ test("j/k move the cursor between cells; the detail shows the cell's output, fol
     expect(first).toContain("│ value & more");
     // Folded: a short preview retains both source lines.
     expect(first).toContain("│ ▸ python");
-    expect(first).toContain("│ print('hi')");
-    expect(first).toContain("│ x = 1");
+    expect(first).toContain("│   print('hi')");
+    expect(first).toContain("│   x = 1");
     expect(v.render(100).slice(3, -3).join("\n")).toMatch(/│ code\s/u);
     v.handleInput("j");
     expect(screen(v)).toMatch(/▌  second/u);
@@ -402,10 +402,10 @@ test("j/k move the cursor between cells; the detail shows the cell's output, fol
     v.handleInput("B");
     const open = screen(v);
     expect(open).toMatch(/▌  first/u);
-    expect(open).toContain("│ x = 1");
+    expect(open).toContain("│   x = 1");
     expect(open).toContain("│ ▾ python");
     v.handleInput("B");
-    expect(screen(v)).toContain("│ x = 1");
+    expect(screen(v)).toContain("│   x = 1");
     expect(screen(v)).toContain("│ ▸ python");
   } finally { v.dispose(); }
 });
@@ -776,7 +776,7 @@ test("the mouse: the wheel scrolls, a click selects, and a double click edits in
     expect(v.handleMouse(ev("press", 7))).toEqual({ handled: true, render: false });
     v.handleMouse(ev("click", 7));
     expect(screen(v)).toMatch(/▌  cell-7/u);
-    expect(screen(v)).toContain("│ x = 1");
+    expect(screen(v)).toContain("│   x = 1");
     // Outside the rows, and moves, are left alone before the editor owns input.
     expect(v.handleMouse(ev("click", 1))).toBeUndefined();
     expect(v.handleMouse(ev("move", 7, { button: "none" }))).toBeUndefined();
@@ -1174,7 +1174,7 @@ test("the detail of a failed cell shows its error, traceback and source", async 
     expect(text).toMatch(/▌ {2}✗ model +\[KeyError\]/u);
     expect(text).toContain("KeyError: 'revenue'");
     expect(text).toContain("Traceback (most recent call last)");
-    expect(text).toContain("│ model = boom(daily)");
+    expect(text).toContain("│   model = boom(daily)");
     expect(v.render(100).slice(3, -3).join("\n")).toMatch(/│ error\s[\s\S]*│ code\s/u);
   } finally { v.dispose(); }
 });
@@ -1255,7 +1255,7 @@ test("a view started from a state shows the same cell and code", () => {
   try {
     const text = screen(v);
     expect(text).toContain("▌  cell-10");
-    expect(text).toContain("│ x = 10");
+    expect(text).toContain("│   x = 10");
   } finally { v.dispose(); }
 });
 
@@ -1475,8 +1475,8 @@ test("Enter edits native Markdown text and saves its exact body with the origina
   } finally { v.dispose(); fake.editors.dispose(); }
 });
 
-test("code has a background block when the theme has one", () => {
-  const f = nbWith([{ id: "a", code: "x = 1\ny = 2" }]);
+test("code has a full-width continuous background block when the theme has one", () => {
+  const f = nbWith([{ id: "a", code: "x = 1\n\ny = 2" }]);
   const bgTheme = { ...theme, bg: (c: string, t: string) => `<${c}>${t}</${c}>` };
   const v = new NotebookView(tui as any, bgTheme as any, notebookKey(f), { followed: () => [f], interrupt: async () => {}, openInBrowser: () => {} }, () => {});
   try {
@@ -1485,6 +1485,18 @@ test("code has a background block when the theme has one", () => {
     const text = screen(v);
     expect(text).toContain("<toolPendingBg>");
     expect(text).not.toContain("│ y = 2");
+    const source = (v as any).lastDetail.filter((row: any) => row.sourceLine !== undefined);
+    expect(source).toHaveLength(3);
+    const background = (row: { text: string }) => row.text.replace(/<\/?toolPendingBg>/gu, "");
+    const blockWidth = visibleWidth(background((v as any).lastDetail.find((row: any) => row.blockId === "a:source")));
+    for (const row of source) {
+      expect(row.text).toMatch(/^<toolPendingBg>[\s\S]*<\/toolPendingBg>$/u);
+      expect(visibleWidth(background(row))).toBe(blockWidth);
+      expect(background(row).startsWith("  ")).toBe(true);
+    }
+    const detail = (v as any).lastDetail;
+    expect(background(detail[detail.indexOf(source[0]) - 1])).toBe(" ".repeat(blockWidth));
+    expect(background(detail[detail.indexOf(source.at(-1)) + 1])).toBe(" ".repeat(blockWidth));
   } finally { v.dispose(); }
 });
 
@@ -1549,7 +1561,7 @@ test("focusing the code does not move it: only the header carries the bar", () =
     const column = () => { const l = v.render(100).find((x) => x.includes("y = 2"))!; return l.indexOf("y = 2"); };
     const before = column();
     v.handleInput("n");
-    expect(v.render(100).join("\n")).toContain("<toolPendingBg>y = 2</toolPendingBg>");
+    expect(v.render(100).join("\n")).toContain("<toolPendingBg>  y = 2");
     expect((v as any).lastParts[(v as any).part]?.kind).toBe("code");
     expect(v.render(100).join("\n")).not.toContain("<toolPendingBg>▌");
     expect(column()).toBe(before);
@@ -1581,13 +1593,13 @@ test("code is open by default; B folds a cell's code and opens it again", () => 
   const f = nbWith([{ id: "a", code: "x = 1\ny = 2" }]);
   const v = make(f);
   try {
-    expect(screen(v)).toContain("│ y = 2");
+    expect(screen(v)).toContain("│   y = 2");
     v.handleInput("B");
     expect(screen(v)).toContain("▸ python");
-    expect(screen(v)).toContain("│ x = 1");
-    expect(screen(v)).toContain("│ y = 2");
+    expect(screen(v)).toContain("│   x = 1");
+    expect(screen(v)).toContain("│   y = 2");
     v.handleInput("B");
-    expect(screen(v)).toContain("│ y = 2");
+    expect(screen(v)).toContain("│   y = 2");
     expect(screen(v)).toContain("▾ python");
   } finally { v.dispose(); }
 });
