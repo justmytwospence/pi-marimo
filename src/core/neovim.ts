@@ -3,6 +3,8 @@ import { attach, type NeovimClient } from "neovim";
 import { decodeKittyPrintable, isKeyRelease, parseKey } from "@earendil-works/pi-tui";
 import { normalizeViewPreferences, type EditorOptions } from "../ui/settings.ts";
 
+export interface BufferSnapshot { text: string; changedtick: number }
+export interface SavedReconciliation extends BufferSnapshot { applied: boolean }
 export interface WriteReceipt { canonicalCode: string; requestId: string }
 export interface LeaveNotice { dying: number; exiting: number; modified: boolean; text: string }
 export interface NeovimExit { deliberate: boolean; text: string; code: number | null; signal: string | null; notice?: LeaveNotice }
@@ -10,8 +12,8 @@ export interface NeovimOpenOptions {
   text: string; filetype: "python" | "markdown"; command?: string; options?: Partial<EditorOptions>;
   width?: number; height?: number; lineNumbers?: boolean;
   highlights?: Record<string, Record<string, string | number | boolean>>;
-  onRedraw?: (events: unknown[][]) => void; onDraft?: (text: string) => void;
-  onWrite: (text: string, base: string) => Promise<WriteReceipt>;
+  onRedraw?: (events: unknown[][]) => void; onDraft?: (text: string, changedtick: number) => void;
+  onWrite: (text: string, base: string, changedtick: number) => Promise<WriteReceipt>;
   onRun?: () => void | Promise<void>; onRevert?: () => void | Promise<void>; onClose?: () => void | Promise<void>;
   onExit?: (exit: NeovimExit) => void;
 }
@@ -67,21 +69,36 @@ api.nvim_buf_set_lines(b,0,-1,true,lines(cfg.text))
 vim.bo[b].modified = false
 local base = cfg.text
 local latest = cfg.text
+local function snapshot()
+  return {text=text(), changedtick=api.nvim_buf_get_changedtick(b)}
+end
+_G.marimo_snapshot = snapshot
+local function reconcile(expected, canonical)
+  local current = snapshot()
+  local applied = current.text == expected.text and current.changedtick == expected.changedtick
+  base = canonical
+  if applied and current.text ~= canonical then
+    api.nvim_buf_set_lines(b,0,-1,true,lines(canonical))
+  end
+  local result = snapshot()
+  vim.bo[b].modified = result.text ~= base
+  result.applied = applied
+  return result
+end
+_G.marimo_reconcile = reconcile
 _G.marimo_replace = function(s, newbase)
   api.nvim_buf_set_lines(b,0,-1,true,lines(s))
-  if newbase then base = s; vim.bo[b].modified = false end
+  if newbase then base = s end
+  vim.bo[b].modified = text() ~= base
 end
 api.nvim_create_autocmd('BufWriteCmd', {buffer=b, callback=function(ev)
   if ev.match ~= api.nvim_buf_get_name(b) then error('Alternate-path writes are not supported') end
-  local before = text()
-  local ok, receipt = pcall(vim.rpcrequest, channel, 'marimo_write', before, base)
+  local before = snapshot()
+  local ok, receipt = pcall(vim.rpcrequest, channel, 'marimo_write', before.text, base, before.changedtick)
   if not ok then error(receipt) end
   if not receipt.ok then error(receipt.error) end
-  base = receipt.canonicalCode
-  if text() == before then
-    if before ~= base then api.nvim_buf_set_lines(b,0,-1,true,lines(base)) end
-    vim.bo[b].modified = false
-  end
+  local result = reconcile(before, receipt.canonicalCode)
+  vim.rpcnotify(channel, 'marimo_draft', result.text, result.changedtick)
 end})
 for _,name in ipairs({'Run','Revert','Close'}) do
   api.nvim_create_user_command('Marimo'..name, function() vim.rpcnotify(channel, 'marimo_action', name) end, {})
@@ -93,7 +110,7 @@ api.nvim_buf_attach(b, false, {on_lines=function()
   -- Fatal teardown can empty/unload buffers: it is not a user edit.
   if vim.v.dying == 0 then
     latest = text()
-    vim.rpcnotify(channel, 'marimo_draft', latest)
+    vim.rpcnotify(channel, 'marimo_draft', latest, api.nvim_buf_get_changedtick(b))
   end
 end})
 `;
@@ -126,7 +143,7 @@ export class NeovimSession {
     this.client = attach({ proc: this.proc, options: { logger: { info: noop, warn: noop, error: noop, debug: noop, level: "silent" } } });
     this.client.on("notification", (name: string, args: any[]) => {
       if (name === "redraw") this.config.onRedraw?.(args);
-      if (name === "marimo_draft") { this.latest = args[0]; this.config.onDraft?.(this.latest); }
+      if (name === "marimo_draft") { this.latest = args[0]; this.config.onDraft?.(this.latest, args[1]); }
       if (name === "marimo_leave") { this.notice = args[0]; this.latest = this.notice!.text; }
       if (name === "marimo_action") {
         const callback = args[0] === "Run" ? this.config.onRun : args[0] === "Revert" ? this.config.onRevert : this.config.onClose;
@@ -137,7 +154,7 @@ export class NeovimSession {
       if (name !== "marimo_write") { response.send("Unsupported request", true); return; }
       this.saving = true;
       // Never call the Neovim client here: Lua is blocked inside rpcrequest.
-      void Promise.resolve().then(() => this.config.onWrite(args[0], args[1])).then(receipt => {
+      void Promise.resolve().then(() => this.config.onWrite(args[0], args[1], args[2])).then(receipt => {
         this.saving = false; response.send({ ok: true, ...receipt });
       }, error => { this.saving = false; response.send({ ok: false, error: String(error instanceof Error ? error.message : error) }); });
     });
@@ -175,7 +192,12 @@ export class NeovimSession {
   async paste(text: string): Promise<void> { this.assertNotSaving(); await this.client.request("nvim_paste", [text, false, -1]); }
   async resize(width: number, height: number): Promise<void> { this.assertNotSaving(); if (width >= 12 && height >= 4) await this.client.uiTryResize(width, height); }
   async setLineNumbers(value: boolean): Promise<void> { this.assertNotSaving(); await this.client.lua("vim.wo.number = ...", [value]); }
-  async getText(): Promise<string> { this.assertNotSaving(); return await this.client.lua("return table.concat(vim.api.nvim_buf_get_lines(0,0,-1,true), '\\n')") as string; }
+  async getText(): Promise<string> { this.assertNotSaving(); return (await this.snapshotBuffer()).text; }
+  async snapshotBuffer(): Promise<BufferSnapshot> { this.assertNotSaving(); return await this.client.lua("return _G.marimo_snapshot()") as BufferSnapshot; }
+  async reconcileSaved(expected: BufferSnapshot, canonicalText: string): Promise<SavedReconciliation> {
+    this.assertNotSaving();
+    return await this.client.lua("return _G.marimo_reconcile(...)", [expected, canonicalText] as any) as SavedReconciliation;
+  }
   async replaceText(text: string, updateBase = false): Promise<void> { this.assertNotSaving(); await this.client.lua("_G.marimo_replace(...)", [text, updateBase]); }
   async focus(focused: boolean): Promise<void> { this.assertNotSaving(); await this.client.command(`doautocmd <nomodeline> ${focused ? "FocusGained" : "FocusLost"}`); }
   dispose(): void { if (this.disposed) return; this.disposed = true; this.proc?.kill(); }

@@ -86,16 +86,23 @@ export class CellConsole {
       // Buffer text only: no OSC/DCS, hyperlinks, titles or clipboard bytes escape.
       const text = line.translateToString(true).replace(/[\x00-\x1f\x7f]/gu, "");
       const styles: NonNullable<ConsoleLine["styles"]> = [];
+      const cells: NonNullable<ConsoleLine["cells"]> = [];
       for (let column = 0; column < line.length; column++) {
         const cell = line.getCell(column);
-        if (!cell || !cell.getChars()) continue;
-        if (cell.isBold() || cell.isItalic() || cell.isUnderline() || cell.isFgDefault() === false || cell.isBgDefault() === false) {
-          styles.push({ column, width: cell.getWidth(), bold: !!cell.isBold(), italic: !!cell.isItalic(), underline: !!cell.isUnderline(), fg: cell.getFgColor(), bg: cell.getBgColor(), fgMode: cell.getFgColorMode(), bgMode: cell.getBgColorMode() });
+        // Coordinates stay in terminal columns, not UTF-16 offsets: a wide
+        // glyph owns its continuation column, and combining marks share a cell.
+        if (!cell || !cell.getChars() || cell.getWidth() === 0) continue;
+        cells.push({ column, width: cell.getWidth(), text: cell.getChars() });
+        const inverse = !!cell.isInverse();
+        const fgDefault = cell.isFgDefault();
+        const bgDefault = cell.isBgDefault();
+        if (cell.isBold() || cell.isItalic() || cell.isUnderline() || inverse || !fgDefault || !bgDefault) {
+          styles.push({ column, width: cell.getWidth(), bold: !!cell.isBold(), italic: !!cell.isItalic(), underline: !!cell.isUnderline(), inverse, fgDefault, bgDefault, fg: cell.getFgColor(), bg: cell.getBgColor(), fgMode: cell.getFgColorMode(), bgMode: cell.getBgColorMode() });
         }
       }
       const previous = screen.lines[i]?.text === text ? screen.lines[i] : screen.lines.find(line => line.text === text);
       const severity = previous?.severity ?? consoleSeverity(stream, text, screen.level);
-      lines.push({ stream, text, severity, ...(styles.length ? { styles } : {}) });
+      lines.push({ stream, text, severity, cells, ...(styles.length ? { styles } : {}) });
     }
     while (lines.at(-1)?.text === "") lines.pop();
     return lines;

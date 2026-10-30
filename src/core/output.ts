@@ -1,7 +1,9 @@
 // What a cell printed, kept compact for the notebook view (never for the agent's snapshot): the
 // last output as text (HTML stripped, images named), its table's first page and its widgets, and
 // the current terminal console display.
-import { progressFromHtml, type ProgressTask } from "./progress.js";
+import { serializeOuter } from "parse5";
+import type { OutputNode } from "./html.js";
+import { progressFromNode, type ProgressTask } from "./progress.js";
 import { componentProps, outputElements, parseOutputFragment, textContent } from "./html.js";
 
 export type OutputKind = "text" | "table" | "image" | "chart" | "widgets" | "other";
@@ -64,6 +66,8 @@ export interface Widget {
 export interface CellOutput {
   kind: OutputKind;
   text: string;
+  /** Authoritative document-order display; scalar fields below are compatibility projections. */
+  blocks?: Array<{ id: string; output: OutputLeaf }>;
   progress?: ProgressTask[];
   severity?: "error" | "warning";
   /** Complete sources, in document order; never subject to summary limits. */
@@ -81,11 +85,15 @@ export interface CellOutput {
   widgets?: Widget[];
 }
 
+export type OutputLeaf = Omit<CellOutput, "blocks">;
+
 export interface ConsoleLine {
   stream: "stdout" | "stderr";
   text: string;
+  /** xterm column positions, including its configured Unicode width policy. */
+  cells?: Array<{ column: number; width: number; text: string }>;
   severity?: "output" | "error" | "warning" | "stderr" | "progress";
-  styles?: Array<{ column: number; width: number; bold: boolean; italic: boolean; underline: boolean; fg: number; bg: number; fgMode: number; bgMode: number }>;
+  styles?: Array<{ column: number; width: number; bold: boolean; italic: boolean; underline: boolean; inverse: boolean; fgDefault: boolean; bgDefault: boolean; fg: number; bg: number; fgMode: number; bgMode: number }>;
 }
 
 const MAX_TEXT = 8_000;
@@ -370,6 +378,77 @@ export function parseWidgets(html: string): Widget[] {
 const rowCount = (n: number | "many" | undefined): string =>
   n === undefined ? "[table]" : n === "many" ? "[table, many rows]" : `[table, ${n} row${n === 1 ? "" : "s"}]`;
 
+function orderedHtml(html: string): CellOutput | undefined {
+  const blocks: NonNullable<CellOutput["blocks"]> = [];
+  let residual = "";
+  const flush = () => {
+    const text = residual.replace(/\n{3,}/gu, "\n\n").trim();
+    if (text) blocks.push({ id: `html:text:${blocks.length}`, output: { kind: "text", text: clip(text) } });
+    residual = "";
+  };
+  const visit = (node: OutputNode, path: string, objectId?: string) => {
+    if (node.nodeName === "#text" && "value" in node) { residual += node.value; return; }
+    if (!("tagName" in node)) {
+      if ("childNodes" in node) node.childNodes.forEach((child, i) => visit(child, `${path}.${i}`, objectId));
+      return;
+    }
+    const tag = node.tagName;
+    if (["script", "style", "template"].includes(tag)) return;
+    const id = node.attrs.find(a => a.name === "object-id")?.value ?? objectId;
+    const props = componentProps(node);
+    const markup = () => serializeOuter(node).replace(/="([^"]*)"/gu, (_, value: string) => `="${value.replace(/>/gu, "&gt;").replace(/</gu, "&lt;")}"`);
+    let leaf: OutputLeaf | undefined;
+    if (tag === "marimo-mermaid" && typeof props.diagram === "string") leaf = { kind: "chart", text: "[Mermaid]", mermaid: [props.diagram] };
+    else if (tag === "pre") {
+      const code = [...outputElements(node)].find(child => child.tagName === "code");
+      const language = /(?:^|\s)language-([^\s]+)/u.exec(code?.attrs.find(a => a.name === "class")?.value ?? "")?.[1];
+      leaf = { kind: "text", text: "", codeBlocks: [{ source: textContent(code ?? node), ...(language ? { language } : {}) }] };
+    } else if (tag === "marimo-progress" || tag === "progress" || (tag === "table" && node.attrs.some(a => a.name === "class" && a.value.split(/\s/u).includes("pymc-progress-table")))) {
+      const progress = progressFromNode(node);
+      if (progress.length) leaf = { kind: "text", text: "", progress };
+    } else if (tag === "marimo-table") {
+      const parsed = marimoTable(markup());
+      if (parsed) leaf = { kind: "table", text: rowCount(parsed.totalRows), ...(parsed.table ? { table: { ...parsed.table, ...(id ? { objectId: id } : {}) } } : {}) };
+    } else if (tag === "table") {
+      const table = htmlTable(markup());
+      if (table) leaf = { kind: "table", text: rowCount(table.rows.length), table };
+    } else if (tag === "marimo-ui-element") {
+      const widgets = parseWidgets(markup());
+      if (widgets.length) leaf = { kind: "widgets", text: "", widgets };
+    } else if (tag === "img") {
+      const image = pngOf(node.attrs.find(a => a.name === "src")?.value ?? "");
+      leaf = { kind: "image", text: "[image]", ...(image ? { image } : {}) };
+    } else if (tag === "marimo-vega") {
+      const vega = vegaOf(props.spec);
+      if (vega) leaf = { kind: "chart", text: "[chart vega-lite]", vega };
+    } else if (tag === "marimo-plotly" || tag === "iframe") {
+      const plotly = plotlyFrom(markup());
+      if (plotly) leaf = { kind: "chart", text: "[chart plotly]", plotly };
+    }
+    if (!leaf && ["marimo-plotly", "marimo-vega", "iframe", "svg", "canvas"].includes(tag)) leaf = { kind: "chart", text: "[interactive output: o opens the notebook]" };
+    if (leaf) {
+      if (leaf.progress) leaf.progress = leaf.progress.map(task => ({ ...task, id: blocks.some(block => block.output.progress?.some(previous => previous.id === task.id)) ? `${path}:${task.id}` : task.id }));
+      flush(); blocks.push({ id: `html:${path}:${tag}:${id ?? ""}`, output: leaf }); return;
+    }
+    const boundary = /^(?:p|div|li|h[1-6]|br|ul|ol|section|blockquote)$/u.test(tag);
+    if (boundary) residual += "\n";
+    node.childNodes.forEach((child, i) => visit(child, `${path}.${i}`, id));
+    if (boundary) residual += "\n";
+  };
+  visit(parseOutputFragment(html), "0"); flush();
+  if (!blocks.length) return undefined;
+  const result: CellOutput = { ...(blocks.find(block => block.output.kind === "text" && block.output.text)?.output ?? blocks[0]!.output), blocks };
+  for (const key of ["table", "image", "vega", "plotly"] as const) {
+    const leaf = blocks.find(b => b.output[key] !== undefined)?.output;
+    if (leaf) Object.assign(result, { [key]: leaf[key] });
+  }
+  for (const key of ["widgets", "progress", "codeBlocks", "mermaid"] as const) {
+    const values = blocks.flatMap<unknown>(b => b.output[key] ?? []);
+    if (values.length) Object.assign(result, { [key]: values });
+  }
+  return result;
+}
+
 /** A cell-op `output` as something to show, or undefined for an empty output (or an error: see Cell.error). */
 export function summarizeOutput(raw: unknown): CellOutput | undefined {
   const output = record(raw);
@@ -397,44 +476,7 @@ export function summarizeOutput(raw: unknown): CellOutput | undefined {
   // mo.md arrives as text/markdown whose data is already HTML.
   if (mime === "text/markdown" && typeof data === "string") return summarizeOutput({ ...output, mimetype: "text/html" });
   if (mime === "text/html" && typeof data === "string") {
-    const elements = [...outputElements(parseOutputFragment(data))];
-    const mermaid = elements.filter((node) => node.tagName === "marimo-mermaid")
-      .map((node) => componentProps(node).diagram).filter((source): source is string => typeof source === "string");
-    if (mermaid.length) return { kind: "chart", text: "[Mermaid]", mermaid };
-    const codeBlocks = elements.filter((node) => node.tagName === "pre").map((node) => {
-      const code = [...outputElements(node)].find((child) => child.tagName === "code");
-      const classes = code?.attrs.find((attr) => attr.name === "class")?.value ?? "";
-      const language = /(?:^|\s)language-([^\s]+)/u.exec(classes)?.[1];
-      return { source: textContent(code ?? node), ...(language ? { language } : {}) };
-    });
-    if (codeBlocks.length) return { kind: "text", text: clip(htmlToText(data)), codeBlocks };
-    const progress = progressFromHtml(data);
-    if (progress.length) return { kind: "text", text: "", progress };
-    const widgets = parseWidgets(data);
-    const extra = widgets.length ? { widgets } : {};
-    const marimo = marimoTable(data);
-    if (marimo) return { kind: "table", text: rowCount(marimo.totalRows), ...(marimo.table ? { table: marimo.table } : {}), ...extra };
-    // matplotlib and PIL figures arrive as an <img> with a PNG data URL.
-    const img = /<img\b[^>]*?\bsrc=["']?(data:image\/png;base64,[A-Za-z0-9+/=\s]+)/iu.exec(data);
-    const embedded = img ? pngOf(img[1]!) : undefined;
-    // mo.ui.altair_chart: the spec sits in the element's data-spec attribute.
-    const spec = /<marimo-vega\b[^>]*?\bdata-spec=(?:'([^']*)'|"([^"]*)")/iu.exec(data);
-    const vega = spec ? vegaOf(decode(spec[1] ?? spec[2] ?? "")) : undefined;
-    if (vega) return { kind: "chart", text: "[chart vega-lite]", vega, ...extra };
-    const plotly = plotlyFrom(data);
-    if (plotly) return { kind: "chart", text: "[chart plotly]", plotly, ...extra };
-    const text = htmlToText(data);
-    if (embedded && !text) return { kind: "image", text: "[image png]", image: embedded, ...extra };
-    // A table with little around it (a pandas frame, a markdown table) is drawn as one.
-    const table = htmlTable(data);
-    if (table) {
-      const around = htmlToText(data.replace(/<table\b[\s\S]*?<\/table>/iu, ""));
-      if (around.length <= 80) return { kind: "table", text: rowCount(table.rows.length), table, ...extra };
-    }
-    if (text) return { kind: "text", text: clip(text), ...extra };
-    if (widgets.length) return { kind: "widgets", text: "", widgets };
-    if (/<(?:img|svg|iframe|canvas|marimo-[a-z-]+)\b/iu.test(data)) return { kind: "chart", text: "[interactive output: o opens the notebook]" };
-    return undefined;
+    return orderedHtml(data);
   }
   if (typeof data === "string") {
     const severity = /^(error|critical|fatal)$/iu.test(String(output.level ?? "")) ? "error" : /\b\w*Warning:|\bWARNING\b/u.test(data) || output.level === "warning" ? "warning" : undefined;

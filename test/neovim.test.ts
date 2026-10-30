@@ -35,19 +35,36 @@ describe("Neovim protocol boundaries", () => {
     vi.resetModules(); vi.doMock("node:child_process", () => ({ spawn })); vi.doMock("neovim", () => ({ attach }));
     try {
       const { NeovimSession: FakeSession } = await import("../src/core/neovim.ts");
-      const drafts: string[] = [], exits: any[] = [];
-      const s = await FakeSession.open({ text: "base", filetype: "python", onDraft: t => drafts.push(t), onExit: e => exits.push(e), onWrite: async t => {
-        await expect(s.getText()).rejects.toThrow("synchronous write"); return { canonicalCode: t, requestId: "receipt" };
+      const drafts: { text: string; changedtick: number }[] = [], exits: any[] = [];
+      const s = await FakeSession.open({ text: "base", filetype: "python", onDraft: (text, changedtick) => drafts.push({ text, changedtick }), onExit: e => exits.push(e), onWrite: async (t, base, changedtick) => {
+        expect([t, base, changedtick]).toEqual(["draft", "base", 7]);
+        const calls = client.lua.mock.calls.length;
+        await expect(s.getText()).rejects.toThrow("synchronous write");
+        await expect(s.snapshotBuffer()).rejects.toThrow("synchronous write");
+        await expect(s.reconcileSaved({ text: t, changedtick: 7 }, "canonical")).rejects.toThrow("synchronous write");
+        expect(client.lua).toHaveBeenCalledTimes(calls);
+        return { canonicalCode: t, requestId: "receipt" };
       } });
       expect(spawn).toHaveBeenCalledWith("nvim", ["--embed", "--clean", "-n", "-i", "NONE"], { shell: false, stdio: ["pipe", "pipe", "pipe"] });
       expect(attach.mock.calls[0]?.[0].options.logger.level).toBe("silent");
       expect(client.uiAttach).toHaveBeenCalledWith(80, 12, expect.objectContaining({ ext_linegrid: true, ext_multigrid: false, ext_cmdline: false, ext_popupmenu: false }));
       await s.input("\x1b[200~literal <"); await s.input("界\x1b[201~");
       expect(client.request).toHaveBeenCalledWith("nvim_paste", ["literal <界", false, -1]);
-      const send = vi.fn(); client.emit("request", "marimo_write", ["draft", "base"], { send });
+      const snapshot = { text: "draft", changedtick: 7 };
+      const calls = client.lua.mock.calls.length;
+      client.lua.mockResolvedValueOnce(snapshot);
+      expect(await s.snapshotBuffer()).toEqual(snapshot);
+      expect(client.lua).toHaveBeenCalledTimes(calls + 1);
+      const reconciled = { applied: false, text: "newer", changedtick: 9 };
+      client.lua.mockResolvedValueOnce(reconciled);
+      expect(await s.reconcileSaved(snapshot, "canonical")).toEqual(reconciled);
+      expect(client.lua).toHaveBeenCalledTimes(calls + 2);
+      const beforeWrite = client.lua.mock.calls.length;
+      const send = vi.fn(); client.emit("request", "marimo_write", ["draft", "base", 7], { send });
       await vi.waitFor(() => expect(send).toHaveBeenCalledWith({ ok: true, canonicalCode: "draft", requestId: "receipt" }));
-      client.emit("notification", "marimo_draft", ["latest"]); proc.emit("close", 0, null);
-      expect(drafts).toEqual(["latest"]); expect(exits[0]).toMatchObject({ deliberate: false, text: "latest" });
+      expect(client.lua).toHaveBeenCalledTimes(beforeWrite);
+      client.emit("notification", "marimo_draft", ["latest", 11]); proc.emit("close", 0, null);
+      expect(drafts).toEqual([{ text: "latest", changedtick: 11 }]); expect(exits[0]).toMatchObject({ deliberate: false, text: "latest" });
       s.dispose(); s.dispose(); expect(proc.kill).toHaveBeenCalledTimes(1);
       const failedExits: any[] = [];
       const failed = await FakeSession.open({ text: "draft", filetype: "python", onExit: e => failedExits.push(e), onWrite: vi.fn() });

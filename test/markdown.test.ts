@@ -1,7 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
-import { Markdown, parseColor, stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
+import { Markdown, getCellDimensions, setCellDimensions, parseColor, stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
 import { extractCodeBlocks, markdownRows } from "../src/ui/markdown.js";
 import { SyntaxHighlighter, type SyntaxTheme } from "../src/ui/syntax.js";
+import { liveGeometry } from "../src/ui/live-charts.js";
+import type { RowOptions } from "../src/ui/rows.js";
 const plain = (s: string, options = {}) => markdownRows(s, options).map(row => stripTerminalSequences(row.text));
 describe("source mapped markdown", () => {
   it.each([46, 80, 120, 180])("uses the full prose width at %i", width => {
@@ -68,6 +70,36 @@ describe("source mapped markdown", () => {
     syntax.invalidate();
     expect(markdownRows(text, options).map(row => row.text).join("")).not.toContain("\x1b[");
     syntax.dispose();
+  });
+  it.each(["imageRows", "widthPx", "heightPx", "appearance", "pad", "bar"] as const)("invalidates cached diagram rows when %s changes", input => {
+    const originalCell = { ...getCellDimensions() };
+    const theme: SyntaxTheme = { fg: (_, s) => s, bold: s => s, appearance: "light" };
+    const diagramRows = vi.fn((_source: string, options: RowOptions & { blockId: string }) => {
+      const geometry = liveGeometry(options.width!, options.imageRows!);
+      return [{ text: JSON.stringify([geometry, options.theme?.appearance, options.pad, options.bar]), image: { index: 0, height: geometry.rows, alt: "diagram" } }];
+    });
+    const options: RowOptions = { width: 80, imageRows: 14, theme, diagramRows };
+    const source = "```mermaid\na-->b\n```";
+    try {
+      setCellDimensions({ widthPx: 8, heightPx: 16 });
+      const first = markdownRows(source, options);
+      expect(markdownRows(source, options)).toEqual(first);
+      expect(diagramRows).toHaveBeenCalledTimes(1);
+      switch (input) {
+        case "imageRows": options.imageRows = 4; break;
+        case "widthPx": setCellDimensions({ widthPx: 10, heightPx: 16 }); break;
+        case "heightPx": setCellDimensions({ widthPx: 8, heightPx: 20 }); break;
+        case "appearance": theme.appearance = "dark"; break;
+        case "pad": options.pad = "  "; break;
+        case "bar": options.bar = ""; break;
+      }
+      const changed = markdownRows(source, options);
+      expect(diagramRows).toHaveBeenCalledTimes(2);
+      expect(changed).not.toEqual(first);
+      if (input === "imageRows") expect(changed.find(row => row.image)?.image?.height).toBe(4);
+      expect(markdownRows(source, options)).toEqual(changed);
+      expect(diagramRows).toHaveBeenCalledTimes(2);
+    } finally { setCellDimensions(originalCell); }
   });
   it("falls back with complete Mermaid source", () => {
     const rows = plain('```mermaid\n' + 'x'.repeat(3000) + '\n```', { width: 4000 });

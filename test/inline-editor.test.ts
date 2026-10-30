@@ -18,6 +18,7 @@ function deferred<T>() {
 class FakeSession {
   text: string;
   base: string;
+  changedtick = 1;
   blocked = false;
   reentrant: string[] = [];
   undo: string[] = [];
@@ -26,6 +27,14 @@ class FakeSession {
     if (this.blocked) { this.reentrant.push(name); throw new Error(`Reentrant Neovim request: ${name}`); }
   }
   getText = vi.fn(async () => { this.request("getText"); return this.text; });
+  snapshotBuffer = vi.fn(async () => { this.request("snapshotBuffer"); return { text: this.text, changedtick: this.changedtick }; });
+  reconcileSaved = vi.fn(async (expected: { text: string; changedtick: number }, canonical: string) => {
+    this.request("reconcileSaved");
+    const applied = this.text === expected.text && this.changedtick === expected.changedtick;
+    this.base = canonical;
+    if (applied && this.text !== canonical) { this.undo.push(this.text); this.edit(canonical); }
+    return { applied, text: this.text, changedtick: this.changedtick };
+  });
   replaceText = vi.fn(async (text: string, updateBase = false) => {
     this.request("replaceText"); this.undo.push(this.text); this.edit(text);
     if (updateBase) this.base = text;
@@ -36,14 +45,15 @@ class FakeSession {
   focus = vi.fn(async (_focused: boolean) => { this.request("focus"); });
   setLineNumbers = vi.fn(async (_value: boolean) => { this.request("setLineNumbers"); });
   dispose = vi.fn(() => { this.request("dispose"); });
-  edit(text: string, notify = true): void { this.text = text; if (notify) this.options.onDraft?.(text); }
+  edit(text: string, notify = true): void { this.text = text; ++this.changedtick; if (notify) this.options.onDraft?.(text, this.changedtick); }
   async write() {
-    const before = this.text;
+    const before = this.text, tick = this.changedtick;
     this.blocked = true;
     try {
-      const receipt = await this.options.onWrite(before, this.base);
+      const receipt = await this.options.onWrite(before, this.base, tick);
       this.base = receipt.canonicalCode;
-      if (this.text === before) this.edit(receipt.canonicalCode);
+      if (this.text === before && this.changedtick === tick && before !== this.base) this.edit(receipt.canonicalCode);
+      this.options.onDraft?.(this.text, this.changedtick);
       return receipt;
     } finally { this.blocked = false; }
   }
@@ -199,7 +209,8 @@ describe("inline editor activation and saves", () => {
     }
     expect(await result).toBe(true);
     expect(f.host.saveCell).toHaveBeenCalledWith(f.followed, "a", "x=2", "x = 1");
-    expect(f.session.replaceText).toHaveBeenCalledExactlyOnceWith("x = 2", true);
+    expect(f.session.reconcileSaved).toHaveBeenCalledExactlyOnceWith({ text: "x=2", changedtick: 2 }, "x = 2");
+    expect(f.session.replaceText).not.toHaveBeenCalled();
     expect(f.manager.state).toMatchObject({ draft: "x = 2", baseCode: "x = 2", dirty: false, saving: false });
     expect(f.host.runSavedCell).toHaveBeenCalledTimes(run ? 1 : 0);
     expect(f.host.note).toHaveBeenCalledWith(run ? "Saved; run accepted." : "Saved (not run).");
@@ -272,6 +283,60 @@ describe("inline editor activation and saves", () => {
     pending.resolve({ canonicalCode: "canonical", requestId: "slow" });
     expect(await save).toBe(true);
     expect(f.session.text).toBe("newer"); expect(f.session.replaceText).not.toHaveBeenCalled();
+    expect(f.manager.state).toMatchObject({ draft: "newer", baseText: "canonical", dirty: true });
+  });
+
+  it("rejects same-text edits with a newer tick and advances the native base", async () => {
+    const f = fixture(); await f.manager.open(f.followed, "a"); f.session.edit("submitted");
+    const pending = deferred<SaveReceipt>(); f.host.saveCell.mockReturnValueOnce(pending.promise);
+    const save = f.manager.save(); await Promise.resolve();
+    f.session.edit("other", false); f.session.edit("submitted", false);
+    pending.resolve({ canonicalCode: "canonical", requestId: "aba" });
+    expect(await save).toBe(true);
+    expect(f.session.text).toBe("submitted"); expect(f.session.base).toBe("canonical");
+    expect(f.manager.state).toMatchObject({ draft: "submitted", baseText: "canonical", dirty: true });
+    expect(f.session.replaceText).not.toHaveBeenCalled();
+  });
+
+  it("keeps a newer notification arriving between atomic reconciliation and its reply", async () => {
+    const f = fixture(); await f.manager.open(f.followed, "a"); f.session.edit("submitted");
+    const reply = deferred<{ applied: boolean; text: string; changedtick: number }>();
+    const atomic = f.session.reconcileSaved.getMockImplementation()!;
+    f.session.reconcileSaved.mockImplementationOnce(async (snapshot, canonical) => {
+      const result = await atomic(snapshot, canonical);
+      f.session.edit("newest");
+      reply.resolve(result);
+      return reply.promise;
+    });
+    f.host.saveCell.mockResolvedValueOnce({ canonicalCode: "canonical", requestId: "reply-race" });
+    expect(await f.manager.save()).toBe(true);
+    expect(f.manager.state).toMatchObject({ draft: "newest", baseText: "canonical", dirty: true });
+    f.session.options.onDraft?.("stale notification", 2);
+    expect(f.manager.state?.draft).toBe("newest");
+  });
+
+  it("preserves an edit made just before the atomic reconciliation RPC", async () => {
+    const f = fixture(); await f.manager.open(f.followed, "a"); f.session.edit("submitted");
+    const atomic = f.session.reconcileSaved.getMockImplementation()!;
+    f.session.reconcileSaved.mockImplementationOnce(async (snapshot, canonical) => {
+      f.session.edit("between reads and RPC", false);
+      return atomic(snapshot, canonical);
+    });
+    f.host.saveCell.mockResolvedValueOnce({ canonicalCode: "canonical", requestId: "rpc-race" });
+    expect(await f.manager.save()).toBe(true);
+    expect(f.session.text).toBe("between reads and RPC");
+    expect(f.manager.state).toMatchObject({ draft: "between reads and RPC", baseText: "canonical", dirty: true });
+  });
+
+  it("ignores a stale pre-save snapshot without losing newer subscribed text", async () => {
+    const f = fixture(); await f.manager.open(f.followed, "a"); f.session.edit("submitted");
+    const snapshot = deferred<{ text: string; changedtick: number }>();
+    f.session.snapshotBuffer.mockReturnValueOnce(snapshot.promise);
+    const save = f.manager.save();
+    f.session.edit("newer");
+    snapshot.resolve({ text: "submitted", changedtick: 2 });
+    f.host.saveCell.mockResolvedValueOnce({ canonicalCode: "canonical", requestId: "snapshot-race" });
+    expect(await save).toBe(true);
     expect(f.manager.state).toMatchObject({ draft: "newer", baseText: "canonical", dirty: true });
   });
 
@@ -385,6 +450,29 @@ describe("conflicts, unavailable notebooks and process recovery", () => {
       expect(f.host.copy).toHaveBeenCalledWith("latest crash draft"); expect(f.openSession).toHaveBeenCalledTimes(1);
       expect(f.manager.active).toBe(true);
     } else expect(f.manager.active).toBe(false);
+  });
+
+  it("ignores callbacks and pending replies from a replaced process generation", async () => {
+    const f = fixture(); await f.manager.open(f.followed, "a"); const old = f.session;
+    old.edit("submitted");
+    const pending = deferred<SaveReceipt>(); f.host.saveCell.mockReturnValueOnce(pending.promise);
+    const saving = f.manager.save(); await Promise.resolve();
+    old.exit({ text: "recovered" });
+    f.manager.handleInput(keys.f2); await settle();
+    const replacement = f.session;
+    replacement.edit("replacement draft");
+    old.options.onDraft?.("stale old notification", 999);
+    old.options.onRedraw?.([["grid_clear", [1]]]);
+    old.exit({ deliberate: true, code: 0 });
+    await old.options.onRun?.(); await old.options.onRevert?.(); await old.options.onClose?.();
+    await expect(old.options.onWrite("stale", "base", 999)).rejects.toThrow("replaced");
+    pending.resolve({ canonicalCode: "old canonical", requestId: "old-save" });
+    expect(await saving).toBe(false);
+    expect(old.reconcileSaved).not.toHaveBeenCalled();
+    expect(f.host.saveCell).toHaveBeenCalledTimes(1);
+    expect(f.manager.active).toBe(true);
+    expect(f.manager.state).toMatchObject({ draft: "replacement draft", baseText: "x = 1", dirty: true, recovery: undefined });
+    expect(replacement.dispose).not.toHaveBeenCalled();
   });
 
   it("F2 reopens after a crash without submitting a save", async () => {

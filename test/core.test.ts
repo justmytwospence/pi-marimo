@@ -96,6 +96,104 @@ describe("markdown", () => {
   });
 });
 
+describe("independent progress snapshots", () => {
+  const ready = (nb: NotebookState) => nb.apply("kernel-ready", { cell_ids: ["a"], codes: [""], names: ["_"] });
+  const html = (count: number) => ({ channel: "output", mimetype: "text/html", data: Array.from({ length: count }, (_, i) => `<progress id="chain-${i}" value="${i + 1}" max="10"></progress>`).join("") });
+  const consoleItem = (data = "fit: 2/10 [==>...]") => ({ channel: "stderr", mimetype: "text/plain", data });
+
+  test("output replacements and console clears preserve the other source", async () => {
+    const redraw = vi.fn();
+    const nb = new NotebookState(redraw);
+    ready(nb);
+    const cell = nb.cells.get("a")!;
+    const seq = nb.seq;
+    expect(nb.apply("cell-op", { cell_id: "a", output: html(2), console: consoleItem() })).toBe(false);
+    await nb.settled();
+    expect(cell.progress).toHaveLength(3);
+    expect(cell.progress?.map(task => task.id)).toEqual(["output:chain-0", "output:chain-1", expect.stringMatching(/^console:/)]);
+    const consoleTasks = cell.progress!.filter(task => task.id.startsWith("console:"));
+    const consoleLines = cell.console;
+    nb.apply("cell-op", { cell_id: "a", output: html(1) });
+    expect(cell.progress).toEqual([expect.objectContaining({ id: "output:chain-0" }), ...consoleTasks]);
+    expect(cell.console).toBe(consoleLines);
+    nb.apply("cell-op", { cell_id: "a", output: { channel: "output", mimetype: "text/plain", data: "result replacement" } });
+    expect(cell.output?.text).toContain("result replacement");
+    expect(cell.progress).toEqual(consoleTasks);
+    nb.apply("cell-op", { cell_id: "a", output: html(2) });
+    const output = cell.output;
+    nb.apply("cell-op", { cell_id: "a", console: [] });
+    expect(cell.console).toBeUndefined();
+    expect(cell.output).toBe(output);
+    expect(cell.progress?.map(task => task.id)).toEqual(["output:chain-0", "output:chain-1"]);
+    // Completed asynchronous writes must merge with the newest output, not a captured one.
+    nb.apply("cell-op", { cell_id: "a", console: consoleItem("next: 3/10 [==>...]") });
+    nb.apply("cell-op", { cell_id: "a", output: html(1) });
+    await nb.settled();
+    expect(cell.progress).toHaveLength(2);
+    expect(cell.progress?.[0]?.id).toBe("output:chain-0");
+    expect(cell.progress?.[1]).toMatchObject({ completed: 3 });
+    expect(redraw).toHaveBeenCalled();
+    expect(nb.seq).toBe(seq);
+    expect(nb.agentChanges.size).toBe(0);
+    expect(snapshot([{ notebook: nb, attachment }])).not.toMatch(/result replacement|next: 3\/10/);
+    nb.dispose();
+  });
+
+  test("source prefixes disambiguate identical producer IDs without mutating output tasks", async () => {
+    const nb = new NotebookState();
+    ready(nb);
+    nb.apply("cell-op", { cell_id: "a", output: { channel: "output", mimetype: "text/html", data: '<progress id="text:0" value="1" max="10"></progress>' }, console: consoleItem() });
+    await nb.settled();
+    const cell = nb.cells.get("a")!;
+    expect(cell.progress?.map(task => task.id)).toEqual(["output:text:0", "console:text:0"]);
+    expect(cell.output?.progress?.[0]?.id).toBe("text:0");
+    nb.dispose();
+  });
+
+  test("console redraw replaces its snapshot without losing multiple output chains", async () => {
+    const nb = new NotebookState();
+    ready(nb);
+    nb.apply("cell-op", { cell_id: "a", output: html(2), console: consoleItem("A: 1/10 [==>...]\nB: 2/10 [==>...]") });
+    await nb.settled();
+    expect(nb.cells.get("a")?.progress).toHaveLength(4);
+    nb.apply("cell-op", { cell_id: "a", console: consoleItem("\u001b[2J\u001b[HC: 3/10 [==>...]") });
+    await nb.settled();
+    expect(nb.cells.get("a")?.progress).toHaveLength(3);
+    expect(nb.cells.get("a")?.progress?.map(task => task.completed)).toEqual([1, 2, 3]);
+    nb.dispose();
+  });
+
+  test.each(["queued", "running", "clear", "delete", "kernel-ready", "reset", "dispose"])("%s invalidates pending console progress", async lifecycle => {
+    const nb = new NotebookState();
+    ready(nb);
+    const old = nb.cells.get("a")!;
+    nb.apply("cell-op", { cell_id: "a", output: html(2), console: consoleItem() });
+    await nb.settled();
+    nb.apply("cell-op", { cell_id: "a", console: consoleItem("\r\u001b[2Kstale: 8/10 [==>...]") });
+    const pending = nb.settled();
+    // Let xterm receive the write, but invalidate it before its completion callback.
+    await Promise.resolve();
+    if (lifecycle === "queued" || lifecycle === "running") nb.apply("cell-op", { cell_id: "a", status: lifecycle });
+    else if (lifecycle === "clear") nb.apply("cell-op", { cell_id: "a", console: [] });
+    else if (lifecycle === "delete") nb.apply("notebook-document-transaction", { transaction: { changes: [{ type: "delete-cell", cellId: "a" }] } });
+    else if (lifecycle === "kernel-ready") ready(nb);
+    else if (lifecycle === "reset") nb.reset();
+    else nb.dispose();
+    if (lifecycle !== "clear") {
+      expect(old.progress).toEqual([]);
+      if (!nb.cells.has("a")) ready(nb);
+    }
+    const cell = nb.cells.get("a")!;
+    nb.apply("cell-op", { cell_id: "a", console: consoleItem("fresh: 4/10 [==>...]") });
+    await pending;
+    await nb.settled();
+    expect(cell.progress?.filter(task => task.id.startsWith("console:"))).toEqual([expect.objectContaining({ completed: 4 })]);
+    expect(cell.progress?.filter(task => task.id.startsWith("output:"))).toHaveLength(lifecycle === "clear" ? 2 : 0);
+    expect(cell.console?.map(line => line.text).join("\n")).not.toContain("stale");
+    nb.dispose();
+  });
+});
+
 describe("notebook state from a recorded stream", () => {
   test("tracks the running cell and its section", () => {
     // Stop while lEQa (under "## Slow model fit") is running.

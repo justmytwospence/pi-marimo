@@ -40,9 +40,14 @@ function task(id: string, label = ""): ProgressTask {
 
 /** Parse one output snapshot. No state is retained between snapshots. HTML stays inert. */
 export function progressFromHtml(html: string): ProgressTask[] {
+  return progressFromNode(parseOutputFragment(html));
+}
+
+/** Read an existing inert parse5 subtree, including its root, without reparsing HTML. */
+export function progressFromNode(root: OutputNode): ProgressTask[] {
   const result: ProgressTask[] = [];
   const consumed = new Set<OutputNode>();
-  for (const node of outputElements(parseOutputFragment(html))) {
+  for (const node of outputElements(root)) {
     if (consumed.has(node)) continue;
     if (node.tagName === "marimo-progress") {
       const props = componentProps(node);

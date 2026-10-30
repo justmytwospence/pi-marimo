@@ -1,5 +1,5 @@
 import { matchesKey } from "@earendil-works/pi-tui";
-import { NeovimSession, type NeovimOpenOptions, type NeovimExit } from "../core/neovim.js";
+import { NeovimSession, type NeovimOpenOptions, type NeovimExit, type BufferSnapshot } from "../core/neovim.js";
 import type { SaveReceipt } from "../core/edit-cell.js";
 import { editableMarkdown, markdownCellCode } from "../core/markdown.js";
 import type { Followed } from "../core/watcher.js";
@@ -22,7 +22,7 @@ export interface InlineEditorHost {
   changed(): void; note(text: string): void; help(): void; dock(): void; numbers(): void;
 }
 type OpenSession = (options: NeovimOpenOptions) => Promise<NeovimSession>;
-interface Entry { state: InlineEditorState; followed: Followed; sessionId: string | undefined; grid: NeovimGrid; session?: NeovimSession; detached?: string; appliedViewport?: { width: number; height: number }; appliedFocus?: boolean }
+interface Entry { generation: number; changedtick: number; state: InlineEditorState; followed: Followed; sessionId: string | undefined; grid: NeovimGrid; session?: NeovimSession; detached?: string; appliedViewport?: { width: number; height: number }; appliedFocus?: boolean }
 
 /** Runtime-owned, not view-owned: transferring the view never destroys Vim's buffer/undo. */
 export class InlineEditorManager {
@@ -47,6 +47,11 @@ export class InlineEditorManager {
   }
   private changed(): void { this.host?.changed(); }
   private note(error: unknown): void { this.host?.note(error instanceof Error ? error.message : String(error)); this.changed(); }
+  private acceptSnapshot(e: Entry, snapshot: BufferSnapshot): void {
+    if (snapshot.changedtick < e.changedtick) return;
+    e.changedtick = snapshot.changedtick;
+    this.setDraft(e, snapshot.text);
+  }
   private setDraft(e: Entry, text: string): void {
     e.state.draft = text; e.state.dirty = text !== e.state.baseText; this.changed();
   }
@@ -68,7 +73,7 @@ export class InlineEditorManager {
     if (!e) {
       const md = kind === "python" ? undefined : editableMarkdown(cell.code);
       const text = md ?? cell.code;
-      e = { followed: f, sessionId: f.attachment.sessionId, grid: new NeovimGrid(), state: {
+      e = { generation: 0, changedtick: -1, followed: f, sessionId: f.attachment.sessionId, grid: new NeovimGrid(), state: {
         key, cellId, baseCode: cell.code, baseText: text, draft: text,
         kind: md === undefined ? "python" : "markdown", dirty: false, saving: false,
         viewport: { width: 80, height: 12 },
@@ -82,6 +87,9 @@ export class InlineEditorManager {
   }
   private async start(e: Entry): Promise<void> {
     this.opening = true;
+    const generation = ++e.generation;
+    e.changedtick = -1;
+    const current = () => !this.disposed && this.entry === e && e.generation === generation;
     e.grid = new NeovimGrid();
     try {
       const prefs = this.host!.preferences();
@@ -90,24 +98,25 @@ export class InlineEditorManager {
         command: prefs.editor.command, options: prefs.editor.options, lineNumbers: prefs.lineNumbers,
         highlights: this.host?.highlights,
         ...viewport,
-        onRedraw: events => { e.grid.reduce(events); this.changed(); },
-        onDraft: text => this.setDraft(e, text),
+        onRedraw: events => { if (current()) { e.grid.reduce(events); this.changed(); } },
+        onDraft: (text, changedtick) => { if (current()) this.acceptSnapshot(e, { text, changedtick }); },
         // Synchronous RPC handler: only marimo IO and local state, NEVER a Vim request.
-        onWrite: async text => {
-          try { return await this.saveEntry(e, text, true); }
-          catch (error) { this.note(error); setTimeout(() => { void this.conflict(e); }, 0); throw error; }
+        onWrite: async (text, _base, changedtick) => {
+          if (!current()) throw new Error("Editor session was replaced; your draft is kept");
+          try { return await this.saveEntry(e, { text, changedtick }, true, generation); }
+          catch (error) { if (current()) { this.note(error); setTimeout(() => { if (current()) void this.conflict(e); }, 0); } throw error; }
         },
-        onRun: async () => { await this.save(true); },
-        onRevert: () => this.revert().catch(error => this.note(error)),
-        onClose: async () => { try { await this.close(); } catch (error) { this.note(error); } },
-        onExit: exit => this.exited(e, exit),
+        onRun: async () => { if (current()) await this.save(true); },
+        onRevert: () => { if (current()) return this.revert().catch(error => this.note(error)); },
+        onClose: async () => { if (current()) { try { await this.close(); } catch (error) { this.note(error); } } },
+        onExit: exit => { if (current()) this.exited(e, exit); },
       });
-      if (this.disposed || this.entry !== e) session.dispose();
+      if (!current()) session.dispose();
       else { e.session = session; e.appliedViewport = viewport; e.state.recovery = undefined; e.appliedFocus = this.focused; await session.focus(this.focused); }
-    } catch (error) { e.state.recovery = error instanceof Error ? error.message : String(error); this.note(error); }
+    } catch (error) { if (current()) { e.state.recovery = error instanceof Error ? error.message : String(error); this.note(error); } }
     finally {
       this.opening = false; this.changed();
-      if (e.session && this.entry === e) for (const data of this.queuedInput.splice(0)) this.handleInput(data);
+      if (current() && e.session) for (const data of this.queuedInput.splice(0)) this.handleInput(data);
     }
   }
   /** Watcher projections are snapshots; refresh connection/identity without touching the draft. */
@@ -129,36 +138,41 @@ export class InlineEditorManager {
     this.observe();
     if (e.state.unavailable) throw new Error(e.state.unavailable);
   }
-  private async saveEntry(e: Entry, text: string, native: boolean): Promise<SaveReceipt> {
+  private async saveEntry(e: Entry, snapshot: BufferSnapshot, native: boolean, generation: number): Promise<SaveReceipt> {
+    const { text } = snapshot;
+    const current = () => !this.disposed && this.entry === e && e.generation === generation;
+    if (!current()) throw new Error("Editor session was replaced; your draft is kept");
     if (e.state.saving) throw new Error("Save already in progress; your draft is kept");
     this.writable(e);
     e.state.saving = true;
-    this.setDraft(e, text);
+    this.acceptSnapshot(e, snapshot);
     try {
       const code = e.state.kind === "markdown" ? markdownCellCode(text) : text;
       const receipt = await this.host!.saveCell(e.followed, e.state.cellId, code, e.state.baseCode);
+      if (!current()) throw new Error("Editor session was replaced; your draft is kept");
       const canonicalText = e.state.kind === "markdown" ? (editableMarkdown(receipt.canonicalCode) ?? (receipt.canonicalCode === code ? text : undefined)) : receipt.canonicalCode;
       if (canonicalText === undefined) throw new Error("Save outcome unknown: canonical Markdown could not be decoded; your draft is kept");
       e.state.baseCode = receipt.canonicalCode;
       e.state.baseText = canonicalText;
       e.state.conflict = undefined;
-      // A nonblocking host save must not overwrite edits newer than its snapshot.
-      if (!native && e.session) this.setDraft(e, await e.session.getText());
-      if (e.state.draft === text) {
-        this.setDraft(e, canonicalText);
-        if (!native) await e.session?.replaceText(canonicalText, true);
-      } else e.state.dirty = e.state.draft !== canonicalText;
+      e.state.dirty = e.state.draft !== canonicalText;
+      // The comparison and replacement share one Lua RPC; notifications may
+      // already describe a newer revision when that RPC's reply reaches us.
+      if (!native && e.session) {
+        const result = await e.session.reconcileSaved(snapshot, canonicalText);
+        if (current()) this.acceptSnapshot(e, result);
+      }
       // Lua reconciles through the response, not a reentrant RPC.
       return { ...receipt, canonicalCode: canonicalText };
     } catch (error) {
-      const current = e.followed.notebook.cells.get(e.state.cellId)?.code;
-      if (current !== undefined && current !== e.state.baseCode) e.state.conflict = current;
+      const code = e.followed.notebook.cells.get(e.state.cellId)?.code;
+      if (current() && code !== undefined && code !== e.state.baseCode) e.state.conflict = code;
       throw error;
     } finally {
-      e.state.saving = false; this.changed();
+      if (current()) { e.state.saving = false; this.changed(); }
       // For native :w this runs after the RPC response releases Lua's synchronous wait.
       setTimeout(() => {
-        if (this.entry !== e || e.state.saving) return;
+        if (!current() || e.state.saving) return;
         for (const data of this.queuedInput.splice(0)) this.handleInput(data);
       }, 0);
     }
@@ -166,13 +180,16 @@ export class InlineEditorManager {
   async save(run = false): Promise<boolean> {
     const e = this.entry;
     if (!e) return false;
+    const generation = e.generation;
+    const current = () => !this.disposed && this.entry === e && e.generation === generation;
     try {
-      const text = e.session ? await e.session.getText() : e.state.draft;
-      await this.saveEntry(e, text, false);
+      const snapshot = e.session ? await e.session.snapshotBuffer() : { text: e.state.draft, changedtick: e.changedtick };
+      await this.saveEntry(e, snapshot, false, generation);
+      if (this.entry !== e || e.generation !== generation) return false;
       this.host?.note("Saved (not run).");
       if (run) { await this.host!.runSavedCell(e.followed, e.state.cellId, e.state.baseCode); this.host?.note("Saved; run accepted."); }
       this.changed(); return true;
-    } catch (error) { this.note(error); await this.conflict(e); }
+    } catch (error) { if (current()) { this.note(error); await this.conflict(e); } }
     this.changed(); return false;
   }
   private async conflict(e: Entry): Promise<void> {
@@ -199,7 +216,10 @@ export class InlineEditorManager {
     const e = this.entry;
     if (!e || e.state.saving) return;
     if (e.state.dirty && await this.host?.confirm("Revert unsaved edits to the latest saved base?", ["Keep editing", "Revert unsaved edits"]) !== "Revert unsaved edits") return;
-    try { await e.session?.replaceText(e.state.baseText, true); this.setDraft(e, e.state.baseText); }
+    try {
+      if (e.session) await e.session.replaceText(e.state.baseText, true);
+      else this.setDraft(e, e.state.baseText);
+    }
     catch (error) { this.note(error); }
   }
   async close(): Promise<boolean> {
@@ -217,7 +237,7 @@ export class InlineEditorManager {
     if (!e) return !this.opening;
     if (this.opening || e.state.saving || this.confirming) return false;
     // The subscription is the crash fallback; a live buffer read closes notification races.
-    try { if (e.session) this.setDraft(e, await e.session.getText()); } catch { /* retain subscribed draft */ }
+    try { if (e.session) { const generation = e.generation; const snapshot = await e.session.snapshotBuffer(); if (e.generation === generation) this.acceptSnapshot(e, snapshot); } } catch { /* retain subscribed draft */ }
     if (this.entry !== e) return true;
     this.observe();
     if (e.state.dirty || e.state.recovery || e.state.unavailable) {
@@ -236,6 +256,8 @@ export class InlineEditorManager {
     // Never replay keys from a dead Vim instance into a later cell/process.
     this.queuedInput = [];
     e.session = undefined;
+    ++e.generation;
+    e.state.saving = false;
     this.setDraft(e, exit.text);
     if (exit.deliberate) { this.drafts.delete(e.state.key); if (this.entry === e) this.entry = undefined; }
     else { e.state.recovery = "Neovim exited unexpectedly; your draft is kept. F2 reopens; F4 copies or discards."; this.note(e.state.recovery); }

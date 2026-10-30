@@ -2,6 +2,7 @@
 import { wrapTextWithAnsi, visibleWidth } from "@earendil-works/pi-tui";
 import type { ProgressTask } from "../core/progress.js";
 import type { FrameTheme } from "../frame.ts";
+import { oneLine } from "./text.js";
 import { spinner } from "./outline.js";
 import type { Row } from "./rows.js";
 
@@ -19,8 +20,8 @@ export function progressRows(tasks: readonly ProgressTask[], width: number, them
     const count = task.completed !== undefined ? `${task.completed}${task.total !== undefined ? `/${task.total}` : ""}` : "";
     const percent = fraction !== undefined ? `${Math.round(fraction * 100)}%` : "";
     const info = [count, percent, task.rate !== undefined ? `${task.rate}/s` : "", task.etaSeconds !== undefined ? `ETA ${seconds(task.etaSeconds)}` : "", task.elapsedSeconds !== undefined ? `${seconds(task.elapsedSeconds)} elapsed` : ""].filter(Boolean).join(" · ");
-    if (task.label) add(theme.fg("accent", task.label));
-    if (fraction === undefined) add(`${theme.fg("accent", task.state === "complete" ? "✓" : spinner(now))} ${info || task.state}`);
+    if (task.label) add(theme.fg("accent", oneLine(task.label)));
+    if (fraction === undefined) add(`${theme.fg("accent", task.state === "complete" ? "✓" : spinner(now))} ${info || oneLine(task.state)}`);
     else {
       // Keep useful bar resolution on narrow panes; metadata moves below rather than shrinking to nothing.
       const inline = width - visibleWidth(info) - 3 >= 10;
@@ -31,7 +32,7 @@ export function progressRows(tasks: readonly ProgressTask[], width: number, them
     }
     // Stats are separate from bar geometry, including all dynamic PyMC columns.
     for (const [name, value] of Object.entries(task.stats)) {
-      const text = `${name}: ${value}`;
+      const text = `${oneLine(name)}: ${oneLine(String(value))}`;
       add(/divergen/iu.test(name) && Number(value) > 0 ? theme.fg("warning", text) : theme.fg("dim", text));
     }
     return rows;

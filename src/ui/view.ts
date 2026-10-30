@@ -3,18 +3,9 @@
 // headings and a short line per cell) and the selected cell on the right (detail.ts: prose, output,
 // error with its traceback, folded code, dataflow). Narrower than SPLIT_MIN columns the outline
 // fills the view and Enter drills into the detail (Esc comes back). It follows the running cell
-// until you move. Keys (also `?`):
-//   j/k move between cells, ctrl+j/ctrl+k (or ] [) between sections, n/p between a cell's parts,
-//   z/Z fold; Enter acts on the part (or edits source/Markdown); B folds code; t drives a table; e/E
-//   errors, c/C the agent's changes, d its diff; < > upstream/downstream; ^D/^U/PgDn/PgUp/Space
-//   scroll the detail; O stacks the whole section in the detail; / filters; v lists the variables;
-//   r/R/A run cells, x twice interrupts; w drives the cell's widgets; : runs Python in the kernel;
-//   a asks the agent about the cell; m marks it for the agent (Lens), M twice removes a mark; i
-//   drives a live chart; o opens the browser; S twice stops the server; Tab/Shift+Tab switch
-//   notebooks; Esc, q, ← or h goes back. The mouse wheel scrolls the pane under it, a click
-//   selects, a double click opens the code.
+// until you move. Controls are declared in keys.ts and shown by context help.
 // The prompts (ask, Python, a Lens note, a widget's value) dock at the bottom (dock.ts).
-import { type Component, type Focusable, type TUI, type TuiMouseEvent, type TuiMouseEventResult, colorToHex, matchesKey, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { type Component, type Focusable, type TUI, type TuiMouseEvent, type TuiMouseEventResult, colorToHex, CURSOR_MARKER, matchesKey, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { basename } from "../core/io.js";
 import { type ChartRenderer, VegaRenderer as VegaRendererImpl, type VegaRenderer } from "../core/vega.js";
 import { sharedPlotly } from "../core/plotly.js";
@@ -23,7 +14,7 @@ import { Painter } from "./painter.js";
 import { type Cell, truncate } from "../core/notebook.js";
 import type { SaveReceipt } from "../core/edit-cell.js";
 import { InlineEditorManager, type InlineEditorHost } from "./inline-editor.js";
-import { summarizeOutput, type TableData, type Widget } from "../core/output.js";
+import { summarizeOutput, type CellOutput, type TableData, type Widget } from "../core/output.js";
 import { elapsed, shortWhere } from "../core/render.js";
 import type { Followed } from "../core/watcher.js";
 import { kernelStateParts, lensParts } from "../bg.js";
@@ -38,7 +29,10 @@ import { mermaidRows } from "./outputs.js";
 import type { EditorFactoryFn } from "../editor-contract.ts";
 import { Dock, type DockSpec } from "./dock.js";
 import { type Part, detailRows } from "./detail.js";
-import { helpLines } from "./help.js";
+import { Help, type HelpState } from "./help.js";
+import { MessageView, messagePreview, type MessageState } from "./message.js";
+import { clean, oneLine } from "./text.js";
+import { commandFor, commandKey, footerTokens, type CommandMode } from "./keys.js";
 import { type PaneTheme, outlineRows, spinner } from "./outline.js";
 import { MAX_WIDGETS, type Row, type RowOptions, firstLine, foldedCells, selectableCells } from "./rows.js";
 import { cellTitle } from "./titles.js";
@@ -94,6 +88,9 @@ export interface ViewState {
   diffs: string[];
   section: boolean;
   filter: string;
+  typing?: boolean;
+  findFrom?: string;
+  packageTyping?: boolean;
   mode: "cells" | "variables" | "packages";
   packagePane?: PackagePaneState;
   packageSnapshot?: PackageSnapshot;
@@ -110,6 +107,11 @@ export interface ViewState {
   focusedBlock?: string;
   preferences?: ViewPreferences;
   timing?: boolean;
+  help?: HelpState;
+  message?: MessageState;
+  note?: string;
+  table?: { cell: string; objectId: string };
+  widget?: { cell: string; index: number; sub: number };
 }
 
 export interface ViewActions {
@@ -272,6 +274,10 @@ export class NotebookView implements Component, Focusable {
   /** A slider being dragged with the mouse. */
   private dragging: { cell: string; index: number } | undefined;
   private help = false;
+  private helpView = new Help();
+  private lastTransient = 0;
+  private messageView?: MessageView;
+  private messageOverflow = false;
   private timing = false;
   private sourceFocus = false;
   private dock: Dock | undefined;
@@ -309,11 +315,11 @@ export class NotebookView implements Component, Focusable {
       preferences: () => this.preferences.snapshot(),
       saveCell: (f, id, code, expected) => actions.saveCell ? actions.saveCell(f, id, code, expected) : Promise.reject(new Error("Saving is not available here; your draft is kept")),
       runSavedCell: (f, id, code) => actions.runSavedCell ? actions.runSavedCell(f, id, code) : Promise.reject(new Error("Saved, but not run: running is not available here")),
-      confirm: (question, choices) => actions.confirm?.(question, choices) ?? Promise.resolve(undefined),
+      confirm: (question, choices) => this.confirm(question, choices),
       copy: text => { if (!actions.copy) throw new Error("Copying is not available here; your draft is kept"); actions.copy(text); },
       changed: this.renderReady,
       note: text => { this.note = text; this.renderReady(); },
-      help: () => { this.help = true; this.renderReady(); },
+      help: () => { this.openHelp(); this.renderReady(); },
       dock: () => { this.toggleDock(); this.renderReady(); },
       numbers: () => this.preferences.update({ lineNumbers: !this.preferences.snapshot().lineNumbers }),
     };
@@ -353,6 +359,9 @@ export class NotebookView implements Component, Focusable {
       diffs: [...this.diffs],
       section: this.section,
       filter: this.filter,
+      typing: this.typing,
+      ...(this.findFrom ? { findFrom: this.findFrom } : {}),
+      packageTyping: this.packagePane.typing,
       mode: this.mode,
       packagePane: { ...this.packagePane.state, expanded: [...this.packagePane.state.expanded], treeCursor: this.packagePane.treeCursor },
       ...(this.packagePane.snapshot ? { packageSnapshot: this.packagePane.snapshot } : {}),
@@ -366,6 +375,11 @@ export class NotebookView implements Component, Focusable {
       sectionCodeOpen: [...this.sectionCodeOpen],
       preferences: this.preferences.snapshot(),
       timing: this.timing,
+      ...(this.help ? { help: { ...this.helpView.state } } : {}),
+      ...(this.messageView ? { message: { ...this.messageView.state } } : {}),
+      ...(this.note ? { note: this.note } : {}),
+      ...(this.table ? { table: { ...this.table } } : {}),
+      ...(this.widget ? { widget: { ...this.widget } } : {}),
       ...(this.focusedBlock ? { focusedBlock: this.focusedBlock } : {}),
     };
   }
@@ -373,6 +387,12 @@ export class NotebookView implements Component, Focusable {
   private restore(s: ViewState): void {
     if (s.preferences) this.preferences.update(s.preferences);
     this.timing = s.timing ?? false;
+    this.messageView = s.message ? new MessageView(s.message) : undefined;
+    this.note = s.note;
+    this.help = !!s.help;
+    this.helpView = new Help(s.help);
+    this.table = s.table ? { ...s.table } : undefined;
+    this.widget = s.widget ? { ...s.widget } : undefined;
     this.cursor = s.cursor;
     this.follow = s.follow;
     this.scroll = s.scroll;
@@ -382,8 +402,11 @@ export class NotebookView implements Component, Focusable {
     this.diffs = new Set(s.diffs);
     this.section = s.section;
     this.filter = s.filter;
+    this.typing = s.typing ?? false;
+    this.findFrom = s.findFrom;
     this.mode = s.mode;
     this.packagePane = new PackagePane(s.packagePane);
+    this.packagePane.typing = s.packageTyping ?? false;
     this.packagePane.snapshot = s.packageSnapshot;
     this.packagePane.tree = s.packageTree;
     this.packagePane.treeError = s.packageTreeError;
@@ -437,12 +460,12 @@ export class NotebookView implements Component, Focusable {
   }
 
   private viewport(): number {
-    return Math.max(3, this.tui.terminal.rows - CHROME - this.lastDock);
+    return Math.max(0, this.tui.terminal.rows - CHROME - this.lastDock - this.lastTransient);
   }
 
   /** Read-only scrolling content: global listeners leave its keys alone (a filter or a docked prompt takes them). */
   [INPUT_CONTEXT](): "viewer" | "filter" | "editor" {
-    return this.editors.active || this.dock ? "editor" : this.typing ? "filter" : "viewer";
+    return this.messageView ? "viewer" : this.help ? (this.helpView.state.typing ? "filter" : "viewer") : this.editors.active || this.dock ? "editor" : this.typing || this.packagePane.typing ? "filter" : "viewer";
   }
 
   private cells(f: Followed): Cell[] {
@@ -692,7 +715,7 @@ export class NotebookView implements Component, Focusable {
     const value = widgetValue(f.notebook, w);
     this.openDock({
       kind: "value",
-      title: `${w.label || w.kind}: new value`,
+      title: `${oneLine(w.label || w.kind)}: new value`,
       hint: "enter set · esc cancel",
       initial: value === undefined || value === null ? "" : String(value),
       submit: (text) => {
@@ -721,8 +744,10 @@ export class NotebookView implements Component, Focusable {
   }
 
   /** The session and current data of a cell's marimo table, when the view can drive it. */
-  private tableFor(f: Followed, cell: Cell): { session: TableSession; data: TableData } | undefined {
-    const t = cell.output?.table;
+  private tableFor(f: Followed, cell: Cell, source?: string | CellOutput): { session: TableSession; data: TableData } | undefined {
+    const id = typeof source === "string" ? source : this.table?.cell === cell.id ? this.table.objectId : undefined;
+    // A supplied leaf is authoritative, including a static table without an object id.
+    const t = typeof source === "object" ? source.table : id ? [cell.output, ...(cell.output?.blocks?.map(block => block.output) ?? [])].find(output => output?.table?.objectId === id)?.table : cell.output?.table;
     if (!t?.objectId || !this.actions.table || f.connection !== "connected") return undefined;
     const session = tableSession(`${this.key}\0${t.objectId}`, cell, t);
     session.onChange = () => { if (!this.closed) this.tui.requestRender(); };
@@ -745,27 +770,28 @@ export class NotebookView implements Component, Focusable {
     const s = t.session;
     const objectId = this.table.objectId;
     this.note = undefined;
-    if (matchesKey(data, "escape") || data === "q" || matchesKey(data, "ctrl+c")) {
+    const command = commandFor("table", data)?.id;
+    if (command === "table-close") {
       if (s.card) s.closeCard();
       else this.table = undefined;
       return;
     }
-    if (data === "?") { this.help = true; return; }
-    if (data === "j" || matchesKey(data, "down")) s.move(f, rpc, 1, 0);
-    else if (data === "k" || matchesKey(data, "up")) s.move(f, rpc, -1, 0);
-    else if (data === "h" || matchesKey(data, "left")) s.move(f, rpc, 0, -1);
-    else if (data === "l" || matchesKey(data, "right")) s.move(f, rpc, 0, 1);
-    else if (data === "]" || matchesKey(data, "pageDown")) s.setPage(f, rpc, s.page + 1);
-    else if (data === "[" || matchesKey(data, "pageUp")) s.setPage(f, rpc, s.page - 1);
-    else if (data === "g") s.setPage(f, rpc, 0);
-    else if (data === "G") {
+    if (command === "help") { this.openHelp(); return; }
+    if (command === "table-down") s.move(f, rpc, 1, 0);
+    else if (command === "table-up") s.move(f, rpc, -1, 0);
+    else if (command === "table-left") s.move(f, rpc, 0, -1);
+    else if (command === "table-right") s.move(f, rpc, 0, 1);
+    else if (command === "table-next") s.setPage(f, rpc, s.page + 1);
+    else if (command === "table-previous") s.setPage(f, rpc, s.page - 1);
+    else if (command === "table-first") s.setPage(f, rpc, 0);
+    else if (command === "table-last") {
       const n = s.pageCount();
       if (n === undefined) this.note = "marimo did not count the rows: ] pages forward.";
       else s.setPage(f, rpc, n - 1);
-    } else if (data === "+") s.setPageSize(f, rpc, 1);
-    else if (data === "-") s.setPageSize(f, rpc, -1);
-    else if (data === "s" || data === "S") s.toggleSort(f, rpc, s.columnName(), data === "S");
-    else if (data === "/") {
+    } else if (command === "table-larger") s.setPageSize(f, rpc, 1);
+    else if (command === "table-smaller") s.setPageSize(f, rpc, -1);
+    else if (command === "table-sort" || command === "table-sort-add") s.toggleSort(f, rpc, s.columnName(), command === "table-sort-add");
+    else if (command === "table-search") {
       this.openDock({
         kind: "table",
         title: `Search ${cellTitle(f.notebook, cell)}`,
@@ -774,7 +800,7 @@ export class NotebookView implements Component, Focusable {
         submit: (text) => { this.closeDock(); s.setQuery(f, rpc, text); this.tui.requestRender(); },
         cancel: () => { this.closeDock(); this.tui.requestRender(); },
       });
-    } else if (data === "f") {
+    } else if (command === "table-filter") {
       const column = s.columnName();
       const kind = t.data.fieldTypes?.[column]?.kind ?? "string";
       this.openDock({
@@ -790,17 +816,17 @@ export class NotebookView implements Component, Focusable {
         },
         cancel: () => { this.closeDock(); this.tui.requestRender(); },
       });
-    } else if (data === "F") s.clearFilters(f, rpc);
-    else if (data === " " || data === "x") {
+    } else if (command === "table-clear") s.clearFilters(f, rpc);
+    else if (command === "table-select") {
       const value = this.actions.setTableSelection ? s.toggleSelect(f.notebook) : undefined;
       if (!value) this.note = "This table has no selection.";
       else this.actions.setTableSelection!(f, cell, objectId, value);
-    } else if (matchesKey(data, "enter")) s.openRow();
-    else if (data === "i") s.openColumn(f, rpc);
-    else if (data === "c") s.toggleSummaries(f, rpc);
-    else if (data === "y") this.copy(s.cellValue());
-    else if (data === "Y") this.copy(s.toTsv());
-    else if (data === "D") {
+    } else if (command === "table-row") s.openRow();
+    else if (command === "table-column") s.openColumn(f, rpc);
+    else if (command === "table-summary") s.toggleSummaries(f, rpc);
+    else if (command === "table-copy") this.copy(s.cellValue());
+    else if (command === "table-copy-row") this.copy(s.toTsv());
+    else if (command === "table-csv") {
       const save = this.actions.saveTable;
       if (!save) this.note = "Not available here.";
       else {
@@ -810,17 +836,17 @@ export class NotebookView implements Component, Focusable {
           (e: unknown) => { if (!this.closed) { this.note = `Could not save: ${message(e)}`; this.tui.requestRender(); } },
         );
       }
-    } else if (data === "r") void s.refresh(f, rpc);
+    } else if (command === "table-refresh") void s.refresh(f, rpc);
   }
 
   /** `t`: drive the table of the cursor's cell (or the focused part). */
   private enterTable(f: Followed, cell: Cell | undefined): void {
     const focused = this.part !== undefined ? this.lastParts[this.part] : undefined;
     const target = focused?.kind === "table" ? f.notebook.cells.get(focused.cell) : cell;
-    const hasTable = !!target?.output?.table?.objectId;
-    if (!target || !hasTable) { this.note = "This cell shows no table marimo can page."; return; }
+    const objectId = focused?.kind === "table" ? focused.tableObjectId ?? focused.output?.table?.objectId : target?.output?.table?.objectId;
+    if (!target || !objectId) { this.note = "This cell shows no table marimo can page."; return; }
     if (!this.actions.table || f.connection !== "connected") { this.note = "This cell shows no table marimo can page: the table needs a connected notebook."; return; }
-    this.table = { cell: target.id, objectId: target.output!.table!.objectId! };
+    this.table = { cell: target.id, objectId };
     this.cursor = target.id;
     this.follow = false;
     this.reveal = true;
@@ -844,16 +870,17 @@ export class NotebookView implements Component, Focusable {
   private widgetKey(f: Followed | undefined, data: string): void {
     const driven = this.drivenWidgets(f);
     if (!driven || !f) { this.note = "The widgets are gone."; return; }
+    const command = commandFor("widget", data)?.id;
     const focus = this.widget!;
     const w = driven.widgets[focus.index]!;
-    if (matchesKey(data, "escape") || data === "w" || data === "q") { this.widget = undefined; return; }
-    if (matchesKey(data, "shift+tab") || matchesKey(data, "up") || data === "k") {
+    if (command === "widget-close") { this.widget = undefined; return; }
+    if (command === "widget-previous") {
       focus.index = (focus.index - 1 + driven.widgets.length) % driven.widgets.length;
       focus.sub = 0;
       this.reveal = true;
       return;
     }
-    if (matchesKey(data, "tab") || matchesKey(data, "down") || data === "j") {
+    if (command === "widget-next") {
       focus.index = (focus.index + 1) % driven.widgets.length;
       focus.sub = 0;
       this.reveal = true;
@@ -867,12 +894,12 @@ export class NotebookView implements Component, Focusable {
       this.note = undefined;
       if (next.send) this.actions.setWidget?.(f, driven.cell, w, next.value);
     };
-    if (matchesKey(data, "left") || data === "h") act("dec");
-    else if (matchesKey(data, "right") || data === "l") act("inc");
-    else if (data === "H") act("dec10");
-    else if (data === "L") act("inc10");
-    else if (data === " ") act("toggle");
-    else if (matchesKey(data, "enter")) {
+    if (command === "widget-dec") act("dec");
+    else if (command === "widget-inc") act("inc");
+    else if (command === "widget-dec10") act("dec10");
+    else if (command === "widget-inc10") act("inc10");
+    else if (command === "widget-toggle") act("toggle");
+    else if (command === "widget-type") {
       if (typeable(w) && !w.disabled) this.openValue(f, driven.cell, w);
       else act("toggle");
     }
@@ -919,24 +946,25 @@ export class NotebookView implements Component, Focusable {
       else if (!data.startsWith("\x1b") && data >= " ") state.filter += data;
       state.cursor = 0; state.scroll = 0; pane.treeCursor = 0; return;
     }
-    if (matchesKey(data, "escape") && state.detail) { state.detail = false; state.scroll = 0; return; }
-    if (matchesKey(data, "escape") || data === "P" || data === "q") { this.mode = "cells"; this.reveal = true; return; }
-    if (data === "/") { pane.typing = true; state.filter = ""; state.scroll = 0; return; }
-    if (matchesKey(data, "tab")) {
+    const command = commandFor("packages", data)?.id;
+    if (command === "pkg-back" && state.detail) { state.detail = false; state.scroll = 0; return; }
+    if (command === "pkg-close" || command === "pkg-back") { this.mode = "cells"; this.reveal = true; return; }
+    if (command === "pkg-find") { pane.typing = true; state.filter = ""; state.scroll = 0; return; }
+    if (command === "pkg-tab") {
       const tabs = ["Installed", "Missing", "Operations"] as const;
       state.tab = tabs[(tabs.indexOf(state.tab) + 1) % tabs.length]!; state.cursor = 0; state.scroll = 0; state.detail = false; return;
     }
-    const delta = data === "j" || matchesKey(data, "down") ? 1 : data === "k" || matchesKey(data, "up") ? -1 : 0;
+    const delta = command === "pkg-down" ? 1 : command === "pkg-up" ? -1 : 0;
     if (delta) {
       if (state.detail) pane.treeCursor = Math.max(0, Math.min(pane.trees().length - 1, pane.treeCursor + delta));
       else state.cursor = Math.max(0, state.cursor + delta);
       state.scroll = Math.max(0, state.scroll + delta); return;
     }
-    if (matchesKey(data, "pageDown") || matchesKey(data, "pageUp")) { state.scroll = Math.max(0, state.scroll + (matchesKey(data, "pageDown") ? this.viewport() : -this.viewport())); return; }
-    if (data === "g" || data === "G") { state.scroll = data === "g" ? 0 : Number.MAX_SAFE_INTEGER; return; }
+    if (command === "pkg-page-down" || command === "pkg-page-up") { state.scroll = Math.max(0, state.scroll + (command === "pkg-page-down" ? this.viewport() : -this.viewport())); return; }
+    if (command === "pkg-top" || command === "pkg-bottom") { state.scroll = command === "pkg-top" ? 0 : Number.MAX_SAFE_INTEGER; return; }
     if (!f) return;
-    if (data === "r") { this.openPackages(f); return; }
-    if (matchesKey(data, "enter")) {
+    if (command === "pkg-refresh") { this.openPackages(f); return; }
+    if (command === "pkg-detail") {
       if (state.detail) {
         const treeRow = pane.trees()[pane.treeCursor];
         if (treeRow?.expandable) state.expanded = state.expanded.includes(treeRow.key) ? state.expanded.filter(key => key !== treeRow.key) : [...state.expanded, treeRow.key];
@@ -950,74 +978,75 @@ export class NotebookView implements Component, Focusable {
       return;
     }
     if (pane.mutating) { this.note = "A package operation is already pending."; return; }
-    if (data === "a") {
+    if (command === "pkg-add") {
       this.openDock({ kind: "ask", title: "Install kernel requirement", hint: "Requirement, not a shell command · enter review · esc cancel", submit: text => {
         if (!text.trim()) return;
         this.closeDock(); this.packageMutation(f, "install", text.trim()); this.renderReady();
       }, cancel: () => { this.closeDock(); this.renderReady(); } });
-    } else if ((data === "u" || data === "x") && state.tab === "Installed" && !state.detail) {
+    } else if ((command === "pkg-upgrade" || command === "pkg-remove") && state.tab === "Installed" && !state.detail) {
       const selected = pane.installed()[state.cursor];
-      if (selected) this.packageMutation(f, data === "u" ? "upgrade" : "remove", selected.name);
+      if (selected) this.packageMutation(f, command === "pkg-upgrade" ? "upgrade" : "remove", selected.name);
     }
   }
 
   private variablesKey(f: Followed | undefined, data: string): void {
+    const command = commandFor("variables", data)?.id;
     const page = this.viewport();
     const list = f ? variableList(f.notebook, this.varFilter, this.varSort) : [];
     const at = Math.max(0, list.findIndex((v) => v.name === this.varCursor));
-    if (matchesKey(data, "escape") && this.varDetail) { this.varDetail = false; this.varScroll = 0; return; }
+    if (command === "var-back" && this.varDetail) { this.varDetail = false; this.varScroll = 0; return; }
     if (this.varDetail) {
-      const down = data === "j" || matchesKey(data, "down"), up = data === "k" || matchesKey(data, "up");
-      if (down || up || data === "g" || data === "G") {
-        this.varScroll = data === "g" ? 0 : data === "G" ? Number.MAX_SAFE_INTEGER : Math.max(0, this.varScroll + (down ? 1 : -1)); return;
+      const down = command === "var-down", up = command === "var-up";
+      if (down || up || command === "var-first" || command === "var-last") {
+        this.varScroll = command === "var-first" ? 0 : command === "var-last" ? Number.MAX_SAFE_INTEGER : Math.max(0, this.varScroll + (down ? 1 : -1)); return;
       }
-      const next = matchesKey(data, "pageDown") || matchesKey(data, "ctrl+d") || data === " ";
-      const previous = matchesKey(data, "pageUp") || matchesKey(data, "ctrl+u");
+      const next = command === "var-page-down" || command === "var-half-down";
+      const previous = command === "var-page-up" || command === "var-half-up";
       if (next || previous) { this.varScroll = Math.max(0, this.varScroll + (next ? page : -page)); return; }
     }
-    if (data === "s") { const sorts: VariableSort[] = ["name", "type", "definition"]; this.varSort = sorts[(sorts.indexOf(this.varSort) + 1) % sorts.length]!; return; }
+    if (command === "var-sort") { const sorts: VariableSort[] = ["name", "type", "definition"]; this.varSort = sorts[(sorts.indexOf(this.varSort) + 1) % sorts.length]!; return; }
     const moveTo = (i: number) => { this.varCursor = list[Math.max(0, Math.min(list.length - 1, i))]?.name; this.reveal = true; };
-    if (matchesKey(data, "ctrl+c")) { this.leave(); return; }
-    if (matchesKey(data, "escape") || data === "v" || data === "q" || data === "h" || matchesKey(data, "left")) {
+    if (command === "var-leave") { this.leave(); return; }
+    if (command === "var-close" || command === "var-back") {
       this.mode = "cells";
       this.scroll = 0;
       this.reveal = true;
       return;
     }
-    if (data === "{") { this.switchNotebook(-1); this.mode = "variables"; return; }
-    if (data === "}") { this.switchNotebook(1); this.mode = "variables"; return; }
-    if (data === "/") { this.typing = true; this.findFrom = this.varCursor; this.varFilter = ""; return; }
-    if (matchesKey(data, "down") || data === "j") return moveTo(at + 1);
-    if (matchesKey(data, "up") || data === "k") return moveTo(at - 1);
-    if (matchesKey(data, "home") || data === "g") { this.scroll = 0; return moveTo(0); }
-    if (matchesKey(data, "end") || data === "G") return moveTo(list.length - 1);
-    if (matchesKey(data, "ctrl+u")) return this.move(-Math.max(1, Math.floor(page / 2)));
-    if (matchesKey(data, "ctrl+d")) return this.move(Math.max(1, Math.floor(page / 2)));
-    if (matchesKey(data, "pageUp")) return this.move(-page);
-    if (matchesKey(data, "pageDown") || matchesKey(data, "space")) return this.move(page);
+    if (command === "notebook-previous") { this.switchNotebook(-1); this.mode = "variables"; return; }
+    if (command === "notebook-next") { this.switchNotebook(1); this.mode = "variables"; return; }
+    if (command === "var-find") { this.typing = true; this.findFrom = this.varCursor; this.varFilter = ""; return; }
+    if (command === "var-down") return moveTo(at + 1);
+    if (command === "var-up") return moveTo(at - 1);
+    if (command === "var-first") { this.scroll = 0; return moveTo(0); }
+    if (command === "var-last") return moveTo(list.length - 1);
+    if (command === "var-half-up") return this.move(-Math.max(1, Math.floor(page / 2)));
+    if (command === "var-half-down") return this.move(Math.max(1, Math.floor(page / 2)));
+    if (command === "var-page-up") return this.move(-page);
+    if (command === "var-page-down") return this.move(page);
     const v = list[at];
     if (!f || !v) return;
-    if (matchesKey(data, "enter") || data === "l" || matchesKey(data, "right")) {
+    if (command === "var-detail") {
       this.varDetail = true; this.varScroll = 0;
-    } else if (data === "d") {
+    } else if (command === "var-definition") {
       if (v.definedBy && f.notebook.cells.has(v.definedBy)) this.goTo(f, v.definedBy);
       else this.note = `No cell defines ${v.name}.`;
-    } else if (data === "y" || data === "Y") {
-      try { if (this.actions.copy) this.actions.copy(data === "y" ? v.name : v.value); else this.copy(data === "y" ? v.name : v.value); }
+    } else if (command === "var-copy" || command === "var-copy-value") {
+      try { if (this.actions.copy) this.actions.copy(command === "var-copy" ? v.name : v.value); else this.copy(command === "var-copy" ? v.name : v.value); }
       catch (e) { this.note = message(e); }
-    } else if (data === "a") {
+    } else if (command === "var-ask") {
       const defining = v.definedBy ? f.notebook.cells.get(v.definedBy) : undefined;
       if (this.actions.ask) this.actions.ask(f, defining, `Explain variable ${v.name} (${v.datatype}), defined in ${defining ? cellTitle(f.notebook, defining) : "unknown cell"}.`);
       else this.note = "Asking the agent is not available here.";
-    } else if (data === "t") {
+    } else if (command === "var-table") {
       const cell = v.definedBy ? f.notebook.cells.get(v.definedBy) : undefined;
       if (!cell?.output?.table) this.note = `No table output for ${v.name}.`;
       else { this.goTo(f, cell.id); this.enterTable(f, cell); }
-    } else if (data === ">") {
+    } else if (command === "var-uses") {
       const users = f.notebook.order.filter(id => v.usedBy.includes(id));
       if (!users.length) { this.note = `No cell uses ${v.name}.`; return; }
       const choices = ["Cancel", ...users.map((id, i) => `${i + 1}. ${cellTitle(f.notebook, f.notebook.cells.get(id)!)}`)];
-      void this.actions.confirm?.(`Use sites of ${v.name}`, choices).then(choice => {
+      void this.confirm(`Use sites of ${v.name}`, choices).then(choice => {
         const id = users[choices.indexOf(choice ?? "") - 1];
         if (!this.closed && id && this.current()?.notebook === f.notebook) { this.goTo(f, id); this.tui.requestRender(); }
       }).catch(e => { this.note = message(e); this.renderReady(); });
@@ -1038,12 +1067,12 @@ export class NotebookView implements Component, Focusable {
       switch (p.kind) {
         case "table": this.enterTable(f, target); break;
         case "chart":
-          if (!this.live.inspect(target.output)) this.note = "Not a live chart.";
+          if (!this.live.inspect(p.output ?? target.output)) this.note = "Not a live chart.";
           break;
         case "widgets":
           if (!this.actions.setWidget) this.note = "Widgets cannot be driven here.";
           else if (f.connection !== "connected") this.note = "The notebook is not connected.";
-          else this.widget = { cell: target.id, index: 0, sub: 0 };
+          else this.widget = { cell: target.id, index: p.widgetIndices?.[0] ?? 0, sub: 0 };
           break;
         case "code": this.openInlineEditor(f, target, "python"); break;
         case "markdown": this.openInlineEditor(f, target); break;
@@ -1072,7 +1101,7 @@ export class NotebookView implements Component, Focusable {
   private paneAt(x: number, line: number): "outline" | "detail" | undefined {
     const { shows, detailLeft, outlineHeight } = this.panes;
     if (shows === "both") return x >= detailLeft ? "detail" : "outline";
-    return line < outlineHeight ? "outline" : line > outlineHeight ? "detail" : undefined;
+    return line < outlineHeight ? "outline" : line >= this.panes.detailTop ? "detail" : undefined;
   }
 
   /** ^D, PgDn and the like: the detail scrolls (the outline follows the cursor). */
@@ -1086,8 +1115,25 @@ export class NotebookView implements Component, Focusable {
   handleInput(data: string): void {
     if (this.closed || this.packageConfirmation) return;
     this.syncConfirmation();
+    if (this.messageView) {
+      if (!this.messageView.input(data, this.lastPage)) this.messageView = undefined;
+      this.tui.requestRender();
+      return;
+    }
+    if (matchesKey(data, "f8")) {
+      const text = this.transientMessage(true);
+      if (text) {
+        this.messageView = new MessageView({ text, scroll: 0 });
+        this.armedTarget = undefined;
+        this.armedRun = undefined;
+        this.armedStop = undefined;
+        this.armedUnmark = undefined;
+      }
+      this.tui.requestRender();
+      return;
+    }
     if (this.help) {
-      this.help = false;
+      this.help = this.helpView.handleInput(data, this.lastPage);
       this.tui.requestRender();
       return;
     }
@@ -1098,23 +1144,43 @@ export class NotebookView implements Component, Focusable {
       return;
     }
     if (this.dock) {
-      this.dock.handleInput(data);
+      if (this.tui.terminal.rows > 0) this.dock.handleInput(data);
       this.tui.requestRender();
       return;
     }
+    // Text owners bypass the command registry: punctuation must remain literal.
+    if (this.typing) return this.typeFilter(data);
     if (this.mode === "packages" && this.packagePane.typing) {
       this.packagesKey(this.current(), data); this.tui.requestRender(); return;
     }
-    if (!this.typing && (data === "!" || data === "\\")) {
+    const command = commandFor(this.commandMode(), data);
+    if (!command) {
+      // Unknown notebook input still cancels a pending two-press action, as before.
+      // It must not leave an old destructive confirmation armed for a later key.
+      if (this.mode === "cells" && !this.table && !this.widget && !this.live.inspecting) {
+        this.armedTarget = undefined;
+        this.armedRun = undefined;
+        this.armedStop = undefined;
+        this.armedUnmark = undefined;
+        this.note = undefined;
+      }
+      this.timing = false;
+      this.tui.requestRender();
+      return;
+    }
+    if (command.id === "help") {
+      this.openHelp(); this.tui.requestRender(); return;
+    }
+    if (command.id === "diagnostics" || command.id === "output") {
       const current = this.preferences.snapshot();
-      if (data === "!") {
+      if (command.id === "diagnostics") {
         const modes = ["all", "errors", "warnings", "none"] as const;
         this.preferences.update({ diagnostics: modes[(modes.indexOf(current.diagnostics) + 1) % modes.length]! });
       } else this.preferences.update({ showOutput: !current.showOutput });
       // An invisible control must never retain keyboard or mouse ownership.
       const focused = this.part === undefined ? undefined : this.lastParts[this.part];
       const hidesOutput = !this.preferences.snapshot().showOutput && (!!this.widget || !!this.table || this.live.inspecting || (focused && ["printed", "output", "table", "chart", "widgets"].includes(focused.kind)));
-      if (hidesOutput || (data === "!" && focused?.kind === "error")) this.focusSource();
+      if (hidesOutput || (command.id === "diagnostics" && focused?.kind === "error")) this.focusSource();
       this.tui.requestRender();
       return;
     }
@@ -1123,7 +1189,13 @@ export class NotebookView implements Component, Focusable {
       this.tui.requestRender();
       return;
     }
-    if (this.live.inspecting && this.live.key(data)) { this.tui.requestRender(); return; }
+    if (this.live.inspecting && command.id.startsWith("chart-")) {
+      // LiveCharts owns the pointer protocol; registry aliases map to its canonical input.
+      const key = command.keys[0]!;
+      this.live.key(key === "escape" ? "\x1b" : key === "space" ? " " : key);
+      this.tui.requestRender();
+      return;
+    }
     if (this.typing) return this.typeFilter(data);
     const f = this.current();
     if (this.widget) {
@@ -1136,14 +1208,8 @@ export class NotebookView implements Component, Focusable {
       this.tui.requestRender();
       return;
     }
-    if (data === "|") {
+    if (command.id === "dock") {
       this.toggleDock();
-      this.tui.requestRender();
-      return;
-    }
-    if (data === "?") {
-      this.help = true;
-      this.note = undefined;
       this.tui.requestRender();
       return;
     }
@@ -1152,7 +1218,7 @@ export class NotebookView implements Component, Focusable {
       this.tui.requestRender();
       return;
     }
-    if (data === "P") {
+    if (command.id === "packages") {
       this.mode = "packages";
       this.openPackages(f);
       this.tui.requestRender();
@@ -1173,44 +1239,44 @@ export class NotebookView implements Component, Focusable {
       this.close();
       return;
     }
-    if (matchesKey(data, "escape") || matchesKey(data, "ctrl+c") || matchesKey(data, "q") || matchesKey(data, "h") || matchesKey(data, "left")) {
+    if (command.id === "leave") {
       this.leave();
       return;
     }
-    if (!this.preferences.snapshot().showOutput && ["t", "w", "i"].includes(data)) {
+    if (!this.preferences.snapshot().showOutput && ["table", "widget", "chart"].includes(command.id)) {
       this.focusSource();
       this.tui.requestRender();
       return;
     }
-    if (data === "T") {
+    if (command.id === "timing") {
       this.timing = true;
       this.tui.requestRender();
       return;
     }
-    if (data === "#" || matchesKey(data, "f7")) {
+    if (command.id === "numbers") {
       this.preferences.update({ lineNumbers: !this.preferences.snapshot().lineNumbers });
       this.tui.requestRender();
       return;
     }
-    if (data === "H" || data === "L" || data === "0" || data === "s") {
+    if (["code-left", "code-right", "code-reset", "diagram"].includes(command.id)) {
       const candidates = this.lastDetail.filter(r => r.blockId && (this.part === undefined || r.part === this.part));
       const blockId = candidates.find(r => r.blockId === this.focusedBlock)?.blockId ?? candidates[0]?.blockId;
       if (blockId) {
-        if (data === "s" && this.diagramBlocks.has(blockId)) {
+        if (command.id === "diagram" && this.diagramBlocks.has(blockId)) {
           if (!this.diagramSources.delete(blockId)) this.diagramSources.add(blockId);
           // Markdown caches the adapter identity; change it only when source visibility changes.
           this.diagramRows = (source, options) => this.renderDiagram(source, options);
-        } else if (data !== "s") {
+        } else if (command.id !== "diagram") {
           const state = this.codeOffsets.get(blockId) ?? { offset: 0 };
-          if (data === "0") state.offset = 0;
-          else scrollCode(state, data === "H" ? -8 : 8, Number.MAX_SAFE_INTEGER);
+          if (command.id === "code-reset") state.offset = 0;
+          else scrollCode(state, command.id === "code-left" ? -8 : 8, Number.MAX_SAFE_INTEGER);
           this.codeOffsets.set(blockId, state);
         }
       }
       this.tui.requestRender();
       return;
     }
-    if (data === "b" && f) {
+    if (command.id === "edit" && f) {
       const cell = this.cursorCell(f);
       if (cell) {
         const selected = this.part === undefined ? undefined : this.lastParts[this.part];
@@ -1220,14 +1286,14 @@ export class NotebookView implements Component, Focusable {
       this.tui.requestRender();
       return;
     }
-    if (data === "B" && f) {
+    if (command.id === "fold-code" && f) {
       const cell = this.cursorCell(f);
       if (cell) this.toggleCode(cell.id);
       this.tui.requestRender();
       return;
     }
     const page = this.viewport();
-    if (matchesKey(data, "x")) {
+    if (command.id === "interrupt") {
       const busy = f && f.connection === "connected" && (f.notebook.running() || f.notebook.queued() > 0);
       this.armedRun = undefined;
       if (!f || !busy) {
@@ -1246,8 +1312,8 @@ export class NotebookView implements Component, Focusable {
       this.tui.requestRender();
       return;
     }
-    if (f && (data === "R" || data === "A")) {
-      const what = data === "R" ? "stale" : "all";
+    if (f && (command.id === "run-stale" || command.id === "run-all")) {
+      const what = command.id === "run-stale" ? "stale" : "all";
       this.armedTarget = undefined;
       if (this.armedRun?.what !== what || this.armedRun.target !== interruptKey(f)) this.armedRun = { what, target: interruptKey(f) };
       else {
@@ -1259,7 +1325,7 @@ export class NotebookView implements Component, Focusable {
       this.tui.requestRender();
       return;
     }
-    if (f && data === "S" && this.actions.stopServers && (this.actions.servers?.(f).length ?? 0) > 0) {
+    if (f && command.id === "stop" && this.actions.stopServers && (this.actions.servers?.(f).length ?? 0) > 0) {
       this.armedTarget = undefined;
       this.armedRun = undefined;
       if (this.armedStop !== interruptKey(f)) this.armedStop = interruptKey(f);
@@ -1271,7 +1337,7 @@ export class NotebookView implements Component, Focusable {
       this.tui.requestRender();
       return;
     }
-    if (f && data === "M") {
+    if (f && command.id === "unmark") {
       this.armedTarget = undefined;
       this.armedRun = undefined;
       this.armedStop = undefined;
@@ -1302,21 +1368,21 @@ export class NotebookView implements Component, Focusable {
     this.note = undefined;
     const nb = f?.notebook;
     this.syncPart();
-    if (data === "{") this.switchNotebook(-1);
-    else if (data === "}") this.switchNotebook(1);
-    else if (matchesKey(data, "o") && f) {
+    if (command.id === "notebook-previous") this.switchNotebook(-1);
+    else if (command.id === "notebook-next") this.switchNotebook(1);
+    else if (command.id === "browser" && f) {
       this.actions.openInBrowser(f);
       this.note = "Opened in the browser.";
-    } else if (data === "/") {
+    } else if (command.id === "find") {
       this.typing = true;
       this.findFrom = this.cursor;
       this.filter = "";
-    } else if (data === "O") {
+    } else if (command.id === "section") {
       this.section = !this.section;
       sectionMode = this.section;
       this.note = this.section ? "Section view: the whole section." : "Cell view.";
       this.reveal = true;
-    } else if (f && nb && (data === "z" || matchesKey(data, "tab"))) {
+    } else if (f && nb && command.id === "fold-section") {
       const c = this.cursorCell(f);
       const cells = nb.ordered();
       const at = c ? cells.findIndex((x) => x.id === c.id) : -1;
@@ -1328,29 +1394,29 @@ export class NotebookView implements Component, Focusable {
         this.follow = false;
         this.reveal = true;
       }
-    } else if (f && nb && (data === "Z" || matchesKey(data, "shift+tab"))) {
+    } else if (f && nb && command.id === "fold-all") {
       if (this.folded.size) this.folded.clear();
       else for (const c of nb.ordered()) if (nb.headings(c).length) this.folded.add(c.id);
       const c = this.cursorCell(f);
       if (c) this.cursor = c.id;
       this.reveal = true;
     } else if (f && nb && this.filter && (matchesKey(data, "ctrl+k") || matchesKey(data, "ctrl+j"))) this.step(f, matchesKey(data, "ctrl+j") ? 1 : -1);
-    else if (f && nb && (data === "[" || matchesKey(data, "ctrl+k"))) this.step(f, -1, (c) => nb.headings(c).length > 0, "No section here.");
-    else if (f && nb && (data === "]" || matchesKey(data, "ctrl+j"))) this.step(f, 1, (c) => nb.headings(c).length > 0, "No section here.");
-    else if (data === "n" || data === "p") {
+    else if (f && nb && command.id === "section-previous") this.step(f, -1, (c) => nb.headings(c).length > 0, "No section here.");
+    else if (f && nb && command.id === "section-next") this.step(f, 1, (c) => nb.headings(c).length > 0, "No section here.");
+    else if (command.id === "part-next" || command.id === "part-previous") {
       if (!this.lastParts.length) this.note = "This cell has one part.";
       else {
         const last = this.lastParts.length - 1;
-        if (data === "n") this.part = this.part === undefined ? 0 : Math.min(last, this.part + 1);
+        if (command.id === "part-next") this.part = this.part === undefined ? 0 : Math.min(last, this.part + 1);
         else this.part = this.part === undefined ? last : Math.max(0, this.part - 1);
         this.focusedBlock = undefined;
         this.scrollToPart = true;
       }
-    } else if (f && data === "t") this.enterTable(f, this.cursorCell(f));
-    else if (f && nb && (data === "c" || data === "C")) {
+    } else if (f && command.id === "table") this.enterTable(f, this.cursorCell(f));
+    else if (f && nb && (command.id === "change-next" || command.id === "change-previous")) {
       if (![...nb.agentChanges.keys()].some((id) => nb.cells.has(id))) this.note = "The agent has not changed a cell since your last message.";
-      else this.step(f, data === "c" ? 1 : -1, (c) => nb.agentChanges.has(c.id), "The agent has not changed a cell since your last message.");
-    } else if (f && nb && data === "d") {
+      else this.step(f, command.id === "change-next" ? 1 : -1, (c) => nb.agentChanges.has(c.id), "The agent has not changed a cell since your last message.");
+    } else if (f && nb && command.id === "diff") {
       const c = this.cursorCell(f);
       if (!c || !nb.agentChanges.has(c.id)) this.note = "The agent has not changed this cell since your last message.";
       else {
@@ -1358,21 +1424,21 @@ export class NotebookView implements Component, Focusable {
         this.cursor = c.id;
         this.reveal = true;
       }
-    } else if (f && data === "v") {
+    } else if (f && command.id === "variables") {
       this.mode = "variables";
       this.scroll = 0;
       this.reveal = true;
-    } else if (f && nb && (data === "<" || data === ">")) {
+    } else if (f && nb && (command.id === "parent" || command.id === "child")) {
       const c = this.cursorCell(f);
       const order = nb.order;
       const here = c ? order.indexOf(c.id) : -1;
-      const candidates = c ? (data === "<" ? nb.parents(c.id) : nb.children(c.id)) : [];
-      const pick = data === "<"
+      const candidates = c ? (command.id === "parent" ? nb.parents(c.id) : nb.children(c.id)) : [];
+      const pick = command.id === "parent"
         ? [...candidates].reverse().find((id) => order.indexOf(id) < here) ?? candidates[0]
         : candidates.find((id) => order.indexOf(id) > here) ?? candidates[0];
-      if (!pick) this.note = data === "<" ? "No upstream cell." : "No downstream cell.";
+      if (!pick) this.note = command.id === "parent" ? "No upstream cell." : "No downstream cell.";
       else this.goTo(f, pick);
-    } else if (f && data === "w") {
+    } else if (f && command.id === "widget") {
       const c = this.cursorCell(f);
       const widgets = c?.output?.widgets?.slice(0, MAX_WIDGETS) ?? [];
       if (!c || !widgets.length) this.note = "This cell shows no widgets.";
@@ -1384,33 +1450,35 @@ export class NotebookView implements Component, Focusable {
         this.follow = false;
         this.reveal = true;
       }
-    } else if (f && data === "a") this.openAsk(f);
-    else if (f && data === ":") this.openScratch(f);
-    else if (f && data === "m") this.openMark(f);
-    else if (f && data === "i") {
+    } else if (f && command.id === "ask") this.openAsk(f);
+    else if (f && command.id === "scratch") this.openScratch(f);
+    else if (f && command.id === "mark") this.openMark(f);
+    else if (f && command.id === "chart") {
       const c = this.cursorCell(f);
-      if (c && this.live.inspect(c.output)) this.note = "";
+      const focused = this.part === undefined ? undefined : this.lastParts[this.part];
+      const output = focused?.kind === "chart" ? focused.output : c?.output?.blocks?.find(block => block.output.vega || block.output.plotly)?.output ?? c?.output;
+      if (c && this.live.inspect(output)) this.note = "";
       else this.note = "Select a cell with a live chart first, then i.";
-    } else if (f && (matchesKey(data, "enter") || matchesKey(data, "l"))) this.activate(f);
-    else if (f && data === "r") {
+    } else if (f && command.id === "activate") this.activate(f);
+    else if (f && command.id === "run") {
       const c = this.cursorCell(f);
       if (c) this.startRun(f, [c], cellTitle(f.notebook, c));
       else this.note = "No cell selected.";
-    } else if (f && data === "e") this.step(f, 1, (c) => !!c.error);
-    else if (f && data === "E") this.step(f, -1, (c) => !!c.error);
-    else if (data === "f") {
+    } else if (f && command.id === "error-next") this.step(f, 1, (c) => !!c.error);
+    else if (f && command.id === "error-previous") this.step(f, -1, (c) => !!c.error);
+    else if (command.id === "follow") {
       this.follow = true;
       this.reveal = true;
-    } else if (f && (matchesKey(data, "down") || matchesKey(data, "j"))) this.step(f, 1);
-    else if (f && (matchesKey(data, "up") || matchesKey(data, "k"))) this.step(f, -1);
-    else if (matchesKey(data, "ctrl+u")) this.scrollBy(-Math.max(1, Math.floor(page / 2)));
-    else if (matchesKey(data, "ctrl+d")) this.scrollBy(Math.max(1, Math.floor(page / 2)));
-    else if (matchesKey(data, "pageUp")) this.scrollBy(-page);
-    else if (matchesKey(data, "pageDown") || matchesKey(data, "space")) this.scrollBy(page);
-    else if (matchesKey(data, "home") || data === "g") {
+    } else if (f && command.id === "down") this.step(f, 1);
+    else if (f && command.id === "up") this.step(f, -1);
+    else if (command.id === "half-up") this.scrollBy(-Math.max(1, Math.floor(page / 2)));
+    else if (command.id === "half-down") this.scrollBy(Math.max(1, Math.floor(page / 2)));
+    else if (command.id === "page-up") this.scrollBy(-page);
+    else if (command.id === "page-down") this.scrollBy(page);
+    else if (command.id === "first") {
       this.move(-Infinity);
       this.cursor = f ? this.cells(f)[0]?.id : undefined;
-    } else if (matchesKey(data, "end") || data === "G") {
+    } else if (command.id === "last") {
       this.follow = false;
       this.scroll = Number.MAX_SAFE_INTEGER;
       this.cursor = f ? this.cells(f).at(-1)?.id : undefined;
@@ -1468,7 +1536,8 @@ export class NotebookView implements Component, Focusable {
     const removed = changes.filter((c) => c.kind === "deleted").length;
     const agent = changes.length ? `${dot}${th.fg("accent", `agent: ${[edited ? `${edited} changed` : "", created ? `${created} new` : "", removed ? `${removed} removed` : ""].filter(Boolean).join(" · ")}`)}` : "";
     const prefs = this.preferences.snapshot();
-    const visibility = [prefs.diagnostics !== "all" ? `diagnostics ${prefs.diagnostics === "none" ? "hidden" : prefs.diagnostics}` : "", !prefs.showOutput ? "output hidden" : ""].filter(Boolean).join(" · ");
+    const context = [this.help ? "help" : this.commandMode(), this.mode === "variables" ? this.varFilter : this.mode === "packages" ? this.packagePane.state.filter : this.filter].filter(Boolean).join(" · ");
+    const visibility = [context, prefs.diagnostics !== "all" ? `diagnostics ${prefs.diagnostics === "none" ? "hidden" : prefs.diagnostics}` : "", !prefs.showOutput ? "output hidden" : ""].filter(Boolean).join(" · ");
     const left = `${visibility ? `${th.fg("dim", visibility)}${dot}` : ""}${busy ? `${th.fg("accent", "●")} ` : errors ? `${th.fg("error", "✗")} ` : ""}${th.bold(file)}  ${state}${working}${agent}`;
     const right = th.fg("dim", [this.actions.lastRun?.(f) ?? "", shortWhere(f.attachment.url) ?? "", servers.length ? `server ${servers.join(", ")}` : ""].filter(Boolean).join(" · "));
     const gap = inner - visibleWidth(left) - visibleWidth(right);
@@ -1502,20 +1571,30 @@ export class NotebookView implements Component, Focusable {
   }
 
   /** The docked prompt, with a scratch run above it: full frame rows. */
-  private dockRows(width: number): string[] {
+  private dockRows(width: number, maxRows: number): string[] {
     const dock = this.dock;
     if (!dock) {
       this.lastDock = 0;
       return [];
     }
     const th = this.theme;
-    const out = [frameRule(width, th)];
-    if (dock.kind === "scratch" && this.scratch) out.push(...this.scratchLines(bodyWidth(width)).map((l) => frameRow(l, width, th)));
-    const half = Math.max(4, Math.floor(this.tui.terminal.rows / 2));
-    const room = Math.max(3, half - out.length);
-    out.push(...dock.render(bodyWidth(width), room).map((l) => frameRow(l, width, th)));
-    this.lastDock = out.length;
-    return out;
+    if (maxRows <= 0) return [];
+    // Allocate the focused input/cursor before decoration, previews or notebook body.
+    const rendered = dock.render(bodyWidth(width), Number.MAX_SAFE_INTEGER);
+    const input = rendered.slice(1, -1);
+    const cursor = Math.max(0, input.findIndex(line => line.includes(CURSOR_MARKER)));
+    const budget = Math.min(maxRows, Math.max(4, Math.floor(this.tui.terminal.rows / 2)));
+    const decoration = Math.min(3, budget - 1);
+    const room = Math.max(1, budget - decoration);
+    const start = Math.max(0, Math.min(cursor, input.length - room));
+    const out = input.slice(start, start + room);
+    if (decoration >= 1) out.unshift(rendered[0]!);
+    if (decoration >= 2) out.push(rendered.at(-1)!);
+    const spare = budget - decoration - Math.min(input.length, room);
+    if (dock.kind === "scratch" && this.scratch && spare > 0) out.unshift(...this.scratchLines(bodyWidth(width)).slice(-spare));
+    const framed = out.map(line => frameRow(line, width, th));
+    if (decoration >= 3) framed.unshift(frameRule(width, th));
+    return framed;
   }
 
   /** Scroll so row `at` shows when asked to, within the rows there are. */
@@ -1530,7 +1609,6 @@ export class NotebookView implements Component, Focusable {
     this.reveal = false;
   }
 
-  /** What the `?` page lists first: where the notebook is. */
   private whereText(f: Followed): string {
     const servers = this.actions.servers?.(f) ?? [];
     return [f.attachment.path, f.attachment.url, servers.length ? `server ${servers.join(", ")}` : ""].filter(Boolean).join(" · ");
@@ -1551,10 +1629,33 @@ export class NotebookView implements Component, Focusable {
     if (!f && this.dock) this.closeDock();
     if (!f) this.widget = undefined;
     else if (this.widget) this.drivenWidgets(f);
-    const dock = this.dockRows(width);
+    const height = Math.max(0, this.tui.terminal.rows);
+    const dock = this.messageView ? [] : this.dockRows(width, height <= CHROME ? height : height - CHROME);
+    this.lastDock = dock.length;
+    const transient = this.messageView ? undefined : this.transientMessage();
+    const transientRows = messagePreview(transient, inner, Math.max(0, height - CHROME - dock.length));
+    this.messageOverflow = !!transient && wrapTextWithAnsi(clean(transient), inner).length > transientRows.length;
+    this.lastTransient = transientRows.length;
+    if (height < CHROME || (height === CHROME && dock.length)) {
+      this.lastPage = 0;
+      this.lastRows = []; this.lastDetail = []; this.lastOutline = [];
+      if (dock.length) return dock;
+      const compact = height === 1 ? [row(this.footer(f, inner))] : [row(file), ...transientRows.map(row)];
+      if (height > 1) compact.push(row(this.footer(f, inner)));
+      return compact.slice(0, height);
+    }
     const page = this.viewport();
     this.lastPage = page;
-    if (!f) {
+    if (this.messageView) {
+      out.push(row(`${file} · message`), rule);
+      const rows = this.messageView.render(inner, page);
+      for (let i = 0; i < page; i++) out.push(row(rows[i] ?? ""));
+    } else if (this.help) {
+      out.push(row(f ? this.header(f, file, inner) : `${file} · help`), rule);
+      const rows = this.helpView.render(inner, page, th, width, f ? this.whereText(f) : undefined).map((text): Row => ({ text }));
+      this.lastRows = rows;
+      for (let i = 0; i < page; i++) out.push(row(rows[i]?.text ?? ""));
+    } else if (!f) {
       out.push(row(`${th.bold(file)}  ${th.fg("dim", "No longer followed.")}`), rule);
       const recovery = this.editors.active ? this.editors.render(inner, page) : [];
       for (let i = 0; i < page; i++) out.push(row(recovery[i] ?? ""));
@@ -1568,19 +1669,6 @@ export class NotebookView implements Component, Focusable {
       const rows = cell ? ["Exact timing · local timezone", cellTitle(f.notebook, cell), `Start: ${exact(cell.status === "running" ? cell.runningSince : cell.lastRunStartedAt)}`, `End: ${cell.status === "running" ? "running" : exact(cell.lastRunEndedAt)}`, `Duration: ${cell.status === "running" && cell.runningSince !== undefined ? `${duration(Date.now() - cell.runningSince)} (running)` : cell.lastRunMs !== undefined ? duration(cell.lastRunMs) : "unknown"}`, "T / Esc closes"] : ["No selected cell"];
       this.lastRows = rows.map(text => ({ text }));
       for (let i = 0; i < page; i++) out.push(row(rows[i] ?? ""));
-    } else if (this.help) {
-      out.push(row(this.header(f, file, inner)), rule);
-      const rows = (this.editors.active ? [
-        "Inline Neovim · isolated built-in runtime", "F1 help · F2 save only · F3 save and run",
-        "F4 leave (dirty edits require confirmation)", "F5 dock/fullscreen · F6 revert saved base",
-        "F7 line numbers · ctrl+] chat focus",
-        "Esc, ?, #, Enter and all ordinary keys: Vim",
-        ":w / :wq save only · :q! discards",
-        ":MarimoRun / :MarimoRevert / :MarimoClose",
-        "Conflicts keep drafts; no force overwrite.", "F1 / Esc closes help",
-      ] : helpLines(th, this.whereText(f))).map((text): Row => ({ text }));
-      this.lastRows = rows;
-      for (let i = 0; i < page; i++) out.push(row(rows[i]?.text ?? ""));
     } else if (this.mode === "packages") {
       out.push(row(this.header(f, file, inner)), rule);
       if (this.packageOwner !== f.notebook) this.openPackages(f);
@@ -1635,9 +1723,11 @@ export class NotebookView implements Component, Focusable {
       const lw = split ? outlineWidth(width) : inner;
       const dw = split ? inner - lw - SEPARATOR_WIDTH : inner;
       const shows = split ? "both" : "stacked";
-      const oh = split ? page : stackedOutlineRows(page);
-      const dh = split ? page : page - oh - 1;
-      const detailTop = split ? 0 : oh + 1;
+      // Transient messages may leave only a row or two: omit the stacked outline,
+      // rather than giving the detail a negative rectangle or pushing the footer offscreen.
+      const oh = split ? page : page < 3 ? 0 : stackedOutlineRows(page);
+      const detailTop = split || !oh ? 0 : oh + 1;
+      const dh = split ? page : page - detailTop;
       this.panes = { lw, detailLeft: split ? CONTENT_LEFT + lw + SEPARATOR_WIDTH : CONTENT_LEFT, detailTop, outlineHeight: oh, shows };
       const outline = (): ReturnType<typeof outlineRows> => outlineRows(nb, th as PaneTheme, Date.now(), { cursor: this.cursor, folded: this.folded, filter: this.filter, width: lw });
       let built = outline();
@@ -1668,12 +1758,12 @@ export class NotebookView implements Component, Focusable {
       if (cell) {
         this.syncPart();
         // A table the view drives: its page, cursor and selection; a cell that needs its rows asks for them once.
-        const tableSource = (c: Cell) => {
-          const t = this.tableFor(f, c);
+        const tableSource = (c: Cell, output?: CellOutput) => {
+          const t = this.tableFor(f, c, output);
           if (!t) return undefined;
           const s = t.session;
           if (c.id === cell.id && s.needsFetch() && this.actions.table) void s.refresh(f, this.actions.table);
-          const focused = this.table?.cell === c.id;
+          const focused = this.table?.cell === c.id && this.table.objectId === t.data.objectId;
           // Match tableGrid's selection marker, not the removed detail gutter.
           const rowSelect = t.data.selection === "single" || t.data.selection === "multi";
           if (focused) s.ensureVisible(dw - (rowSelect ? 5 : 0));
@@ -1699,10 +1789,10 @@ export class NotebookView implements Component, Focusable {
             },
           };
         };
-        const tableCard = (c: Cell): string[] | undefined => {
-          const t = this.tableFor(f, c);
+        const tableCard = (c: Cell, output?: CellOutput): string[] | undefined => {
+          const t = this.tableFor(f, c, output);
           const card = t?.session.card;
-          if (!t || !card || this.table?.cell !== c.id) return undefined;
+          if (!t || !card || this.table?.cell !== c.id || this.table.objectId !== t.data.objectId) return undefined;
           const lines = card.kind === "row"
             ? rowCard(t.data, card.index, dw, th as PaneTheme, t.session.page * t.session.pageSize + card.index)
             : columnCard(t.data, card.column, t.session.summaries, card.top, dw, th as PaneTheme);
@@ -1782,7 +1872,7 @@ export class NotebookView implements Component, Focusable {
       };
       for (let i = 0; i < page; i++) {
         const left = i < oh ? built.rows[this.scroll + i]?.text ?? (this.filter && !cells.length && i === 0 ? th.fg("dim", `No cell matches "${this.filter}".`) : "") : "";
-        if (!split && i === oh) { out.push(row(th.fg("dim", "─".repeat(inner)))); continue; }
+        if (!split && oh > 0 && i === oh) { out.push(row(th.fg("dim", "─".repeat(inner)))); continue; }
         if (!split && i < oh) { out.push(row(left)); continue; }
         const di = this.detailScroll + i - detailTop;
         const r = detail[di];
@@ -1792,6 +1882,7 @@ export class NotebookView implements Component, Focusable {
       this.live.endFrame();
     }
     out.push(...dock);
+    out.push(...transientRows.map(text => row(th.fg("warning", text))));
     out.push(rule);
     out.push(row(this.footer(f, inner)));
     out.push(bottom(width, th));
@@ -1805,56 +1896,51 @@ export class NotebookView implements Component, Focusable {
     return out;
   }
 
+  private async confirm(question: string, choices: readonly string[]): Promise<string | undefined> {
+    this.packageConfirmation = true;
+    try { return await this.actions.confirm?.(question, choices); }
+    finally { this.packageConfirmation = false; }
+  }
+
+  private commandMode(): CommandMode {
+    return this.editors.active ? "editor" : this.table ? "table" : this.widget ? "widget" : this.live?.inspecting ? "chart" : this.mode === "cells" ? "notebook" : this.mode;
+  }
+
+  private openHelp(): void {
+    this.helpView.open(this.commandMode());
+    this.help = true;
+    this.note = undefined;
+  }
+
+  private transientMessage(includeHidden = false): string | undefined {
+    if (this.help && !includeHidden) return undefined;
+    if (this.armedRun) return `${commandKey(this.armedRun.what === "all" ? "run-all" : "run-stale")} again to run ${this.armedRun.what} cells`;
+    if (this.armedTarget) return `${commandKey("interrupt")} again to interrupt`;
+    if (this.armedStop) return `${commandKey("stop")} again to stop the server`;
+    return this.note;
+  }
+
   private footer(f: Followed | undefined, inner: number): string {
-    if (this.editors.active) return truncateToWidth(this.note ?? "F1 help · F2 save · F3 save+run · F4 leave", inner);
-    const th = this.theme;
-    const nav = th.fg("dim", this.actions.docked ? "? keys · esc chat · q close" : "? keys · esc back");
-    const withNav = (left: string) => {
-      const gap = inner - visibleWidth(left) - visibleWidth(nav);
-      return gap >= 1 ? `${left}${" ".repeat(gap)}${nav}` : left;
-    };
-    const noted = (hint: string) => (this.note ? `${th.fg("warning", this.note)}  ${th.fg("dim", hint)}` : th.fg("dim", hint));
-    if (this.help) return th.fg("dim", "any key closes");
-    if (this.dock) return this.note ? th.fg("warning", this.note) : th.fg("dim", "esc closes the prompt");
-    if (this.live.inspecting) return `${th.fg("accent", "chart")} ${th.fg("dim", "arrows or hjkl move (shift: farther) · space starts/ends a drag · +/- zoom · 0 reset · esc done")}`;
-    if (this.typing) {
-      const text = this.mode === "variables" ? this.varFilter : this.filter;
-      return `${th.fg("accent", "/")} ${text}${th.fg("dim", "▏")}  ${th.fg("dim", "enter keep · esc clear")}`;
+    if (this.messageView) {
+      const tokens = ["Esc/F8 back", "j/k scroll", `${this.messageView.state.scroll + 1}`];
+      const kept: string[] = [];
+      for (const token of tokens) if (visibleWidth([...kept, token].join(" · ")) <= inner) kept.push(token);
+      return this.theme.fg("dim", kept.join(" · "));
     }
-    if (this.table) return withNav(noted("table: hjkl move · [ ] page · s sort · / search · f filter · space select · enter row · i column · c summary · y copy · D csv · esc done"));
-    if (this.widget) return withNav(noted("widget: h/l change · space toggle · enter type · j/k next · esc done"));
-    if (this.mode === "packages") return th.fg("dim", "? help · Enter tree · r refresh · a add · u upgrade · x remove · Esc back");
-    if (this.mode === "variables") return withNav(noted(`enter detail · d definition · > uses · ${this.varFilter ? `/ ${this.varFilter}` : "/ filter"} · v back`));
-    const connected = !!f && f.connection === "connected";
-    const busy = connected && (f.notebook.running() || f.notebook.queued() > 0);
-    // Armed keys and notes stand in for the hints.
-    if (this.armedRun?.what === "stale") return withNav(th.fg("error", "R again to run stale cells"));
-    if (this.armedRun?.what === "all") return withNav(th.fg("error", "A again to run all cells"));
-    if (this.armedTarget) return withNav(th.fg("error", "x again to interrupt"));
-    if (this.armedStop) return withNav(th.fg("error", "S again to stop the server"));
-    if (this.note) return withNav(th.fg("warning", this.note));
+    if (this.messageOverflow && !this.lastTransient) return this.theme.fg("dim", inner >= 10 ? "F8 message" : inner >= 2 ? "F8" : "");
+    // Dock owns its focused prompt hints; never replace those with a key inventory.
+    if (this.dock) return this.theme.fg("dim", "esc closes the prompt");
+    const mode = this.commandMode();
+    if (this.help) return this.theme.fg("dim", footerTokens(inner, "help-search", `${this.helpView.state.scroll + 1}`, mode === "editor"));
+    const focused = this.part === undefined ? undefined : this.lastParts[this.part];
     const cell = f ? this.cursorCell(f) : undefined;
-    const hints: string[] = [];
-    const focused = this.part !== undefined ? this.lastParts[this.part] : undefined;
-    if (f) {
-      hints.push("↑↓ cells");
-      if (focused) hints.push(`enter ${focused.kind === "markdown" || focused.kind === "code" ? "edit" : focused.kind === "table" || focused.kind === "chart" || focused.kind === "widgets" ? (focused.kind === "widgets" ? "widgets" : focused.kind) : ""}`.trim());
-      else hints.push("enter edit");
-    }
-    const more: string[] = [];
-    if (connected && this.actions.run && cell && !f.notebook.isMarkdown(cell)) more.push(busy ? "x interrupt" : "r run");
-    if (this.lastParts.length > 1) more.push("n/p parts");
-    if (this.lastParts.some((p) => p.kind === "table") && this.actions.table) more.push("t table");
-    if (cell?.output?.widgets?.length && this.actions.setWidget) more.push("w widgets");
-    if (f && cell && f.notebook.agentChanges.has(cell.id)) more.push("d diff");
-    if (f && (cell?.error || f.notebook.errors().length)) more.push("e next error");
-    if (f && this.live.rects.length) more.push("i inspect chart");
-    if (busy && !more.includes("x interrupt")) more.push("x interrupt");
-    if (f && this.actions.ask) more.push("a ask");
-    if (connected && this.actions.scratch) more.push(": python");
-    hints.push(...more.slice(0, 6 - hints.length));
-    if (f && this.filter) hints.unshift(th.fg("accent", `/ ${this.filter}`));
-    return withNav(th.fg("dim", hints.slice(0, 6).join(" · ")));
+    const contextual = focused?.kind ?? (cell?.output?.widgets?.length ? "widgets" : cell?.output?.table ? "table" : this.live.rects.length ? "chart" : undefined);
+    const busy = !!f && (!!f.notebook.running() || f.notebook.queued() > 0);
+    const primary = mode === "editor" ? "editor-f2" : mode === "table" ? "table-row" : mode === "widget" ? "widget-type" : mode === "chart" ? "chart-drag" : mode === "variables" ? "var-detail" : mode === "packages" ? "pkg-detail" : contextual === "table" ? "table" : contextual === "widgets" ? "widget" : contextual === "chart" ? "chart" : this.actions.run && cell && f && !f.notebook.isMarkdown(cell) ? busy ? "interrupt" : "run" : "activate";
+    const cells = f ? this.cells(f) : [];
+    const at = cells.findIndex(cell => cell.id === this.cursor);
+    const position = mode === "notebook" && at >= 0 ? `${at + 1}/${cells.length}` : undefined;
+    return this.theme.fg("dim", footerTokens(inner, primary, position, mode === "editor"));
   }
 
   /** A theme change or resize: the terminal may have dropped image data with the redraw, so live charts upload their frames again. */
@@ -1916,7 +2002,16 @@ export class NotebookView implements Component, Focusable {
   }
 
   handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
-    if (this.editors.active || this.packageConfirmation) return { handled: true };
+    if (this.packageConfirmation || this.tui.terminal.rows < CHROME) return { handled: true };
+    if (this.messageView) {
+      if (event.type === "wheel") { this.messageView.wheel(event.wheelDelta ?? 0); this.tui.requestRender(); }
+      return { handled: true };
+    }
+    if (this.help) {
+      if (event.type === "wheel") { this.helpView.wheel(event.wheelDelta ?? 0); this.tui.requestRender(); }
+      return { handled: true };
+    }
+    if (this.editors.active) return { handled: true };
     if (this.mode === "packages" || (this.mode === "variables" && this.varDetail)) {
       if (event.type === "wheel" && !this.help && !this.dock) { this.scrollBy(event.wheelDelta ?? 0); this.tui.requestRender(); }
       return { handled: true };
@@ -1969,11 +2064,6 @@ export class NotebookView implements Component, Focusable {
       return { handled: true, render: false };
     }
     if (event.type !== "click") return undefined;
-    if (this.help) {
-      this.help = false;
-      this.tui.requestRender();
-      return { handled: true };
-    }
     const f = this.current();
     if (!f || this.dock) return { handled: true };
     const line = event.y - ROWS_TOP;
@@ -1989,8 +2079,11 @@ export class NotebookView implements Component, Focusable {
       const r = this.lastDetail[this.detailScroll + line - this.panes.detailTop];
       this.focusedBlock = r?.blockId;
       if (this.table && r?.tableRow !== undefined) {
-        const t = f.notebook.cells.get(this.table.cell);
-        const tf = t ? this.tableFor(f, t) : undefined;
+        const cellId = r.part === undefined ? this.table.cell : this.lastParts[r.part]?.cell ?? this.table.cell;
+        const t = f.notebook.cells.get(cellId);
+        if (r.tableObjectId) this.table = { cell: cellId, objectId: r.tableObjectId };
+        this.part = r.part;
+        const tf = t ? this.tableFor(f, t, r.output ?? r.tableObjectId) : undefined;
         if (tf) { tf.session.row = r.tableRow; tf.session.card = undefined; }
       } else if (r?.part !== undefined && !r.widget && !r.code) {
         this.part = r.part;

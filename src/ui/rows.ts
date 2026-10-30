@@ -32,6 +32,8 @@ export interface Row {
   part?: number;
   /** A body row of a table grid: its index within the page. */
   tableRow?: number;
+  tableObjectId?: string;
+  output?: CellOutput;
   /** A line of the variables pane. */
   variable?: string;
   /** One line of an inline image: its place in the block, the block's height, and what shows when the block is not fully on screen. */
@@ -66,7 +68,10 @@ export interface RowOptions {
   live?: LiveCharts;
   onVega?: () => void;
   /** The marimo table behind a cell's output, as the view drives it (its current page and cursor), when it does. */
-  table?: (cell: Cell) => { data: TableData; render?: TableRender; /** What the table's label adds: `sorted by cups`. */ note?: string } | undefined;
+  widgetRows?: (cell: Cell, indices: number[]) => Row[];
+  /** A card for this particular table leaf, when focused. */
+  tableCard?: (cell: Cell, output?: CellOutput) => string[] | undefined;
+  table?: (cell: Cell, output?: CellOutput) => { data: TableData; render?: TableRender; /** What the table's label adds: `sorted by cups`. */ note?: string } | undefined;
 }
 
 export const firstLine = (code: string) => code.split("\n").find((l) => l.trim())?.trim() ?? "";

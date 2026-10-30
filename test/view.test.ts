@@ -7,7 +7,7 @@ import { SessionPreferences } from "../src/ui/settings.js";
 import { progressRows } from "../src/ui/progress.js";
 import type { ProgressTask } from "../src/core/progress.js";
 import { row as notebookRow, CONTENT_LEFT, bodyWidth } from "../src/ui/notebook-frame.js";
-import { visibleWidth } from "@earendil-works/pi-tui";
+import { CURSOR_MARKER, visibleWidth } from "@earendil-works/pi-tui";
 import { NotebookSource } from "../src/ui/source.js";
 import { notebookKey } from "../src/ui/identity.js";
 import { InlineEditorManager } from "../src/ui/inline-editor.js";
@@ -488,7 +488,7 @@ test("r runs the cell under the cursor with its current code; R and A need a sec
   } finally { v.dispose(); }
 });
 
-test("a failed run shows the reason in the footer", async () => {
+test("a failed run shows the reason above the footer", async () => {
   const f = nbWith([{ id: "a", code: "x = 1" }]);
   const v = make(f, { run: async () => { throw new Error("marimo answered 500"); } });
   try {
@@ -652,10 +652,14 @@ test("the keyboard pointer drives a live chart without a mouse: arrows move it, 
     await new Promise((r) => setTimeout(r, 0));
     v.render(100);
     v.handleInput("j");
-    expect(screen(v)).toContain("i inspect chart");
+    screen(v);
+    // Clearing the transient error restores a body row and reopens the chart at
+    // its new geometry. Let that frame arrive before activating the pointer.
+    await editorReady();
+    expect(v.render(100).join("\n")).toContain("i inspect chart");
     v.handleInput("i");
     expect(live.inspecting).toBe(true);
-    expect(screen(v)).toContain("space starts/ends a drag");
+    expect(screen(v)).toContain("? help · space start / end drag");
     const start = events.at(-1);
     v.handleInput("\x1b[C"); // right
     expect(events.at(-1)).toMatchObject({ type: "move", x: start.x + 0.5, y: start.y });
@@ -784,16 +788,19 @@ test("the mouse: the wheel scrolls, a click selects, and a double click edits in
   } finally { v.dispose(); fake.editors.dispose(); }
 });
 
-test("? lists every key and any key closes it", () => {
+test("? opens context help; navigation and unrelated keys do not close it", () => {
   const f = nbWith([{ id: "a", code: "x = 1" }]);
   const v = make(f);
   try {
-    expect(screen(v)).toContain("? keys · esc back");
+    expect(screen(v)).toContain("? help");
     v.handleInput("?");
-    expect(screen(v)).toContain("Notebook view keys");
-    expect(screen(v)).toContain("Widgets");
+    expect(screen(v)).toContain("Notebook controls");
+    expect(screen(v)).toContain("Navigation");
     v.handleInput("j");
-    expect(screen(v)).not.toContain("Notebook view keys");
+    v.handleInput("x");
+    expect(screen(v)).toContain("Notebook controls");
+    v.handleInput("?");
+    expect(screen(v)).not.toContain("Notebook controls");
   } finally { v.dispose(); }
 });
 
@@ -937,6 +944,42 @@ const widgetHtml = [
   "<marimo-ui-element object-id='a-2' random-id='3'><marimo-text data-initial-value='&quot;hi&quot;' data-label='&quot;t&quot;'></marimo-text></marimo-ui-element>",
 ].join("");
 
+test("widget value prompt strips JSON-encoded terminal commands before styling", () => {
+  const f = nbWith([{ id: "a", code: "text" }]);
+  const label = "safe\x1b]52;c;PAYLOAD\x07 title";
+  const encoded = JSON.stringify(label).replaceAll('"', "&quot;");
+  const html = `<marimo-ui-element object-id='text-0'><marimo-text data-initial-value='&quot;hi&quot;' data-label='${encoded}'></marimo-text></marimo-ui-element>`;
+  f.notebook.apply("cell-op", { cell_id: "a", status: "idle", output: { channel: "output", mimetype: "text/html", data: html } });
+  expect(f.notebook.cells.get("a")!.output!.widgets![0]!.label).toBe(label);
+  const setWidget = vi.fn(); const v = make(f, { setWidget });
+  try {
+    v.render(100); v.handleInput("w"); v.handleInput("\r");
+    const rendered = screen(v);
+    expect(rendered).toContain("safe title: new value");
+    expect(rendered).not.toContain("\x1b]52");
+    expect(rendered).not.toContain("PAYLOAD");
+    press(v, "!"); v.handleInput("\r");
+    expect(setWidget).toHaveBeenCalledWith(f, expect.anything(), expect.objectContaining({ objectId: "text-0" }), "hi!");
+  } finally { v.dispose(); }
+});
+
+test.each([12, 10, 7, 6, 4, 2, 1])("focused prompt exposes its input and cursor before submission at 46x%i", height => {
+  const f = dataflow(); const ask = vi.fn(); const terminal = shortTui();
+  terminal.terminal.rows = height;
+  const v = new NotebookView(terminal as any, theme, notebookKey(f), { followed: () => [f], interrupt: async () => {}, openInBrowser: () => {}, ask }, () => {});
+  try {
+    v.handleInput("a"); press(v, "draft?");
+    (v as any).note = "a transient warning that must not displace focused input";
+    const lines = v.render(46);
+    expect(lines.length).toBeLessThanOrEqual(height);
+    expect(lines.every(line => visibleWidth(line) === 46)).toBe(true);
+    expect(lines.join("\n")).toContain("draft?");
+    expect(lines.join("\n")).toContain(CURSOR_MARKER);
+    v.handleInput("\r");
+    expect(ask).toHaveBeenCalledWith(f, expect.anything(), "draft?");
+  } finally { v.dispose(); }
+});
+
 test("w drives a cell's widgets: h/l change a slider, space a checkbox, Enter types a text's value", () => {
   const f = nbWith([{ id: "a", code: "n = mo.ui.slider(0, 10)" }]);
   f.notebook.apply("cell-op", { cell_id: "a", status: "idle", output: { channel: "output", mimetype: "text/html", data: widgetHtml } });
@@ -946,7 +989,7 @@ test("w drives a cell's widgets: h/l change a slider, space a checkbox, Enter ty
     expect(screen(v)).toMatch(/◆ n {2}━+●─+ {2}3 {2}0–10/u);
     expect(screen(v)).toContain("w widgets");
     v.handleInput("w");
-    expect(screen(v)).toContain("widget: h/l change");
+    expect(screen(v)).toContain("? help · enter type value");
     v.handleInput("l");
     expect(setWidget).toHaveBeenLastCalledWith(f, expect.objectContaining({ id: "a" }), expect.objectContaining({ objectId: "a-0" }), 4);
     expect(screen(v)).toMatch(/▸ n {2}━+●─+ {2}4 {2}0–10/u);
@@ -961,7 +1004,7 @@ test("w drives a cell's widgets: h/l change a slider, space a checkbox, Enter ty
     expect(setWidget).toHaveBeenLastCalledWith(f, expect.anything(), expect.objectContaining({ objectId: "a-2" }), "hi!");
     expect(v[INPUT_CONTEXT]()).toBe("viewer");
     v.handleInput("\x1b");
-    expect(screen(v)).not.toContain("widget: h/l change");
+    expect(screen(v)).not.toContain("? help · enter type value");
   } finally { v.dispose(); }
 });
 
@@ -1172,7 +1215,7 @@ test("docked: the banner says how to switch, Esc goes to the chat, q closes, and
   try {
     const lines = v.render(100);
     expect(lines[0]).toContain("Notebook nb.py · ctrl+] focus");
-    expect(lines.join("\n")).toContain("esc chat · q close");
+    expect(lines.join("\n")).toContain("? help · enter edit / activate");
     v.handleInput("\x1b");
     expect(focusMain).toHaveBeenCalledOnce();
     expect(done).not.toHaveBeenCalled();
@@ -1297,6 +1340,85 @@ test.each([46, 80, 100, 120, 180])("table focus uses the rendered column width (
   } finally { v.dispose(); clearTableSessions(); }
 });
 
+test("focused ordered chart actions inspect the leaf output object, not its compatibility projection", () => {
+  const f = nbWith([{ id: "a", code: "mixed" }]);
+  const first = { kind: "chart" as const, plotly: "first" };
+  const second = { kind: "chart" as const, plotly: "second" };
+  f.notebook.cells.get("a")!.output = { ...first, blocks: [{ id: "first", output: first }, { id: "second", output: second }] };
+  const v = make(f);
+  try {
+    (v as any).cursor = "a"; (v as any).partCell = "a";
+    (v as any).lastParts = [{ kind: "chart", cell: "a", output: second }];
+    (v as any).part = 0;
+    const inspect = vi.spyOn((v as any).live, "inspect").mockReturnValue(true);
+    v.handleInput("i"); expect(inspect).toHaveBeenLastCalledWith(second);
+    v.handleInput("\r"); expect(inspect).toHaveBeenLastCalledWith(second);
+  } finally { v.dispose(); }
+});
+
+test("ordered leaf tables drive only their own objectId", async () => {
+  const { clearTableSessions } = await import("../src/ui/table-session.js");
+  clearTableSessions();
+  const f = nbWith([{ id: "a", code: "mixed" }]);
+  f.notebook.apply("cell-op", { cell_id: "a", status: "idle", output: { channel: "output", mimetype: "text/html", data: tableHtml() + "<p>between</p>" + tableHtml().replace("t-0", "t-1") } });
+  const call = vi.fn(async () => ({ data: "[]", total_rows: 30 }));
+  const setTableSelection = vi.fn();
+  const v = make(f, { table: { call, file: async () => "[]" }, setTableSelection });
+  try {
+    v.render(120);
+    const parts = (v as any).lastParts;
+    const index = parts.findIndex((part: any) => part.tableObjectId === "t-1");
+    expect(index).toBeGreaterThanOrEqual(0);
+    (v as any).part = index;
+    v.handleInput("t");
+    expect(v.snapshot().table?.objectId).toBe("t-1");
+    v.render(120); call.mockClear();
+    v.handleInput("]"); await editorReady();
+    expect(call).toHaveBeenCalledWith(f, "t-1", "search", expect.anything());
+    expect(call.mock.calls.every(args => (args as unknown[])[1] === "t-1")).toBe(true);
+    v.handleInput(" ");
+    expect(setTableSelection.mock.calls.every(args => args[2] === "t-1")).toBe(true);
+  } finally { v.dispose(); clearTableSessions(); }
+});
+
+test("mixed interactive and static table leaves retain distinct data and static focus cannot drive the remote table", async () => {
+  const { clearTableSessions } = await import("../src/ui/table-session.js"); clearTableSessions();
+  const f = nbWith([{ id: "a", code: "mixed" }]);
+  const html = tableHtml().replace("Oslo", "REMOTE_TABLE") + "<table><tr><th>city</th></tr><tr><td>STATIC_TABLE</td></tr></table>";
+  f.notebook.apply("cell-op", { cell_id: "a", status: "idle", output: { channel: "output", mimetype: "text/html", data: html } });
+  const call = vi.fn(async () => ({ data: "[]" }));
+  const v = make(f, { table: { call, file: async () => "[]" } });
+  try {
+    const rendered = v.render(120).join("\n");
+    expect(rendered).toContain("REMOTE_TABLE"); expect(rendered).toContain("STATIC_TABLE");
+    const parts = (v as any).lastParts;
+    const index = parts.findIndex((p: any) => p.kind === "table" && !p.output?.table?.objectId);
+    expect(index).toBeGreaterThanOrEqual(0);
+    (v as any).part = index;
+    call.mockClear(); v.handleInput("\r");
+    expect(v.snapshot().table).toBeUndefined();
+    v.handleInput("t"); v.handleInput(" ");
+    expect(v.snapshot().table).toBeUndefined(); expect(call).not.toHaveBeenCalled();
+  } finally { v.dispose(); clearTableSessions(); }
+});
+
+test("Enter on the second ordered widget leaf drives its flat widget index", () => {
+  const f = nbWith([{ id: "a", code: "widgets" }]);
+  const checkbox = (id: string) => `<marimo-ui-element object-id='${id}'><marimo-checkbox data-initial-value='false' data-label='&quot;${id}&quot;'></marimo-checkbox></marimo-ui-element>`;
+  f.notebook.apply("cell-op", { cell_id: "a", status: "idle", output: { channel: "output", mimetype: "text/html", data: checkbox("first") + "<p>between</p>" + checkbox("second") } });
+  const setWidget = vi.fn(); const v = make(f, { setWidget });
+  try {
+    v.render(120);
+    const parts = (v as any).lastParts;
+    const index = parts.findIndex((p: any) => p.widgetIndices?.includes(1));
+    expect(index).toBeGreaterThanOrEqual(0);
+    (v as any).part = index; v.handleInput("\r");
+    expect(v.snapshot().widget?.index).toBe(1);
+    v.handleInput(" ");
+    expect(setWidget).toHaveBeenCalledExactlyOnceWith(f, expect.anything(), expect.objectContaining({ objectId: "second" }), true);
+  } finally { v.dispose(); }
+});
+
 test("t drives a marimo table: paging, sorting and selection go through the kernel", async () => {
   const { clearTableSessions } = await import("../src/ui/table-session.js");
   clearTableSessions();
@@ -1312,7 +1434,7 @@ test("t drives a marimo table: paging, sorting and selection go through the kern
   try {
     v.render(100);
     v.handleInput("t");
-    expect(screen(v)).toContain("table: hjkl move");
+    expect(screen(v)).toContain("? help · enter row detail");
     v.handleInput("]");
     await Promise.resolve();
     expect(calls.at(-1)).toMatchObject({ fn: "search", args: { page_number: 1, page_size: 1 } });
@@ -1327,9 +1449,9 @@ test("t drives a marimo table: paging, sorting and selection go through the kern
     expect(screen(v)).toContain("row 1");
     v.handleInput("\x1b");
     expect(screen(v)).not.toContain("row 1");
-    expect(screen(v)).toContain("table: hjkl move");
+    expect(screen(v)).toContain("? help · enter row detail");
     v.handleInput("\x1b");
-    expect(screen(v)).not.toContain("table: hjkl move");
+    expect(screen(v)).not.toContain("? help · enter row detail");
   } finally { v.dispose(); clearTableSessions(); }
 });
 
@@ -1554,4 +1676,439 @@ test("STEP3 T shows exact local timezone start/end and duration without inventin
     expect(text).toContain("Duration: 1.0s");
     expect(text).not.toContain("Start: unknown");
   } finally { v.dispose(); }
+});
+
+// --- STEP6: compact contextual chrome and modal, searchable registry help ---
+test("STEP6 package help cannot refresh, mutate, confirm, or change the selected package", async () => {
+  const f = dataflow();
+  const reconcile = vi.fn(async () => ({
+    fingerprint: { filename: "/w/nb.py", executable: "/env/python", pid: 42, manager: "uv", version: "0.25.0", capabilities: {} },
+    packages: [{ name: "numpy", version: "1" }, { name: "pandas", version: "2" }],
+  }));
+  const mutate = vi.fn(), dependencyTree = vi.fn(), confirm = vi.fn();
+  const v = make(f, { packages: async () => ({ reconcile, mutate, dependencyTree }) as unknown as PackageClient, confirm });
+  try {
+    v.handleInput("P"); await editorReady(); await editorReady(); screen(v);
+    const before = v.snapshot(); reconcile.mockClear(); v.handleInput("?");
+    for (const key of ["j", "G", "\t", "a", "u", "x", "r", "\r", "P"]) v.handleInput(key);
+    for (const spy of [reconcile, mutate, dependencyTree, confirm]) expect(spy).not.toHaveBeenCalled();
+    expect(v.snapshot().help).toBeDefined();
+    v.handleInput("?"); expect(v.snapshot()).toEqual(before);
+  } finally { v.dispose(); }
+});
+
+test.each(["", "v", "P"])("STEP6 %s filter keeps ? literal and owns input ahead of help", key => {
+  const f = dataflow(); const v = make(f);
+  try {
+    screen(v); if (key) v.handleInput(key);
+    v.handleInput("/"); press(v, "value?");
+    const state = v.snapshot();
+    expect(key === "v" ? state.varFilter : key === "P" ? state.packagePane?.filter : state.filter).toBe("value?");
+    expect(state.help).toBeUndefined(); expect(v[INPUT_CONTEXT]()).toBe("filter");
+    v.handleInput("\x1b"); expect(v.snapshot().help).toBeUndefined();
+  } finally { v.dispose(); }
+});
+
+test.each([46, 80, 100, 120, 180].flatMap(width => ["t", "w"].map(key => ({ width, key }))))(
+  "STEP6 $key footer and help fit a 12-row terminal at $width columns", ({ width, key }) => {
+    const f = nbWith([{ id: "a", code: "value" }]);
+    f.notebook.apply("cell-op", { cell_id: "a", status: "idle", output: { channel: "output", mimetype: "text/html", data: key === "t" ? tableHtml() : widgetHtml } });
+    const v = new NotebookView(shortTui() as any, theme, notebookKey(f), {
+      followed: () => [f], interrupt: async () => {}, openInBrowser: () => {}, setWidget: vi.fn(),
+      table: { call: vi.fn(async () => ({})), file: async () => "[]" },
+    }, () => {});
+    try {
+      v.render(width); v.handleInput(key);
+      const lines = v.render(width);
+      expect(lines).toHaveLength(12);
+      expect(lines.every(line => visibleWidth(line) === width)).toBe(true);
+      expect(footerText(lines)).toBe(`? help · enter ${key === "t" ? "row detail" : "type value"}`);
+      v.handleInput("?");
+      const help = v.render(width);
+      expect(help).toHaveLength(12);
+      expect(help.every(line => visibleWidth(line) === width)).toBe(true);
+      expect(help.join("\n")).toContain("Notebook controls");
+      expect(footerText(help)).not.toMatch(/…|\.\.\./u);
+    } finally { v.dispose(); }
+  },
+);
+const shortTui = () => ({ requestRender: vi.fn(), terminal: { rows: 12 } });
+const footerText = (lines: string[]) => plain(lines.at(-2)!).trim();
+const helpMouse = (type: string, extra = {}) => ({
+  type, button: type === "wheel" ? "none" : "left", x: 6, y: 5,
+  screenX: 6, screenY: 5, width: 80, height: 12,
+  shift: false, alt: false, ctrl: false, ...extra,
+}) as any;
+
+test.each([46, 80, 100, 120, 180])("STEP6 12-row terminal has a whole-token, single-line footer at %i columns", width => {
+  const f = dataflow();
+  const v = new NotebookView(shortTui() as any, theme, notebookKey(f), {
+    followed: () => [f], interrupt: async () => {}, openInBrowser: () => {}, run: vi.fn(),
+  }, () => {});
+  try {
+    for (const [key, action, position] of [
+      ["", "r run cell", "1/3"], ["v", "enter detail", ""],
+      ["\x1b", "r run cell", "1/3"], ["P", "enter dependency tree", ""],
+    ]) {
+      if (key) v.handleInput(key!);
+      const lines = v.render(width);
+      expect(lines).toHaveLength(12);
+      expect(lines.every(line => visibleWidth(line) === width)).toBe(true);
+      const footer = footerText(lines);
+      const tokens = footer.split(" · ");
+      expect(tokens.slice(0, 2)).toEqual(["? help", action]);
+      expect(tokens.length).toBeLessThanOrEqual(3);
+      if (tokens.length === 3) expect(tokens[2]).toBe(position);
+      expect(footer).not.toMatch(/[…\n]|\.\.\./u);
+      expect(lines.filter(line => plain(line).includes("? help"))).toHaveLength(1);
+    }
+  } finally { v.dispose(); }
+});
+
+test.each([
+  ["v", "Variables"], ["P", "Packages"], ["t", "Tables"], ["w", "Widgets"],
+])("STEP6 help opens in the %s mode category and restores its underlying mode", async (key, group) => {
+  const f = dataflow();
+  const html = key === "t" ? tableHtml() : widgetHtml;
+  f.notebook.apply("cell-op", { cell_id: "a", status: "idle", output: { channel: "output", mimetype: "text/html", data: html } });
+  const v = make(f, { table: { call: vi.fn(async () => ({})), file: async () => "[]" }, setWidget: vi.fn() });
+  let moved: NotebookView | undefined;
+  try {
+    screen(v); v.handleInput(key); screen(v);
+    const before = v.snapshot();
+    if (key === "t") expect(before.table).toMatchObject({ cell: "a", objectId: "t-0" });
+    if (key === "w") expect(before.widget).toMatchObject({ cell: "a", index: 0 });
+    v.handleInput("?");
+    expect(v.snapshot().help).toEqual({ group, query: "", typing: false, scroll: 0 });
+    expect(screen(v)).toContain("Notebook controls");
+    moved = make(f, { initial: v.snapshot() });
+    expect(screen(moved)).toContain("Notebook controls");
+    moved.handleInput("?"); screen(moved);
+    expect(moved.snapshot()).toEqual(before);
+  } finally { v.dispose(); moved?.dispose(); }
+});
+
+test("STEP6 help scrolls, cycles categories both ways, searches globally and Escape clears before closing", () => {
+  const f = followed();
+  const v = new NotebookView(shortTui() as any, theme, notebookKey(f), {
+    followed: () => [f], interrupt: async () => {}, openInBrowser: () => {},
+  }, () => {});
+  let moved: NotebookView | undefined;
+  try {
+    v.render(46); v.handleInput("?"); v.render(46);
+    v.handleInput("j"); expect(v.snapshot().help?.scroll).toBe(1);
+    v.handleInput("\x1b[6~"); expect(v.snapshot().help!.scroll).toBeGreaterThan(1);
+    v.render(46); v.handleInput("g"); expect(v.snapshot().help?.scroll).toBe(0);
+    v.handleInput("G"); v.render(46); expect(v.snapshot().help!.scroll).toBeGreaterThan(0);
+    v.handleInput("\t");
+    expect(v.snapshot().help).toMatchObject({ group: "Display", scroll: 0 });
+    v.handleInput("\x1b[Z"); expect(v.snapshot().help?.group).toBe("Navigation");
+    v.handleInput("\x1b[Z"); expect(v.snapshot().help?.group).toBe("Dock/Mouse");
+    v.handleInput("/"); press(v, "scroll"); v.handleInput("\r"); v.render(46);
+    expect(v.snapshot().help).toMatchObject({ group: "Dock/Mouse", query: "scroll", typing: false });
+    expect(v.render(46).join("\n")).toContain("All categories");
+    v.handleInput("j"); v.render(46);
+    expect(v.snapshot().help!.scroll).toBeGreaterThan(0);
+    const saved = v.snapshot();
+    moved = new NotebookView(shortTui() as any, theme, notebookKey(f), {
+      followed: () => [f], interrupt: async () => {}, openInBrowser: () => {}, initial: saved,
+    }, () => {});
+    expect(moved.render(46)).toEqual(v.render(46));
+    expect(moved.snapshot().help).toEqual(saved.help);
+    moved.handleInput("\x1b");
+    expect(moved.snapshot().help).toEqual({ group: "Dock/Mouse", query: "", typing: false, scroll: 0 });
+    moved.handleInput("/"); press(moved, "unfindable-command-needle");
+    expect(moved.render(46).join("\n")).toContain("No matching commands");
+    expect(moved[INPUT_CONTEXT]()).toBe("filter");
+    moved.handleInput("\x1b"); expect(moved[INPUT_CONTEXT]()).toBe("viewer");
+    expect(moved.snapshot().help).toBeDefined();
+    moved.handleInput("\x1b"); expect(moved.snapshot().help).toBeUndefined();
+  } finally { v.dispose(); moved?.dispose(); }
+});
+
+test("STEP6 ? is literal while searching help; typing state transfers and ordinary keys never dismiss help", () => {
+  const f = dataflow();
+  const v = make(f);
+  let moved: NotebookView | undefined;
+  try {
+    screen(v); const before = v.snapshot();
+    v.handleInput("?"); v.handleInput("/"); press(v, "save?");
+    expect(v.snapshot().help).toMatchObject({ query: "save?", typing: true });
+    moved = make(f, { initial: v.snapshot() }); screen(moved);
+    expect(moved[INPUT_CONTEXT]()).toBe("filter");
+    moved.handleInput("\x7f"); expect(moved.snapshot().help?.query).toBe("save");
+    moved.handleInput("\r");
+    for (const key of ["q", "a", "r", "x", "v", "P", "t", "w", "o", "!", "\\", "|", "\x03", "\r"]) {
+      moved.handleInput(key);
+      expect(moved.snapshot().help).toBeDefined();
+    }
+    expect(moved.snapshot().cursor).toBe(before.cursor);
+    moved.handleInput("?");
+    expect(moved.snapshot()).toEqual(before);
+  } finally { v.dispose(); moved?.dispose(); }
+});
+
+test("STEP6 help blocks notebook mutations, navigation and mouse activation", () => {
+  const f = dataflow(); busy(f);
+  const run = vi.fn(), interrupt = vi.fn(), stopServers = vi.fn(), openInBrowser = vi.fn(), ask = vi.fn(), dock = vi.fn();
+  const v = make(f, { run, interrupt, stopServers, servers: () => ["server"], openInBrowser, ask, dock });
+  try {
+    screen(v); const before = v.snapshot(); v.handleInput("?"); screen(v);
+    for (const key of ["j", "G", "]", "}", "r", "R", "R", "A", "A", "x", "x", "S", "S", "o", "a", "m", "M", "M", "!", "\\", "|", "q"]) v.handleInput(key);
+    for (const type of ["press", "click", "drag", "release"]) v.handleMouse(helpMouse(type, { clickCount: 2 }));
+    expect(v.snapshot().help).toBeDefined();
+    for (const spy of [run, interrupt, stopServers, openInBrowser, ask, dock]) expect(spy).not.toHaveBeenCalled();
+    v.handleInput("?"); expect(v.snapshot()).toEqual(before);
+  } finally { v.dispose(); }
+});
+
+test.each(["t", "w"])("STEP6 %s help prevents table/widget mutations and navigation from leaking", key => {
+  const f = nbWith([{ id: "a", code: "value" }]);
+  f.notebook.apply("cell-op", { cell_id: "a", status: "idle", output: { channel: "output", mimetype: "text/html", data: key === "t" ? tableHtml() : widgetHtml } });
+  const call = vi.fn(async () => ({})), setWidget = vi.fn(), setTableSelection = vi.fn();
+  const v = make(f, { table: { call, file: async () => "[]" }, setWidget, setTableSelection });
+  try {
+    screen(v); v.handleInput(key); screen(v); const before = v.snapshot(); call.mockClear();
+    v.handleInput("?"); screen(v);
+    for (const data of ["j", "l", " ", "s", "S", "]", "+", "x", "r", "\r"]) v.handleInput(data);
+    v.handleMouse(helpMouse("click")); v.handleMouse(helpMouse("wheel", { wheelDelta: 1 }));
+    expect(call).not.toHaveBeenCalled(); expect(setWidget).not.toHaveBeenCalled(); expect(setTableSelection).not.toHaveBeenCalled();
+    v.handleInput("?"); expect(v.snapshot()).toEqual(before);
+  } finally { v.dispose(); }
+});
+
+test("STEP6 editor F1 opens Editing help; wheel scrolls help, native punctuation resumes after close", async () => {
+  const f = dataflow(); const fake = fakeEditors(); const terminal = shortTui();
+  const v = new NotebookView(terminal as any, theme, notebookKey(f), {
+    followed: () => [f], interrupt: async () => {}, openInBrowser: () => {}, editors: fake.editors,
+  }, () => {});
+  try {
+    v.render(46); v.handleInput("b"); await editorReady(); v.render(46);
+    fake.draft("x = 2");
+    expect(plain(v.render(46)[1]!)).toContain("Neovim · python · unsaved");
+    v.handleInput("\x1bOP");
+    expect(v.snapshot().help).toMatchObject({ group: "Editing" });
+    expect(v[INPUT_CONTEXT]()).toBe("viewer"); v.render(46);
+    fake.session.input.mockClear();
+    const before = v.snapshot();
+    v.handleMouse(helpMouse("wheel", { width: 46, wheelDelta: 2 }));
+    expect(v.snapshot().help?.scroll).toBe(2);
+    v.handleMouse(helpMouse("wheel", { width: 46, wheelDelta: -1 }));
+    expect(v.snapshot().help?.scroll).toBe(1);
+    v.handleInput("x"); v.handleInput("\r");
+    expect(fake.session.input).not.toHaveBeenCalled();
+    expect(fake.editors.state).toMatchObject({ draft: "x = 2", dirty: true });
+    expect(v.snapshot().cursor).toBe(before.cursor);
+    v.handleInput("?"); expect(v[INPUT_CONTEXT]()).toBe("editor");
+    // A 12-row stacked view is deliberately too small for native input; grow it first.
+    terminal.terminal.rows = 28; v.render(100);
+    for (const key of ["?", "/", "!", "\\", "#", ":", "\t", "\x1b"]) v.handleInput(key);
+    expect(fake.session.input.mock.calls.map(([data]) => data)).toEqual(["?", "/", "!", "\\", "#", ":", "\t", "\x1b"]);
+    expect(v.snapshot().help).toBeUndefined();
+    expect(footerText(v.render(46))).toBe("f1 help · f2 save");
+  } finally { v.dispose(); fake.editors.dispose(); }
+});
+
+test("STEP6 focused prompt retains its hint and literal ? rather than opening help", () => {
+  const f = dataflow(); const ask = vi.fn(); const v = make(f, { ask });
+  try {
+    v.handleInput("a"); press(v, "why?");
+    const lines = v.render(80);
+    expect(lines.join("\n")).toContain("enter send · esc cancel");
+    expect(footerText(lines)).toBe("esc closes the prompt");
+    expect(lines.join("\n")).toContain("why?");
+    expect(v.snapshot().help).toBeUndefined(); expect(v[INPUT_CONTEXT]()).toBe("editor");
+    v.handleInput("\r"); expect(ask).toHaveBeenCalledWith(f, expect.anything(), "why?");
+  } finally { v.dispose(); }
+});
+
+test.each([46, 80, 100, 120, 180])("STEP6 bounded errors disclose a complete captured message (%i columns)", async width => {
+  const f = nbWith([{ id: "a", code: "x = 1" }]);
+  const reason = "kernel refused because " + "environment dependency mismatch ".repeat(4) + "FINAL_ERROR_TOKEN";
+  const v = new NotebookView(shortTui() as any, theme, notebookKey(f), {
+    followed: () => [f], interrupt: async () => {}, openInBrowser: () => {}, run: async () => { throw new Error(reason); },
+  }, () => {});
+  try {
+    const before = footerText(v.render(width)); v.handleInput("r"); await editorReady();
+    const lines = v.render(width);
+    expect(lines.length).toBe(12);
+    expect(lines.every(line => visibleWidth(line) === width)).toBe(true);
+    expect(footerText(lines)).toBe(before);
+    const messageRows = lines.slice(0, -3).map(line => plain(line).trim());
+    if (width < 100) expect(messageRows.join(" ")).toContain("F8 more");
+    v.handleInput("\x1b[19~"); v.render(width); v.handleInput("G");
+    expect(v.render(width).join("\n")).toContain("FINAL_ERROR_TOKEN");
+    v.handleInput("\x1b");
+    expect(footerText(lines)).not.toContain("kernel");
+    v.handleInput("A");
+    const armed = v.render(width);
+    expect(armed.at(-4)).toContain("A again to run all cells");
+    expect(footerText(armed)).toBe(before);
+  } finally { v.dispose(); }
+});
+
+test("STEP6 header preserves mode and active filter while help owns input", () => {
+  const f = dataflow(); const v = make(f);
+  try {
+    v.handleInput("/"); press(v, "load");
+    expect(plain(v.render(120)[1]!)).toContain("notebook · load");
+    // A restored, retained filter can exist without an active text owner.
+    const moved = make(f, { initial: { ...v.snapshot(), typing: false } });
+    try {
+      moved.handleInput("?");
+      expect(plain(moved.render(120)[1]!)).toContain("help · load");
+      expect(moved.snapshot().filter).toBe("load");
+    } finally { moved.dispose(); }
+    v.handleInput("\x1b"); v.handleInput("v");
+    expect(plain(v.render(120)[1]!)).toContain("variables");
+  } finally { v.dispose(); }
+});
+
+test.each(["", "v", "P"])("STEP6 active %s search input survives transfer", key => {
+  const f = dataflow(); const v = make(f);
+  try {
+    v.render(80);
+    if (key) v.handleInput(key);
+    v.handleInput("/"); press(v, "load");
+    const moved = make(f, { initial: v.snapshot() });
+    try {
+      expect(moved[INPUT_CONTEXT]()).toBe("filter");
+      moved.handleInput("?");
+      expect(moved.snapshot().help).toBeUndefined();
+      const state = moved.snapshot();
+      expect(key === "P" ? state.packagePane?.filter : key === "v" ? state.varFilter : state.filter).toBe("load?");
+    } finally { moved.dispose(); }
+  } finally { v.dispose(); }
+});
+
+test("STEP6 help supersedes timing and survives removal of the followed notebook", () => {
+  const f = dataflow(); let follows = [f];
+  const v = make(f, { followed: () => follows });
+  try {
+    v.render(80); v.handleInput("T");
+    expect(screen(v)).toContain("Exact timing");
+    v.handleInput("?");
+    expect(screen(v)).toContain("Notebook controls");
+    follows = [];
+    expect(screen(v)).toContain("Notebook controls");
+    v.handleInput("?");
+    expect(screen(v)).not.toContain("Notebook controls");
+  } finally { v.dispose(); }
+});
+
+test("STEP6 unregistered notebook keys disarm two-press destructive commands", () => {
+  const f = nbWith([{ id: "a", code: "x = 1" }]);
+  const run = vi.fn(async () => {});
+  const v = make(f, { run });
+  try {
+    v.render(80);
+    v.handleInput("A");
+    expect(v.render(80).join("\n")).toContain("A again to run all cells");
+    v.handleInput("unbound-key");
+    expect(v.render(80).join("\n")).not.toContain("A again to run all cells");
+    v.handleInput("A");
+    expect(run).not.toHaveBeenCalled();
+    v.handleInput("A");
+    expect(run).toHaveBeenCalledOnce();
+  } finally { v.dispose(); }
+});
+
+test.each([0, 1, 3, 5, 6, 7, 10, 12, 20])("STEP6 many-screen transient is bounded at height %i and its captured tail stays reachable", height => {
+  const f = nbWith([{ id: "a", code: "x = 1" }]);
+  const terminal = { requestRender: vi.fn(), terminal: { rows: height } };
+  const run = vi.fn();
+  const note = Array.from({ length: 150 }, (_, i) => `message line ${i}`).join("\n") + "\nFINAL_TAIL";
+  const v = new NotebookView(terminal as any, theme, notebookKey(f), {
+    followed: () => [f], interrupt: async () => {}, openInBrowser: () => {}, run,
+  }, () => {});
+  try {
+    (v as any).note = note;
+    const lines = v.render(46);
+    expect(lines.length).toBeLessThanOrEqual(height);
+    expect((v as any).lastTransient).toBe(Math.min(3, Math.max(0, height - 10)));
+    if (height >= 10) expect((v as any).lastPage).toBeGreaterThanOrEqual(4);
+    if (height >= 2 && height <= 10) expect(lines.join("\n")).toContain("F8 message");
+    terminal.terminal.rows = 12;
+    v.render(46); v.handleInput("\x1b[19~");
+    (v as any).note = "new asynchronous notice";
+    v.render(46); v.handleInput("G");
+    expect(v.render(46).join("\n")).toContain("FINAL_TAIL");
+    const captured = v.snapshot();
+    expect(captured.message?.text).not.toContain("asynchronous");
+    for (const key of ["r", "A", "x", "b", "?", "/", "\\", "!"]) v.handleInput(key);
+    expect(run).not.toHaveBeenCalled();
+    expect(v.snapshot().help).toBeUndefined();
+    terminal.terminal.rows = 200;
+    v.render(46);
+    expect(v.snapshot().message?.scroll).toBe(0);
+    v.handleInput("\x1b");
+    expect(v.render(46).join("\n")).toContain("new asynchronous notice");
+  } finally { v.dispose(); }
+});
+
+test("STEP6 message mode suspends Neovim and restores a captured snapshot without input leakage", async () => {
+  const f = dataflow(); const fake = fakeEditors(); const v = make(f, { editors: fake.editors });
+  try {
+    v.render(80); v.handleInput("b"); await editorReady(); fake.draft("draft kept");
+    (v as any).note = "first message\n" + "reader text\n".repeat(100) + "TAIL";
+    v.handleInput("\x1b[19~"); v.render(46); v.handleInput("G"); v.render(46);
+    fake.session.input.mockClear();
+    for (const key of ["j", "k", "r", "b", "?", "\r", "\x1bOQ"]) v.handleInput(key);
+    expect(fake.session.input).not.toHaveBeenCalled();
+    expect(fake.session.dispose).not.toHaveBeenCalled();
+    expect(fake.editors.state?.draft).toBe("draft kept");
+    const snapshot = v.snapshot();
+    expect(snapshot.message?.scroll).toBeGreaterThan(0);
+    v.handleInput("\x1b");
+    expect(v[INPUT_CONTEXT]()).toBe("editor");
+    v.handleInput("j"); expect(fake.session.input).toHaveBeenCalledWith("j");
+    const moved = make(f, { initial: snapshot });
+    try {
+      expect(moved.snapshot().message).toEqual(snapshot.message);
+      moved.render(46); moved.handleInput("G");
+      expect(moved.render(46).join("\n")).toContain("TAIL");
+    } finally { moved.dispose(); }
+  } finally { v.dispose(); fake.editors.dispose(); }
+});
+
+test("STEP6 message suspends a literal prompt and cancels armed actions without restoring them", () => {
+  const f = dataflow(); const ask = vi.fn(); const run = vi.fn(); const v = make(f, { ask, run });
+  try {
+    v.render(80); v.handleInput("A"); v.handleInput("\x1b[19~");
+    v.render(80); v.handleInput("A"); v.handleInput("\x1b");
+    v.handleInput("A"); expect(run).not.toHaveBeenCalled();
+    v.handleInput("unbound-key");
+    v.handleInput("a"); press(v, "draft?");
+    (v as any).note = "notice";
+    v.handleInput("\x1b[19~"); v.render(80);
+    v.handleInput("\r"); v.handleInput("q");
+    expect(ask).not.toHaveBeenCalled();
+    expect(v.render(80).join("\n")).not.toContain("draft?");
+    v.handleInput("\x1b[19~");
+    expect(v.render(80).join("\n")).toContain("draft?");
+    v.handleInput("\r"); expect(ask).toHaveBeenCalledWith(f, expect.anything(), "draft?");
+  } finally { v.dispose(); }
+});
+
+test("STEP6 dirty-editor confirmation owns keys and mouse ahead of help and native editing", async () => {
+  const f = nbWith([{ id: "a", code: "x = 1" }]);
+  const fake = fakeEditors();
+  let resolve!: (answer: string | undefined) => void;
+  const confirm = vi.fn(() => new Promise<string | undefined>(done => { resolve = done; }));
+  const v = make(f, { editors: fake.editors, confirm });
+  try {
+    v.render(80); v.handleInput("b"); await editorReady();
+    fake.draft("x = 2");
+    v.handleInput("\x1bOS"); await editorReady();
+    expect(confirm).toHaveBeenCalledOnce();
+    fake.session.input.mockClear();
+    v.handleInput("\x1bOP"); v.handleInput("\x1b[19~"); v.handleInput("?"); v.handleInput("q");
+    expect(v.snapshot().help).toBeUndefined();
+    expect(fake.session.input).not.toHaveBeenCalled();
+    expect(v.handleMouse({ type: "wheel", x: 4, y: 4, button: "none", wheelDelta: 3 } as any)).toEqual({ handled: true });
+    resolve("Keep editing"); await editorReady();
+    expect(fake.editors.state?.draft).toBe("x = 2");
+    v.handleInput("\x1bOP");
+    expect(v.snapshot().help?.group).toBe("Editing");
+  } finally { v.dispose(); fake.editors.dispose(); }
 });

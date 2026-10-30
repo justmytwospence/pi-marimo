@@ -12,7 +12,7 @@ What you get:
 - **The agent knows the notebook.** Each prompt carries the notebook's current state (cells, what they define, what is stale or broken), so the agent does not have to go and look.
 - **What the agent changed.** Cells it changed since your last message are marked, with a diff.
 
-Cells are changed by the agent only, through the [marimo-pair](https://github.com/marimo-team/marimo-pair) skill. What you do in the view (run, interrupt, set widgets, page tables) goes through marimo's own kernel endpoints, as the browser's buttons do.
+The agent edits through the [marimo-pair](https://github.com/marimo-team/marimo-pair) skill; you can also edit cells in place with embedded Neovim. View actions go through marimo's session and kernel endpoints.
 
 ## Install
 
@@ -28,6 +28,7 @@ You need:
 - Node 22 or later.
 - marimo (verified with 0.25).
 - For the agent to edit cells: the [marimo-pair](https://github.com/marimo-team/marimo-pair) skill.
+- For inline editing: Neovim 0.10 or later, available as `nvim` or configured with `view.editor.command`.
 
 If you use [Pi Plugins](https://pi-plugins.vercel.app) pinned to a version from before pi-marimo left it, do not also install this package: Pi would load it twice.
 
@@ -53,9 +54,9 @@ The **outline** lists sections and cells. A cell is named by its name, or what i
 | `✗` | failed, or blocked by a failed ancestor |
 | `•` | stale, or edited but not rerun |
 
-At the end of each line is one badge: the error's type (`KeyError`), `changed` or `new` by the agent, else the output's shape (`450×4`, `chart`, `4 inputs`).
+Status chips can show execution state and agent changes together. The **detail** shows Markdown, output, diagnostics, widgets and source; `n`/`p` move between parts. `O` stacks the whole section. Prose uses the available width. Expanded source and fenced code retain every line and scroll horizontally rather than wrapping or truncating; `H`/`L` scroll the focused block, `0` resets it, and `#` toggles line numbers. `B` folds or unfolds source.
 
-The **detail** shows the selected cell: rendered markdown, the output at full width, the error with its traceback, its widgets, and its code as a block on a grey background. Nothing is labeled; each part has a bar in its first column, and `n`/`p` move a focus bar between them. `O` stacks the whole section, the way the notebook reads in a browser.
+Mermaid fences and `mo.mermaid` render as diagrams when image support is available. If rendering or images are unavailable, the view explains why and shows the complete diagram source; `s` switches a focused diagram to or from source.
 
 From 100 columns the outline and detail sit side by side. Narrower, as when docked, they stack like a mail app: a few outline rows centered on the selected cell, the detail below.
 
@@ -66,14 +67,16 @@ From 100 columns the outline and detail sit side by side. Narrower, as when dock
 | `j` / `k` | next / previous cell |
 | `ctrl+j` / `ctrl+k` | next / previous section |
 | `n` / `p` | next / previous part of the cell (error, printed output, output, widgets, code) |
-| Enter | act on the focused part, else fold or open the code, or edit a markdown cell |
+| Enter, `b` | act on the focused part, or edit source/Markdown in place |
+| `B`, `H`/`L`, `0`, `#` | fold code; scroll left/right; reset horizontal scroll; toggle line numbers |
+| `!`, `\` | cycle diagnostics; toggle output independently |
 | `r` | run the cell (`R` stale cells, `A` all, each twice) |
 | `x` twice | interrupt the kernel |
 | `/` | find a cell: type, `ctrl+j`/`ctrl+k` through matches, Enter goes there |
 | Tab / Shift+Tab | fold the section / fold all |
 | `t` | drive the cell's table |
 | `w` | drive the cell's widgets |
-| `v` | the kernel's variables |
+| `v`, `P` | the kernel's variables; packages |
 | `a` | ask the agent about this cell |
 | `ctrl+]` | docked: switch between chat and notebook |
 | `ctrl+'` | dock or close |
@@ -89,7 +92,11 @@ From 100 columns the outline and detail sit side by side. Narrower, as when dock
 | `n`/`p` | next or previous part of the cell |
 | `^D`/`^U`, PgDn/PgUp, Space | scroll the detail |
 | `g`/`G` | first or last cell |
-| Enter, `l` | act on the focused part: open a table, a live chart or the widgets, fold the code; with no part focused, fold or open the code, or edit a markdown cell |
+| Enter, `l` | act on the focused part; on source or editable Markdown, edit in place |
+| `b`, `B` | edit source; fold or unfold code |
+| `H`/`L`, `0`, `#`, F7 | scroll focused code left/right; reset; toggle line numbers |
+| `!`, `\` | cycle diagnostics; toggle output |
+| `s`, `T` | toggle focused diagram source; exact run timing |
 | `O` | the whole section in the detail, or the cell alone |
 | Tab (`z`) | fold or unfold the section |
 | Shift+Tab (`Z`) | fold every section; again, unfold all |
@@ -97,7 +104,7 @@ From 100 columns the outline and detail sit side by side. Narrower, as when dock
 | `c`/`C` | next or previous cell the agent changed |
 | `d` | the agent's change as a diff |
 | `<` / `>` | a cell this one uses / one that uses it |
-| `v` | variables: name, type, value, defining cell, uses (Enter goes to the cell, `>` to the first use) |
+| `v`, `P` | variables; packages |
 | `/` | find a cell or variable by name, variable, code or error; Enter goes there, Esc goes back |
 | `f` | follow the running cell again |
 | `r`, `R`, `A` | run the cell; stale cells; all cells (the last two need a second press) |
@@ -114,12 +121,15 @@ From 100 columns the outline and detail sit side by side. Narrower, as when dock
 | `\|` | docked or full screen |
 | `ctrl+]` | docked: switch focus between chat and notebook |
 | `ctrl+'` | dock the notebook this session uses, or close the docked one |
-| `?` | every key |
+| `?` | searchable, scrollable context-aware help |
+| F8 | read the full transient message |
 | Esc, `q`, `h` | back (docked: Esc goes to the chat, `q` closes) |
 
 </details>
 
-The mouse works too: the wheel scrolls the pane under it, a click selects a cell or part, a double click acts on it, and a click on the code folds or opens it.
+The mouse works too: the wheel scrolls the pane under it, a click selects a cell or part, and a double click acts on it. Help starts in the current mode: `j`/`k`, PgUp/PgDn, `g`/`G` or the wheel scroll; `/` searches; Tab/Shift+Tab cycles categories; Esc clears search then closes, and `?` or F1 closes when not typing. The footer shows help and a contextual action, with a position indicator when it fits.
+
+Transient messages preview in up to three rows, reserving four body rows when possible. When there is room, an overflowing preview shows `F8 more` and the number of hidden lines; F8 opens the full captured message in a read-only view. Scroll with `j`/`k` or arrows, PgUp/PgDn, `g`/`G` or Home/End, or the mouse wheel; Esc or F8 returns to the prior view and scroll position. Editor and prompt drafts are retained, and ordinary keys keep their normal behavior outside the message view.
 
 ### Docked beside the chat
 
@@ -151,9 +161,36 @@ Filters: `> 5`, `<= 2.5`, `1..10`, `in a, b`, `null`, `!null`, `~regex`, `^start
 
 Sliders, range sliders, numbers, dropdowns, radios, multiselects, checkboxes, switches, text, dates and buttons. With the keyboard: `w`, then `j`/`k` pick, `h`/`l` change (`H`/`L` ten steps), Space toggles or presses, Enter types a value, Esc is done. With the mouse: press on a slider's bar and drag; click a checkbox, switch, button, multiselect option, or a number's or choice's `‹` `›`; click text or a date to type it; the wheel steps the focused widget. Each change reaches the kernel as it does from the browser, so dependent cells rerun, and the agent's next context says what you set.
 
-### Markdown
+### Editing cells
 
-Markdown cells show as rendered markdown. Enter edits one in Pi's editor (vim keys when [pi-vim](https://pi-plugins.vercel.app/plugins/pi-vim/) is loaded); Enter saves, Esc cancels. The edit goes through marimo, so the browser shows it at once, and it is not counted as an agent change. Markdown built in Python (`mo.md(f"...")`) cannot be edited here; Enter shows its code instead.
+Enter on source or Markdown, or `b`, opens an embedded, isolated Neovim buffer. Eligible literal `mo.md(...)` cells open as Markdown; dynamic or otherwise unsafe-to-decode Markdown opens as Python source. Neovim runs with a clean built-in runtime, without your personal init, plugins or autocommands. Its normal editing keys, including Escape, Enter, `?`, `#`, `q`, `!`, `\`, `H`/`L`, motions, visual mode, registers, macros and Ex commands, belong to Neovim while editing.
+
+| editor key or command | action |
+|---|---|
+| F1 | help |
+| F2, `:w` | save only, without running |
+| F3, `:MarimoRun` | save, then run the saved cell |
+| F4, `:MarimoClose` | leave; dirty drafts require a decision |
+| F5 | switch dock/full screen |
+| F6, `:MarimoRevert` | revert to the last saved base, with confirmation if dirty |
+| F7 | toggle line numbers |
+| F8 | read the full transient message, retaining the editor draft |
+| `:wq` | save only and close |
+| `:q!` | deliberately discard and close |
+
+A failed save keeps the draft. If the browser or agent changes the cell, saving detects the conflict rather than overwriting it: compare current source and draft, continue editing, copy the draft, or discard and reload. Unexpected Neovim exit retains the latest draft in memory for reopening, copying or discarding; it is not persistent recovery across Pi restarts. Dock transfers and chat focus preserve the editor. A save-and-run can save successfully but fail to run; the view reports that separately.
+
+### Diagnostics and progress
+
+`!` cycles **All → Errors → Warnings → None**; `\` independently toggles stdout and result output. Source, Markdown prose, status and active progress remain visible. Headers retain execution/error state and indicate hidden content.
+
+Native marimo progress, PyMC's HTML chain tables, Rich terminal bars and tqdm terminal progress are recognized where their data is available. Native HTML `<progress>` from fastprogress is supported when that HTML reaches the view. Common unambiguous text counts and percentages may also become bars; unknown formats remain readable rather than receiving invented progress. Arbitrary IPython widgets and legacy fastprogress display-handle transports are not guaranteed. Console output is the current terminal display, including redraws, not a lossless log.
+
+### Variables and packages
+
+`v` opens variables; `j`/`k` move, `/` filters, `s` cycles name/type/definition sort, Enter opens the preview, `d` goes to the definition, `>` selects a use, `y`/`Y` copy name/value, `a` asks the agent, and `t` opens the defining cell's table when available. Esc backs out. Values are marimo-supplied repr previews, not deep object evaluation.
+
+`P` opens packages for the selected notebook's kernel. Tab cycles Installed, Missing and Operations; `/` filters, `j`/`k` move, PgUp/PgDn and `g`/`G` scroll, Enter opens or expands dependency details, `r` refreshes, and `a` installs, `u` upgrades or `x` removes. Esc backs out. Mutations require an explicit cancel-first confirmation showing the notebook and kernel fingerprint. The environment may be shared with the server or other notebooks. Unsupported marimo versions, managers or tools make actions unavailable; a required restart is manual, never automatic. If an operation's outcome is unknown, do not repeat it; reconcile first.
 
 ### Charts
 
@@ -162,6 +199,8 @@ On terminals with Kitty graphics (Ghostty, Kitty, herdr) charts draw inline at t
 - PNG figures (matplotlib, PIL) as they are.
 - Vega-Lite and Altair, drawn with `uv run --with vl-convert-python` (needs `uv`).
 - Plotly, live: hover for tooltips, drag to zoom or pan, the wheel zooms, and `i` drives it from the keyboard. Pi downloads a sandboxed headless Chrome for Testing once into `~/.cache/pi-marimo/chrome`; it never uses your own Chrome. `"liveCharts": false` draws pictures instead.
+
+In live-chart mode, `h`/`j`/`k`/`l` or arrows move the pointer; uppercase or shifted arrows move farther. Space or Enter starts or ends a drag, `+`/`-` zoom, `0` resets, and `i`, `q` or Esc leaves chart mode.
 
 `/marimo chart <cell>` puts a cell's chart into the chat; the agent can do the same with its `marimo_chart` tool.
 
@@ -220,7 +259,14 @@ A server Pi starts keeps running across `/reload` and stops when Pi exits, with 
   "maxNotebooks": 8,
   "context": true,
   "liveCharts": true,
-  "view": { "code": "open", "outputs": false, "split": false, "autoSplit": true },
+  "view": {
+    "code": "open", "outputs": false, "split": false, "autoSplit": true,
+    "lineNumbers": false, "diagnostics": "all", "showOutput": true,
+    "editor": {
+      "command": "nvim",
+      "options": { "tabstop": 4, "shiftwidth": 4, "expandtab": true, "ignorecase": true, "smartcase": true, "scrolloff": 3 }
+    }
+  },
   "server": { "command": [] }
 }
 ```
@@ -234,7 +280,14 @@ A server Pi starts keeps running across `/reload` and stops when Pi exits, with 
 | `view.outputs` | `false` | start with the whole section in the detail |
 | `view.split` | `false` | open the view docked instead of full screen |
 | `view.autoSplit` | `true` | dock a notebook when the agent starts running it |
+| `view.lineNumbers` | `false` | line numbers in source, fenced code and editor |
+| `view.diagnostics` | `"all"` | `"all"`, `"errors"`, `"warnings"` or `"none"` |
+| `view.showOutput` | `true` | show stdout and results; independent of diagnostics and `view.outputs` |
+| `view.editor.command` | `"nvim"` | Neovim executable as one nonempty string, not a shell command |
+| `view.editor.options` | see above | native allowlist only: `tabstop` and `shiftwidth` integers 1–16, `scrolloff` 0–20, and booleans `expandtab`, `ignorecase`, `smartcase` |
 | `server.command` | `[]` | how Pi starts marimo; empty means `uv run marimo` in a uv project, else `marimo` |
+
+Live line-number, diagnostics and output toggles last for the Pi session and do not write the config file. `view.outputs` selects section view; it does not control output visibility. Invalid semantic settings use defaults and generate an aggregated warning; wrong-type values ignored during config merging remain silent.
 
 `MARIMO_TOKEN` is sent to token-protected servers.
 
@@ -264,7 +317,6 @@ pi-marimo subscribes to each notebook session's message stream (`/sse`) as a rea
 
 Limits:
 
-- The view never edits code cells; only the agent does, through marimo-pair. It does edit markdown cells.
 - Widget values changed in a browser show in the view after a reconnect.
 - "Changed by the agent" means any code-mode change; marimo cannot tell agents apart.
 - The rows and the view exist only in Pi's terminal UI.

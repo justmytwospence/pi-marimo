@@ -10,6 +10,7 @@ import { EditCellService } from "../src/core/edit-cell.js";
 import { PackageClient } from "../src/core/packages.js";
 import { HeadlessSessions } from "../src/core/headless.js";
 import { nodeIo } from "../src/core/node-io.js";
+import type { CellOutput } from "../src/core/output.js";
 import { MarimoWatcher } from "../src/core/watcher.js";
 import { OwnServers } from "../src/servers.js";
 import { runCells, setUiValues } from "../src/ui/interrupt.js";
@@ -93,12 +94,21 @@ afterAll(() => {
   servers.stopAll();
 });
 
-async function until<T>(check: () => T | undefined | false, ms = 30_000): Promise<T> {
+// marimo renders scalar results as <pre>; ordered HTML preserves these as code blocks,
+// not prose in output.text. Require a single result block, not a substring elsewhere.
+function scalarResult(output: CellOutput | undefined): string | undefined {
+  if (output?.blocks?.length !== 1) return undefined;
+  const leaf = output.blocks[0]!.output;
+  return leaf.kind === "text" && leaf.text === "" && leaf.codeBlocks?.length === 1
+    ? leaf.codeBlocks[0]!.source : undefined;
+}
+
+async function until<T>(check: () => T | undefined | false, ms = 30_000, diagnostic?: () => unknown): Promise<T> {
   const end = Date.now() + ms;
   for (;;) {
     const value = check();
     if (value) return value;
-    if (Date.now() > end) throw new Error("timed out");
+    if (Date.now() > end) throw new Error(`timed out${diagnostic ? `: ${JSON.stringify(diagnostic())}` : ""}`);
     await new Promise((r) => setTimeout(r, 100));
   }
 }
@@ -116,11 +126,15 @@ test.skipIf(!live)("a notebook Pi starts: run, set a widget, run Python, mark a 
     expect(f.attachment.sessionId).toBe(sessionId);
     const nb = f.notebook;
     await runCells(f.attachment, nb.ordered().map((c) => ({ id: c.id, code: c.code })));
-    const doubled = await until(() => nb.ordered().find((c) => c.code.includes("doubled =") && c.output?.text === "6"));
+    const doubled = await until(() => nb.ordered().find((c) => c.code.includes("doubled =") && scalarResult(c.output) === "6"), 30_000, () => nb.ordered());
+    // Terminal parsing is asynchronous: an output event need not have flushed stdout yet.
+    await until(() => doubled.console?.some(line => line.stream === "stdout" && line.text === "doubled=6"), 30_000, () => doubled);
     const slider = await until(() => nb.ordered().map((c) => c.output?.widgets?.[0]).find((w) => w?.kind === "slider"));
     expect(slider).toMatchObject({ label: "n", initial: 3, start: 0, stop: 10 });
     await setUiValues(f.attachment, [slider.objectId], [7]);
-    await until(() => doubled.output?.text === "14");
+    await until(() => scalarResult(doubled.output) === "14", 30_000, () => doubled);
+    await until(() => doubled.console?.some(line => line.stream === "stdout" && line.text === "doubled=14"), 30_000, () => doubled);
+    expect(doubled.console?.some(line => line.text === "doubled=6")).toBe(false);
     expect(doubled.lastRunMs).toBeGreaterThanOrEqual(0);
 
     const events: ScratchEvent[] = [];
@@ -180,7 +194,7 @@ async with cm.get_context() as ctx:
         ctx.run_cell(cell_id)
 `, undefined, () => {});
     expect(initialRun.success).toBe(true);
-    const cell = await until(() => nb.ordered().find((c) => c.code.includes("save_probe =") && c.output?.text === "1" && c.status === "idle"));
+    const cell = await until(() => nb.ordered().find((c) => c.code.includes("save_probe =") && scalarResult(c.output) === "1" && c.status === "idle"), 30_000, () => nb.ordered());
     const original = cell.code;
 
     // Read the code-mode document, not just the service's local state.
@@ -214,16 +228,16 @@ async with cm.get_context() as ctx:
     expect(receipt.canonicalCode.trim()).toBe("save_probe = 2\nsave_probe");
     expect(cell.code).toBe(receipt.canonicalCode);
     expect((await inspect()).code).toBe(receipt.canonicalCode);
-    expect(cell.output?.text).toBe("1");
+    expect(scalarResult(cell.output)).toBe("1");
 
     await editor.runSavedCell(cell.id, receipt.canonicalCode);
-    await until(() => cell.output?.text === "2" && cell.status === "idle");
+    await until(() => scalarResult(cell.output) === "2" && cell.status === "idle", 30_000, () => cell);
     expect((await inspect()).code).toBe(receipt.canonicalCode);
 
     await expect(editor.saveCell(cell.id, "save_probe = 999\nsave_probe", original)).rejects.toThrow(/changed elsewhere/i);
     expect((await inspect()).code).toBe(receipt.canonicalCode);
     expect(cell.code).toBe(receipt.canonicalCode);
-    expect(cell.output?.text).toBe("2");
+    expect(scalarResult(cell.output)).toBe("2");
   } finally {
     editor?.dispose();
     await watcher.stop();

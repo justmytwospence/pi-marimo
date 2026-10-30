@@ -1,5 +1,6 @@
-import { describe, expect, test } from "vitest";
-import { visibleWidth } from "@earendil-works/pi-tui";
+import { describe, expect, test, vi } from "vitest";
+import * as outputHtml from "../src/core/html.js";
+import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
 import { tableGrid } from "../src/ui/table.js";
 import { codeRows } from "../src/ui/code.js";
 import { markdownRows } from "../src/ui/markdown.js";
@@ -9,12 +10,35 @@ import { htmlToText, summarizeOutput } from "../src/core/output.js";
 import { snapshot } from "../src/core/render.js";
 import { runCells } from "../src/ui/interrupt.js";
 import { mermaidRows, outputRows } from "../src/ui/outputs.js";
+import { detailRows } from "../src/ui/detail.js";
 
 describe("cell output for the notebook view", () => {
+  test("parses mixed progress once, consuming every PyMC row without duplicating nested controls or siblings", () => {
+    const source = "source<&>\n".repeat(1_000);
+    const html = `<p>before</p><table class='pymc-progress-table'><tr><th>Chain</th><th>Draw</th><th>Stat</th><th>Stat</th></tr><tr><td>0</td><td>2/4</td><td><progress value='1'></progress>first</td><td>second</td></tr><tr><td>1</td><td>4/4</td><td>third</td><td>fourth</td></tr></table><p>between</p><marimo-progress data-title='&quot;native&quot;' data-progress='true' data-total='10' data-subtitle='&quot;waiting&quot;'></marimo-progress><progress value='1' aria-label='HTML'>fallback</progress><pre><code>${source.replace(/&/gu, "&amp;").replace(/</gu, "&lt;")}</code></pre><p>after</p>`;
+    const parse = vi.spyOn(outputHtml, "parseOutputFragment");
+    try {
+      const out = summarizeOutput({ mimetype: "text/html", data: html })!;
+      expect(parse).toHaveBeenCalledTimes(1);
+      expect(out.progress).toHaveLength(4);
+      expect(new Set(out.progress?.map(task => task.id)).size).toBe(4);
+      expect(out.progress?.[0]).toMatchObject({ label: "Chain 0", completed: 2, total: 4, stats: { Stat: "first", "Stat (2)": "second" } });
+      expect(out.progress?.[1]).toMatchObject({ label: "Chain 1", completed: 4, total: 4, state: "complete", stats: { Stat: "third", "Stat (2)": "fourth" } });
+      expect(out.progress?.[2]).toMatchObject({ label: "native", stats: { subtitle: "waiting" } });
+      expect(out.progress?.[2]?.completed).toBeUndefined();
+      expect(out.progress?.[2]?.total).toBeUndefined();
+      expect(out.progress?.[3]).toMatchObject({ label: "HTML", completed: 1, total: 1, state: "complete" });
+      expect(out.blocks?.map(block => block.output.progress ? "progress" : block.output.codeBlocks ? "code" : block.output.text)).toEqual(["before", "progress", "between", "progress", "progress", "code", "after"]);
+      expect(out.codeBlocks).toEqual([{ source }]);
+    } finally {
+      parse.mockRestore();
+    }
+  });
+
   test("html becomes text; tables, images and charts are named, not dumped", () => {
     expect(htmlToText("<div><b>a</b> &amp; b</div><p>second</p><script>x()</script>")).toBe("a & b\nsecond");
     expect(summarizeOutput({ channel: "output", mimetype: "text/plain", data: "42" })).toEqual({ kind: "text", text: "42" });
-    expect(summarizeOutput({ channel: "output", mimetype: "text/html", data: '<marimo-table data-total-rows="12" data-data="[]"></marimo-table>' })).toEqual({ kind: "table", text: "[table, 12 rows]" });
+    expect(summarizeOutput({ channel: "output", mimetype: "text/html", data: '<marimo-table data-total-rows="12" data-data="[]"></marimo-table>' })).toMatchObject({ kind: "table", text: "[table, 12 rows]", blocks: [{ output: { kind: "table", text: "[table, 12 rows]" } }] });
     expect(summarizeOutput({ channel: "output", mimetype: "image/png", data: "iVBOR" })).toMatchObject({ kind: "image", text: "[image png]" });
     expect(summarizeOutput({ channel: "output", mimetype: "application/vnd.vegalite.v5+json", data: "{}" })?.kind).toBe("chart");
     expect(summarizeOutput({ channel: "output", mimetype: "text/html", data: "<marimo-plotly data-figure='x'></marimo-plotly>" })?.kind).toBe("chart");
@@ -105,7 +129,10 @@ describe("structured source output", () => {
     const nb = new NotebookState(); nb.apply("kernel-ready", { cell_ids: ["a"], codes: ["pass"], names: ["_"] });
     const cell = nb.cells.get("a")!; cell.output = output;
     const rows = outputRows(cell, theme, { width: 100, imageRows: 0, pad: "" }, { textLines: 1, tableRows: 1 });
-    expect(new Set(rows.map(row => row.blockId))).toEqual(new Set(["a:mermaid:0", "a:mermaid:1"]));
+    const ids = output!.blocks!.map(block => `a:${block.id}:mermaid:0`);
+    expect(new Set(ids).size).toBe(2);
+    expect(new Set(rows.map(row => row.blockId))).toEqual(new Set(ids));
+    expect(html(sources.map(source => `<marimo-mermaid data-diagram='${attr(source)}'></marimo-mermaid>`).join(""))?.blocks?.map(block => block.id)).toEqual(output!.blocks!.map(block => block.id));
     expect(rows.map(row => row.text).join("\n")).toContain("A->>B: hello");
   });
   test("pre/code source preserves all tabs, blank lines, entities and the tail before MAX_TEXT", () => {
@@ -118,6 +145,56 @@ describe("structured source output", () => {
     const rows = outputRows(cell, theme, { width: 100, pad: "" }, { textLines: 1, tableRows: 1 });
     expect(rows.filter(row => row.sourceLine !== undefined)).toHaveLength(source.split("\n").length);
     expect(rows.map(row => row.text)).toContain("tail");
+  });
+  test("mixed HTML renders authoritative leaves in order exactly once, with table and chart ownership", () => {
+    const table = (id: string, value: string) => `<marimo-ui-element object-id='${id}'><marimo-table data-data='[{&quot;value&quot;:&quot;${value}&quot;}]' data-total-rows='1'></marimo-table></marimo-ui-element>`;
+    const widget = `<marimo-ui-element object-id='control'><marimo-text data-label='&quot;CONTROL_LABEL&quot;' data-initial-value='&quot;CONTROL_VALUE&quot;'></marimo-text></marimo-ui-element>`;
+    const data = `<p>PROSE_START</p><pre><code>CODE_BODY</code></pre><marimo-mermaid data-diagram='${attr("flowchart TD; DIAGRAM_A-->DIAGRAM_B")}'></marimo-mermaid>${table("table-one", "TABLE_ONE")}${widget}<p>PROSE_END</p>${table("table-two", "TABLE_TWO")}<marimo-vega data-spec='{&quot;mark&quot;:&quot;bar&quot;}'></marimo-vega>`;
+    const output = html(data)!;
+    expect(output.blocks?.map(block => block.output.kind)).toEqual(["text", "text", "chart", "table", "widgets", "text", "table", "chart"]);
+    expect(output.table).toBe(output.blocks![3]!.output.table);
+    expect(output.vega).toBe(output.blocks![7]!.output.vega);
+    expect(output.widgets).toEqual(output.blocks![4]!.output.widgets);
+    expect(output.codeBlocks).toEqual(output.blocks![1]!.output.codeBlocks);
+    expect(output.mermaid).toEqual(output.blocks![2]!.output.mermaid);
+    const nb = new NotebookState(); nb.apply("kernel-ready", { cell_ids: ["a"], codes: ["pass"] });
+    const cell = nb.cells.get("a")!; cell.output = output;
+    const result = detailRows(nb, theme, 0, { cell, width: 120, codeOpen: false, diff: false, section: false, imageRows: 0 });
+    const text = result.rows.map(row => stripTerminalSequences(row.text)).join("\n");
+    let previous = -1;
+    for (const token of ["PROSE_START", "CODE_BODY", "DIAGRAM_A", "TABLE_ONE", "CONTROL_LABEL", "PROSE_END", "TABLE_TWO", "[chart vega-lite]"]) {
+      const position = text.indexOf(token);
+      expect(position, token).toBeGreaterThan(previous);
+      expect(text.split(token), `${token} must not render twice`).toHaveLength(2);
+      previous = position;
+    }
+    expect(result.rows.filter(row => row.widget).map(row => row.widget)).toEqual([{ cell: "a", index: 0 }]);
+    expect(result.widgetRows.size).toBe(1);
+    for (const [index, id] of [[3, "table-one"], [6, "table-two"]] as const) {
+      const leaf = output.blocks![index]!.output;
+      const rows = result.rows.filter(row => row.output === leaf);
+      expect(rows.some(row => row.tableRow === 0)).toBe(true);
+      expect(rows.every(row => row.tableObjectId === id)).toBe(true);
+      expect(result.parts.some(part => part.kind === "table" && part.tableObjectId === id && part.output === leaf)).toBe(true);
+    }
+    const chart = output.blocks![7]!.output;
+    expect(result.rows.some(row => row.output === chart)).toBe(true);
+    expect(result.parts.some(part => part.kind === "chart" && part.output === chart)).toBe(true);
+    nb.dispose();
+  });
+  test.each([false, true])("dynamic Markdown retains long pre/code tails in detail rows (section=%s)", section => {
+    const source = `${"long source line\n".repeat(700)}DYNAMIC_LONGTAIL`;
+    const nb = new NotebookState(); nb.apply("kernel-ready", { cell_ids: ["a"], codes: ['mo.md(f"{dynamic_text}")'] });
+    nb.apply("cell-op", { cell_id: "a", output: { mimetype: "text/markdown", data: `<p>DYNAMIC_PROSE</p><pre><code>${source}</code></pre>` } });
+    const cell = nb.cells.get("a")!;
+    expect(source.length).toBeGreaterThan(8_000);
+    expect(nb.isMarkdown(cell)).toBe(true);
+    const result = detailRows(nb, theme, 0, { cell, width: 100, codeOpen: false, diff: false, section });
+    const sourceRows = result.rows.filter(row => row.output?.codeBlocks && row.sourceLine !== undefined);
+    expect(sourceRows).toHaveLength(source.split("\n").length);
+    expect(sourceRows.at(-1)?.text).toBe("DYNAMIC_LONGTAIL");
+    expect(result.rows.filter(row => row.text.includes("DYNAMIC_PROSE"))).toHaveLength(1);
+    nb.dispose();
   });
   test("oversized diagram remains fully readable without an image, regardless of summary limits", () => {
     const source = `flowchart TD\n${"A-->B\n".repeat(45_000)}LAST`;
@@ -272,13 +349,17 @@ describe("tables, widgets and tracebacks", () => {
     expect(summarizeOutput({ channel: "output", mimetype: "text/html", data: "<marimo-table data-total-rows='&quot;too_many&quot;' data-data='[]'></marimo-table>" })?.text).toBe("[table, many rows]");
   });
 
-  test("an HTML table with little around it is a table; one inside prose stays text", () => {
+  test("HTML tables remain ordered blocks inside prose with a scalar table projection", () => {
     const html = "<table><thead><tr><th>name</th><th>n</th></tr></thead><tbody><tr><td>a</td><td>1,200</td></tr><tr><td>b</td><td>3.5</td></tr></tbody></table>";
     const out = summarizeOutput({ channel: "output", mimetype: "text/html", data: html })!;
     expect(out.kind).toBe("table");
     expect(out.table).toMatchObject({ columns: ["name", "n"], numeric: [false, true], rows: [["a", "1,200"], ["b", "3.5"]] });
     const prose = `<p>${"A long explanation of the numbers. ".repeat(4)}</p>${html}`;
-    expect(summarizeOutput({ channel: "output", mimetype: "text/html", data: prose })?.kind).toBe("text");
+    const mixed = summarizeOutput({ channel: "output", mimetype: "text/html", data: prose })!;
+    expect(mixed.kind).toBe("text");
+    expect(mixed.table).toEqual(out.table);
+    expect(mixed.blocks?.map(block => block.output.kind)).toEqual(["text", "table"]);
+    expect(mixed.blocks?.[1]?.output.table).toEqual(out.table);
   });
 
   test("widgets: their kind, label, value and range, as marimo writes them", () => {

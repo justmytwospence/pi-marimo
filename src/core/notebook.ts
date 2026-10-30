@@ -154,22 +154,42 @@ export class NotebookState {
   private headingCache = new Map<string, Heading[]>();
 
   private consoles = new Map<string, CellConsole>();
+  private outputProgress = new Map<string, ProgressTask[]>();
+  private consoleProgress = new Map<string, ProgressTask[]>();
   /** View-only notification: never an agent-visible document change. */
   constructor(private readonly onOutputChange: () => void = () => {}) {}
 
   async settled(): Promise<void> { await Promise.all([...this.consoles.values()].map(console => console.settled())); }
   dispose(): void { this.reset(); }
 
+  private recomputeProgress(id: string): void {
+    const cell = this.cells.get(id);
+    if (!cell) return;
+    cell.progress = [
+      ...(this.outputProgress.get(id) ?? []).map(task => ({ ...task, id: `output:${task.id}` })),
+      ...(this.consoleProgress.get(id) ?? []).map(task => ({ ...task, id: `console:${task.id}` })),
+    ];
+  }
+
   private clearConsole(id: string): void {
-    this.consoles.get(id)?.dispose();
+    const console = this.consoles.get(id);
     this.consoles.delete(id);
+    console?.dispose();
+    this.consoleProgress.delete(id);
     const cell = this.cells.get(id);
     if (cell) cell.console = undefined;
+    this.recomputeProgress(id);
+  }
+
+  private clearProgress(id: string): void {
+    this.outputProgress.delete(id);
+    this.clearConsole(id);
+    const cell = this.cells.get(id);
+    if (cell?.output?.progress?.length) cell.output = undefined;
   }
 
   reset(): void {
-    for (const console of this.consoles.values()) console.dispose();
-    this.consoles.clear();
+    for (const id of this.cells.keys()) this.clearProgress(id);
     this.releasePendingEdits();
     this.expectedEdits.clear();
     this.order = [];
@@ -353,7 +373,7 @@ export class NotebookState {
           const old = this.cells.get(id);
           if (!agent || entry?.kind === "created") this.agentChanges.delete(id);
           else this.agentChanges.set(id, { kind: "deleted", before: entry?.before ?? old?.code ?? "", ...(old ? { name: old.name } : {}), at: now });
-          this.clearConsole(id);
+          this.clearProgress(id);
           this.cells.delete(id);
           this.order = this.order.filter((other) => other !== id);
           this.defs.delete(id);
@@ -435,16 +455,12 @@ export class NotebookState {
         // The previous run's error is about to be replaced.
         cell.error = undefined;
         cell.blocked = undefined;
-        this.clearConsole(id);
-        cell.progress = [];
-        if (cell.output?.progress) cell.output = undefined;
+        this.clearProgress(id);
       }
       if (data.status === "running") {
         // The cell makes its widgets anew, with their initial values.
         this.dropUiValues(id);
-        this.clearConsole(id);
-        cell.progress = [];
-        if (cell.output?.progress) cell.output = undefined;
+        this.clearProgress(id);
         cell.runningSince = at;
         cell.lastRunCode = cell.code;
         cell.error = undefined;
@@ -463,15 +479,15 @@ export class NotebookState {
     if ("console" in data) {
       if (Array.isArray(data.console) && !data.console.length) {
         this.clearConsole(id);
-        cell.progress = cell.output?.progress ?? [];
         this.onOutputChange();
       } else {
         let console = this.consoles.get(id);
         if (!console) {
           const owned = new CellConsole(() => {
-            if (this.consoles.get(id) !== owned) return;
+            if (this.consoles.get(id) !== owned || this.cells.get(id) !== cell) return;
             cell.console = owned.snapshot();
-            cell.progress = [...(cell.output?.progress ?? []), ...progressFromText(cell.console.map(line => line.text))];
+            this.consoleProgress.set(id, progressFromText(cell.console.map(line => line.text)));
+            this.recomputeProgress(id);
             this.onOutputChange();
           });
           console = owned;
@@ -483,7 +499,8 @@ export class NotebookState {
     if (data.output !== null && typeof data.output === "object") {
       const output = record(data.output);
       cell.output = summarizeOutput(output);
-      cell.progress = cell.output?.progress ?? [];
+      this.outputProgress.set(id, cell.output?.progress ?? []);
+      this.recomputeProgress(id);
       this.onOutputChange();
       const { error, blocked } = output.channel === "marimo-error" ? describeError(output) : {};
       if (error !== cell.error || blocked !== cell.blocked) {

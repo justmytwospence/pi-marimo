@@ -1,6 +1,6 @@
 import MarkdownIt from "markdown-it";
 import { getMarkdownTheme } from "@earendil-works/pi-coding-agent";
-import { Markdown, sliceByColumn, stripTerminalSequences, visibleWidth, type MarkdownTheme } from "@earendil-works/pi-tui";
+import { Markdown, getCellDimensions, sliceByColumn, stripTerminalSequences, visibleWidth, type MarkdownTheme } from "@earendil-works/pi-tui";
 import { codeRows } from "./code.js";
 import type { Row, RowOptions } from "./rows.js";
 
@@ -63,7 +63,9 @@ const identify = (object: object | undefined) => {
 const clearRenderCache = () => { renderCache.clear(); renderBytes = 0; };
 /** Render prose with Pi, then splice untouched payloads into the rendered containers. */
 export function markdownRows(text: string, options: RowOptions = {}): Row[] {
-  const cacheKey = JSON.stringify([text, options.width, options.lineNumbers, options.tabstop, options.blockPrefix, [...options.codeOffsets ?? []], identify(options.theme), identify(options.syntax), options.syntax?.revision, identify(options.diagramRows), identify(options.onReady)]);
+  const cell = getCellDimensions();
+  // Diagram/image rows depend on the vertical budget and pixel geometry, not just columns.
+  const cacheKey = JSON.stringify([text, options.width, options.imageRows, cell.widthPx, cell.heightPx, options.pad, options.bar, options.theme?.appearance, options.lineNumbers, options.tabstop, options.blockPrefix, [...options.codeOffsets ?? []], identify(options.theme), identify(options.syntax), options.syntax?.revision, identify(options.diagramRows), identify(options.onReady)]);
   const known = options.theme ? renderCache.get(cacheKey) : undefined;
   if (known) { renderCache.delete(cacheKey); renderCache.set(cacheKey, known); return known.rows.map(row => ({ ...row })); }
   const onReady = options.onReady;

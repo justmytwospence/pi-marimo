@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- Expanded source and fenced code remain complete and scroll horizontally, with optional line numbers; Markdown prose uses the available width. Mermaid diagrams render inline or show their complete source and a reason when unavailable.
+- Edit Python and eligible literal Markdown in an isolated Neovim 0.10+ buffer. Save without running, save and run, or revert explicitly; conflicting changes are not overwritten and unexpected editor exits retain an in-memory draft.
+- Filter diagnostics independently of output, and display native marimo, PyMC, Rich and tqdm progress where supported. Console redraws show the current display rather than a lossless log.
+- Inspect variables using marimo's supplied previews, and inspect or manage kernel packages with cancel-first, environment-aware confirmation.
+- Add searchable, scrollable context-aware help, a compact contextual footer, and view/editor preferences. Transient messages preview in up to three rows, reserving four body rows when possible; F8 opens the full message read-only, with scroll controls and Esc/F8 to return. Editor and prompt drafts are retained and ordinary keys remain unchanged.
+
 ## 0.2.0
 
 pi-marimo is its own package again (npm: `pi-marimo`), after developing inside Pi Plugins. Since 0.1:
