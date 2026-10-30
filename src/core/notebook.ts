@@ -135,6 +135,7 @@ export class NotebookState {
   /** Results of kernel function calls made from Pi (`function-call-result`), by call id; the newest 50. */
   functionResults = new Map<string, FunctionResult>();
   private expectedEdits = new Map<string, string>();
+  private pendingEdits = new Map<string, { requestId: string; candidates: { before: string; code: string; at: number }[] }>();
   ready = false;
   /** Increments on every document change. */
   seq = 0;
@@ -166,6 +167,8 @@ export class NotebookState {
   reset(): void {
     for (const console of this.consoles.values()) console.dispose();
     this.consoles.clear();
+    this.releasePendingEdits();
+    this.expectedEdits.clear();
     this.order = [];
     this.cells.clear();
     this.defs.clear();
@@ -241,6 +244,35 @@ export class NotebookState {
   /** The next `set-code` for this cell with exactly this code is Pi's own edit (a markdown cell edited in the view), not the agent's. */
   expectEdit(cellId: string, code: string): void {
     this.expectedEdits.set(cellId, code);
+  }
+
+  /** Defer candidate agent attribution until the server acknowledges canonical source. */
+  beginUserEdit(cellId: string, requestId: string): void {
+    if (this.pendingEdits.has(cellId)) throw new Error("A save is already pending for this cell");
+    this.pendingEdits.set(cellId, { requestId, candidates: [] });
+  }
+
+  finishUserEdit(cellId: string, requestId: string, canonicalCode?: string): boolean {
+    const pending = this.pendingEdits.get(cellId);
+    if (!pending || pending.requestId !== requestId) return false;
+    this.pendingEdits.delete(cellId);
+    const candidates = pending.candidates;
+    const matching = canonicalCode === undefined ? -1 : candidates.findIndex(c => c.code === canonicalCode);
+    const acknowledged = canonicalCode !== undefined && this.cells.get(cellId)?.code === canonicalCode && (!candidates.length || matching >= 0);
+    for (let i = 0; i < candidates.length; i++) {
+      if (!acknowledged || i !== matching) this.attributeEdit(cellId, candidates[i]!.before, candidates[i]!.at);
+    }
+    return acknowledged;
+  }
+
+  private attributeEdit(id: string, before: string, at: number): void {
+    const entry = this.agentChanges.get(id);
+    if (!entry || entry.kind === "moved" || entry.kind === "renamed") this.agentChanges.set(id, { kind: "edited", before: entry?.before ?? before, at });
+    else entry.at = at;
+  }
+
+  private releasePendingEdits(): void {
+    for (const [id, pending] of this.pendingEdits) this.finishUserEdit(id, pending.requestId);
   }
 
   private kernelReady(data: Record<string, unknown>): boolean {
@@ -335,14 +367,15 @@ export class NotebookState {
         case "set-code": {
           const cell = this.ensure(id);
           const code = typeof change.code === "string" ? change.code : "";
-          const mine = this.expectedEdits.get(id) === code;
+          const mine = source === "code-mode" && this.expectedEdits.get(id) === code;
           if (mine) this.expectedEdits.delete(id);
           // The browser respelling a markdown cell is not an edit.
           if (cell.code !== code && sameCode(cell.code, code)) cell.code = code;
           else if (cell.code !== code) {
             if (agent && !mine) {
-              if (!entry || entry.kind === "moved" || entry.kind === "renamed") this.agentChanges.set(id, { kind: "edited", before: entry?.before ?? cell.code, at: now });
-              else entry.at = now;
+              const pending = this.pendingEdits.get(id);
+              if (pending) pending.candidates.push({ before: cell.code, code, at: now });
+              else this.attributeEdit(id, cell.code, now);
             }
             cell.code = code;
             cell.editedBy = source;

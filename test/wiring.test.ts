@@ -4,6 +4,7 @@
 // notebook reported as outside work, and pi-bg's tasks annotated with the kernel state.
 import { readFileSync } from "node:fs";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
+import { visibleWidth } from "@earendil-works/pi-tui";
 import type { Cancellable, Io, StreamEnd } from "../src/core/io.js";
 
 const CWD = "/w";
@@ -37,6 +38,77 @@ vi.mock("../src/core/node-io.js", () => ({
 }));
 
 const { default: piMarimo } = await import("../src/index.js");
+const { HeadlessSessions } = await import("../src/core/headless.js");
+const { EditCellService } = await import("../src/core/edit-cell.js");
+
+test("inline services acquire a writable target first, never replay a failed mutation, and dispose", async () => {
+  const x = setup();
+  const order: string[] = [];
+  const attach = vi.spyOn(HeadlessSessions.prototype, "attach").mockImplementation(async () => { order.push("acquire"); return "write-session"; });
+  const has = vi.spyOn(HeadlessSessions.prototype, "has").mockReturnValue(true);
+  const save = vi.spyOn(EditCellService.prototype, "saveCell").mockImplementation(async () => { order.push("save"); throw new Error("HTTP 500 after a possibly applied save"); });
+  const run = vi.spyOn(EditCellService.prototype, "runSavedCell").mockImplementation(async () => { order.push("run"); });
+  const dispose = vi.spyOn(EditCellService.prototype, "dispose");
+  let view: any;
+  try {
+    await x.fire("session_start");
+    await until(() => server.feeds.length > 0);
+    server.feeds.at(-1)!(untilRunning + rest);
+    const section = x.of("activity:section")[0]?.section;
+    await section.open(section.entries(Date.now())[0].key, x.ui);
+    view = x.customs.at(-1).view;
+    const actions = view.actions;
+    const f = actions.followed()[0];
+    expect(actions.editors).toBeDefined();
+    const editorDispose = vi.spyOn(actions.editors, "dispose");
+    await expect(actions.saveCell(f, "PKri", "draft", "base")).rejects.toThrow("HTTP 500");
+    expect(order).toEqual(["acquire", "save"]);
+    expect(save).toHaveBeenCalledOnce();
+    expect(run).not.toHaveBeenCalled();
+    await actions.runSavedCell(f, "PKri", "canonical");
+    expect(order).toEqual(["acquire", "save", "acquire", "run"]);
+    expect(run).toHaveBeenCalledExactlyOnceWith("PKri", "canonical");
+    f.connection = "disconnected";
+    await expect(actions.saveCell(f, "PKri", "draft", "base")).rejects.toThrow("session changed");
+    expect(save).toHaveBeenCalledOnce();
+    await x.fire("session_shutdown");
+    expect(dispose).toHaveBeenCalled();
+    expect(editorDispose).toHaveBeenCalledOnce();
+  } finally {
+    view?.dispose();
+    await x.fire("session_shutdown");
+    attach.mockRestore(); has.mockRestore(); save.mockRestore(); run.mockRestore(); dispose.mockRestore();
+  }
+});
+
+test("native inline confirmations default to cancel, fit phone labels, and copy via OSC52", async () => {
+  const x = setup();
+  const writes: string[] = [];
+  const originalWidget = x.ui.setWidget;
+  x.ui.setWidget = (key: string, widget: unknown) => {
+    originalWidget(key, widget);
+    if (key === "pi-marimo-tui" && typeof widget === "function") widget({ terminal: { write: (data: string) => writes.push(data) } });
+  };
+  const select = vi.fn(async (_question: string, _choices: string[]): Promise<string | undefined> => undefined);
+  (x.ui as any).select = select;
+  let view: any;
+  try {
+    await x.fire("session_start");
+    await until(() => server.feeds.length > 0);
+    server.feeds.at(-1)!(untilRunning + rest);
+    const section = x.of("activity:section")[0]?.section;
+    await section.open(section.entries(Date.now())[0].key, x.ui);
+    view = x.customs.at(-1).view;
+    expect(await view.actions.confirm("Leave?", ["Keep editing", "Save", "Discard"])).toBeUndefined();
+    expect(select.mock.calls[0][1][0]).toBe("1. Keep editing");
+    const long = "Discard ".repeat(12);
+    select.mockImplementationOnce(async (_q, choices) => choices[1]);
+    expect(await view.actions.confirm("Question", ["Cancel", long])).toBe(long);
+    expect(select.mock.calls[1][1].every(label => visibleWidth(label) <= 42)).toBe(true);
+    view.actions.copy("draft λ\n");
+    expect(writes).toEqual([`\x1b]52;c;${Buffer.from("draft λ\n").toString("base64")}\x07`]);
+  } finally { view?.dispose(); await x.fire("session_shutdown"); }
+});
 
 /** The recorded run, split where the slow cell starts running. */
 const events = readFileSync(new URL("./fixtures/kiosk-run.sse", import.meta.url), "utf8").split(/\n\n/u).filter(Boolean);

@@ -30,6 +30,8 @@ import { ambiguityNote, lensLines, lensStatusText, relativePath, shortWhere, sna
 import { basename } from "./core/io.js";
 import { nodeIo } from "./core/node-io.js";
 import { HeadlessSessions } from "./core/headless.js";
+import { EditCellService, pythonJson, type EditorSession, type SaveReceipt, type ScratchExecute } from "./core/edit-cell.js";
+import { InlineEditorManager } from "./ui/inline-editor.js";
 import { pairTargets, sameServer } from "./core/touch.js";
 import { MarimoWatcher, type Mode, type Waiting, parseMode } from "./core/watcher.js";
 import { HerdrHold } from "./herdr.js";
@@ -43,14 +45,14 @@ import { WidgetSender } from "./ui/widgets.js";
 import { markCell, unmarkSelection } from "./ui/lens-mark.js";
 import { askMessage } from "./ask.js";
 import { requestEditorFactory } from "./editor-contract.ts";
-import type { Cell } from "./core/notebook.js";
+import type { Cell, NotebookState } from "./core/notebook.js";
 import { PillView } from "./pill.ts";
 import { notebookKey } from "./ui/identity.js";
 import { NotebookSource, type Unopened } from "./ui/source.js";
 import { openUrl, waitingStatus, waitingUrl } from "./waiting.js";
 import { NotebookView, type ViewActions, type ViewState } from "./ui/view.js";
 import { NotebookSplit } from "./ui/split.ts";
-import { getKeybindings } from "@earendil-works/pi-tui";
+import { getKeybindings, truncateToWidth } from "@earendil-works/pi-tui";
 import { ChatChart, type ChartEntry, disposeCharts, latestChart } from "./ui/chat-chart.js";
 import { Painter } from "./ui/painter.js";
 import { stopSharedChrome } from "./core/chrome.js";
@@ -63,6 +65,7 @@ import type { Followed } from "./core/watcher.js";
 import { loadConfig } from "./config.ts";
 import { DEFAULT_VIEW_PREFERENCES, SessionPreferences } from "./ui/settings.js";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
 import { realpath } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { NOTEBOOK_TEMPLATE, findNotebookFiles, ownServers, serverCommand } from "./servers.js";
@@ -331,7 +334,106 @@ export default function piMarimo(pi: ExtensionAPI): void {
       return act({ url: f.attachment.url, sessionId });
     }
   };
+  // Acquire a known writable consumer before sending anything. Never change the followed
+  // attachment: inline drafts are keyed by its original notebook/session identity.
+  const editors = new InlineEditorManager();
+  const editServices = new Map<NotebookState, { service: EditCellService; isCurrent: () => boolean; target: EditorSession }>();
+  const reconciliations = new Set<AbortController>();
+  const disposeEditServices = (): void => {
+    for (const { service } of editServices.values()) service.dispose();
+    editServices.clear();
+    for (const controller of reconciliations) controller.abort();
+    reconciliations.clear();
+  };
+  const pruneEditServices = (): void => {
+    for (const [notebook, entry] of editServices) {
+      if (!entry.isCurrent()) { entry.service.dispose(); editServices.delete(notebook); }
+    }
+  };
+  const resolveEditorTarget = async (f: Followed): Promise<EditorSession> => {
+    if (f.connection !== "connected") throw new Error("Notebook session changed; your draft is kept");
+    const { url, path, sessionId } = f.attachment;
+    const notebook = f.notebook;
+    const current = () => watcher?.followed().some(o => o.notebook === notebook && o.connection === "connected" && o.notebook.ready && o.attachment.url === url && o.attachment.path === path && o.attachment.sessionId === sessionId);
+    if (!current()) throw new Error("Notebook session changed; your draft is kept");
+    const writableSessionId = await headless.attach(url, path, process.env.MARIMO_TOKEN);
+    if (!current()) throw new Error("Notebook session changed; your draft is kept");
+    return { url, sessionId: writableSessionId };
+  };
+  // runScratch refreshes authentication by reposting on 401/403. That is useful for
+  // ordinary scratch work, but editor mutations must never be submitted twice.
+  const executeOnce: ScratchExecute = (target, code, token, onEvent, signal) => {
+    let submitted = false;
+    const fetchOnce: NonNullable<Parameters<typeof runScratch>[5]> = async (url, init) => {
+      if (init.method === "POST") {
+        if (submitted) throw new Error("Request rejected; outcome unknown (not retried)");
+        submitted = true;
+      }
+      return fetch(url, init);
+    };
+    return runScratch(target, code, token, onEvent, signal, fetchOnce);
+  };
+  const editorService = async (f: Followed): Promise<EditCellService> => {
+    const notebook = f.notebook;
+    const { url, path, sessionId } = f.attachment;
+    // A kernel replay replaces Cell objects even when notebook/session IDs survive.
+    const anchors = [...notebook.cells.values()];
+    const owner = watcher;
+    const target = await resolveEditorTarget(f);
+    const isCurrent = () => watcher === owner && headless.has(url, path) && (anchors.length === 0 || anchors.some(cell => notebook.cells.get(cell.id) === cell)) &&
+      (watcher?.followed().some(o => o.notebook === notebook && o.connection === "connected" && notebook.ready && o.attachment.url === url && o.attachment.path === path && o.attachment.sessionId === sessionId) ?? false);
+    if (!isCurrent()) throw new Error("Notebook session changed; your draft is kept");
+    pruneEditServices();
+    const previous = editServices.get(notebook);
+    if (previous?.target.sessionId === target.sessionId) return previous.service;
+    previous?.service.dispose();
+    const service = new EditCellService({
+      target, notebook, isCurrent, execute: executeOnce, token: process.env.MARIMO_TOKEN,
+      onRunError: error => ctxRef?.ui.notify(`marimo: ${error.message}`, "warning"),
+      reconcile: async () => {
+        if (!isCurrent()) return;
+        const seq = notebook.seq;
+        const ids = [...notebook.cells.keys()];
+        const marker = `pi-marimo-reconcile-${randomUUID()}:`;
+        let codes: unknown;
+        const controller = new AbortController();
+        reconciliations.add(controller);
+        try {
+          // Read source only; no edit/run calls and no mutation replay on uncertainty.
+          const result = await executeOnce(target, `import json\nimport marimo._code_mode as cm\n_codes = {}\nasync with cm.get_context() as ctx:\n    for _id in ${pythonJson(ids)}:\n        try:\n            _codes[_id] = ctx.cells[_id].code\n        except KeyError:\n            _codes[_id] = None\nprint(${pythonJson(marker)} + json.dumps(_codes))\n`, process.env.MARIMO_TOKEN, event => {
+            if (event.stream === "stdout" && event.text.startsWith(marker)) codes = JSON.parse(event.text.slice(marker.length));
+          }, controller.signal);
+          // Never replace a newer SSE document with an older read snapshot.
+          if (!result.success || !isCurrent() || notebook.seq !== seq || !codes || typeof codes !== "object") return;
+          const source = codes as Record<string, unknown>;
+          const changes = ids.flatMap(cellId => typeof source[cellId] === "string"
+            ? [{ type: "set-code", cellId, code: source[cellId] }]
+            : source[cellId] === null ? [{ type: "delete-cell", cellId }] : []);
+          notebook.apply("notebook-document-transaction", { source: "kernel", changes });
+          schedule();
+        } finally { reconciliations.delete(controller); }
+      },
+    });
+    editServices.set(notebook, { service, isCurrent, target });
+    return service;
+  };
   const viewActions: ViewActions = {
+    editors,
+    saveCell: async (f: Followed, cellId: string, code: string, expectedCode: string): Promise<SaveReceipt> => (await editorService(f)).saveCell(cellId, code, expectedCode),
+    runSavedCell: async (f: Followed, cellId: string, canonicalCode: string): Promise<void> => (await editorService(f)).runSavedCell(cellId, canonicalCode),
+    confirm: async (question: string, choices: readonly string[]): Promise<string | undefined> => {
+      if (!ctxRef || choices.length === 0) return undefined;
+      // Native select starts on the first (cancel) choice. Numbering keeps even
+      // truncated labels unique, while callers receive their original choice.
+      const labels = choices.map((choice, i) => truncateToWidth(`${i + 1}. ${choice}`, 42));
+      const selected = await ctxRef.ui.select(question, labels);
+      return selected === undefined ? undefined : choices[labels.indexOf(selected)];
+    },
+    copy: (text: string): void => {
+      const terminal = (tuiRef as unknown as { terminal?: { write?(data: string): void } } | undefined)?.terminal;
+      if (!terminal?.write) throw new Error("Copying needs a terminal.");
+      terminal.write(`\x1b]52;c;${Buffer.from(text).toString("base64")}\x07`);
+    },
     followed: () => watcher?.followed() ?? [],
     interrupt: (f) => withEditor(f, (t) => interruptKernel(t, process.env.MARIMO_TOKEN)),
     openInBrowser: (f) => openUrl(`${f.attachment.url}/?file=${encodeURIComponent(f.attachment.path)}`),
@@ -379,12 +481,6 @@ export default function piMarimo(pi: ExtensionAPI): void {
       writeFileSync(resolve(dir, name), text);
       return name;
     },
-    editCell: async (f, cell, code) => {
-      f.notebook.expectEdit(cell.id, code);
-      const id = JSON.stringify(cell.id);
-      const result = await withEditor(f, (t) => runScratch(t, `import marimo._code_mode as cm\nasync with cm.get_context() as ctx:\n    ctx.edit_cell(${id}, code=${JSON.stringify(code)})\n    ctx.run_cell(${id})\n`, process.env.MARIMO_TOKEN, () => {}));
-      if (!result.success) throw new Error("marimo did not take the edit");
-    },
   };
   let fullOpen = false;
   /** The view's actions, read fresh each time a view opens (settings, and the suite's editor from pi-vim). */
@@ -402,7 +498,7 @@ export default function piMarimo(pi: ExtensionAPI): void {
       ...(suite ? { editorFactory: suite.factory } : {}),
       // Docking waits for the overlay to close, or Pi's focus restore takes focus back from the docked view.
       dock: (key, state) => { setTimeout(() => { if (ctxRef && !split.open(ctxRef, key, { focus: true, state })) void openFull(key, ctxRef.ui, state); }, 0); },
-      undock: (key, state) => { split.close(); if (ctxRef) void openFull(key, ctxRef.ui, state); },
+      undock: (key, state) => { split.close(true); if (ctxRef) void openFull(key, ctxRef.ui, state); },
     };
   };
   const openFull = (key: string, ui: unknown, state?: ViewState): Promise<void> => {
@@ -421,6 +517,8 @@ export default function piMarimo(pi: ExtensionAPI): void {
     busy: () => fullOpen,
   });
   const openView = async (key: string, ui: unknown): Promise<void> => {
+    const target = viewActions.followed().find(f => notebookKey(f) === key);
+    if (editors.active && target && !editors.owns(target) && !await editors.close()) return;
     if (config.view.split && ctxRef && split.open(ctxRef, key, { focus: true, quiet: true })) return;
     await openFull(key, ui);
   };
@@ -647,6 +745,7 @@ export default function piMarimo(pi: ExtensionAPI): void {
   };
 
   const schedule = (): void => {
+    pruneEditServices();
     if (!ctxRef) return;
     pending ??= setTimeout(render, 150);
   };
@@ -671,6 +770,7 @@ export default function piMarimo(pi: ExtensionAPI): void {
   pi.on("session_start", async (_event, ctx) => {
     ctxRef = ctx;
     herdr = ctx.mode === "tui" ? new HerdrHold(pi.events) : undefined;
+    disposeEditServices();
     await watcher?.stop();
     config = loadConfig("marimo", DEFAULT_CONFIG, ctx.cwd);
     preferences.configure(config.view, message => ctx.ui.notify(message, "warning"));
@@ -696,6 +796,8 @@ export default function piMarimo(pi: ExtensionAPI): void {
   });
 
   pi.on("session_shutdown", async () => {
+    editors.dispose();
+    disposeEditServices();
     widgetSender.dispose();
     syntax.dispose();
     diagrams.dispose();

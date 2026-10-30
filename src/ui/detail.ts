@@ -1,5 +1,5 @@
 // The detail: the notebook view's right pane, the selected cell as a reader wants it. Prose is
-// rendered, the output is large, an error comes with its traceback, the code is folded (Enter opens
+// rendered, the output is large, an error comes with its traceback, the code is folded (B opens
 // it) and the dataflow is named by variable. In section view (`O`) it is the whole section stacked
 // as a document, the selected cell marked. No cell ids and no Python reprs: values are in the
 // variables pane.
@@ -46,6 +46,8 @@ export interface DetailOptions extends RowOptions {
   partFocus?: number | undefined;
   /** A row or column card that replaces the table's grid. */
   tableCard?: (cell: Cell) => string[] | undefined;
+  /** Replace only the selected editable part, at its ordinary document location. */
+  inlineEditor?: { cellId: string; kind: "python" | "markdown"; rows(width: number, row: number): Row[] };
 }
 
 /** `left` and `right` on one line of `width`, the right one flush right. */
@@ -83,6 +85,7 @@ export function detailRows(nb: NotebookState, theme: FrameTheme, now: number, o:
 
   /** A markdown cell as prose, trailing blank lines dropped. */
   const proseOf = (cell: Cell, w = width): Row[] => {
+    if (o.inlineEditor?.cellId === cell.id && o.inlineEditor.kind === "markdown") return o.inlineEditor.rows(w, rows.length);
     const md = editableMarkdown(cell.code);
     const text = md ?? (o.showOutput !== false && cell.output?.kind === "text" ? cell.output.text : undefined);
     const lines: Row[] = text !== undefined ? (md !== undefined ? (o.markdown ? o.markdown(md, w).map(text => ({ text })) : markdownRows(md, { ...sub, width: w, blockPrefix: cell.id })) : text.split("\n").map(text => ({ text }))) : nb.headings(cell).map((h) => ({ text: headingText(theme, h) }));
@@ -109,6 +112,10 @@ export function detailRows(nb: NotebookState, theme: FrameTheme, now: number, o:
    */
   const codeBlock = (cell: Cell, open: boolean, diff: boolean) => {
     const p = part("code", cell);
+    if (o.inlineEditor?.cellId === cell.id && o.inlineEditor.kind === "python") {
+      for (const r of o.inlineEditor.rows(width, rows.length)) rows.push({ ...r, part: p.index });
+      return;
+    }
     const blockId = `${cell.id}:source`;
     const change = nb.agentChanges.get(cell.id);
     if (diff && change) {
@@ -200,14 +207,14 @@ export function detailRows(nb: NotebookState, theme: FrameTheme, now: number, o:
         const status = statusOf(cell);
         if (status) push(status);
         resultBlock(cell, { textLines: 12, tableRows: 10 }, 5, true);
-        if (o.sectionCodeOpen?.has(cell.id)) codeBlock(cell, true, selected && o.diff);
+        if (o.sectionCodeOpen?.has(cell.id) || (o.inlineEditor?.cellId === cell.id && o.inlineEditor.kind === "python")) codeBlock(cell, true, selected && o.diff);
         continue;
       }
       push(`${selected ? theme.fg("accent", "▌") : " "}${cellGlyph(nb, theme, cell, now)} ${selected ? theme.bold(cellTitle(nb, cell)) : dim(cellTitle(nb, cell))}`);
       const status = statusOf(cell);
       if (status) push(status);
       resultBlock(cell, { textLines: 12, tableRows: 10 }, 5);
-      if (o.sectionCodeOpen?.has(cell.id)) codeBlock(cell, true, selected && o.diff);
+      if (o.sectionCodeOpen?.has(cell.id) || (o.inlineEditor?.cellId === cell.id && o.inlineEditor.kind === "python")) codeBlock(cell, true, selected && o.diff);
     }
     return { rows, widgetRows, parts, ...(focusRow !== undefined ? { focusRow } : {}) };
   }
@@ -230,7 +237,7 @@ export function detailRows(nb: NotebookState, theme: FrameTheme, now: number, o:
       push("");
       prose(next);
     }
-    if (editableMarkdown(cell.code) === undefined) {
+    if (editableMarkdown(cell.code) === undefined || (o.inlineEditor?.cellId === cell.id && o.inlineEditor.kind === "python")) {
       push("");
       codeBlock(cell, o.codeOpen, false);
     }

@@ -113,14 +113,33 @@ export const FSTRING_MD = /\bmo\s*\.\s*md\s*\(\s*(?:[rR]?[fF]|[fF][rR])/u;
 
 /** The markdown text of a cell the view can edit as text; undefined for an f-string or any other cell. */
 export function editableMarkdown(code: string): string | undefined {
-  if (FSTRING_MD.test(code)) return undefined;
-  return markdownText(code);
+  const match = /^\s*mo\s*\.\s*md\s*\(\s*([rR]?)("""|'''|"|')/u.exec(code);
+  if (!match) return undefined;
+  const raw = !!match[1];
+  const quote = match[2]!;
+  const start = match[0].length;
+  for (let i = start; i < code.length; i++) {
+    if (code[i] === "\\") {
+      if (!raw) return undefined;
+      i++;
+      continue;
+    }
+    if (quote.length === 1 && /[\r\n]/u.test(code[i]!)) return undefined;
+    if (code.startsWith(quote, i)) {
+      if (!/^\s*\)\s*$/u.test(code.slice(i + quote.length))) return undefined;
+      return code.slice(start, i);
+    }
+  }
+  return undefined;
 }
 
 /** Code for a markdown cell with this text: a raw triple-quoted string where the text allows one. */
 export function markdownCellCode(text: string): string {
-  const body = text.replace(/\s+$/u, "");
-  if (!body.includes('"""')) return `mo.md(r"""\n${body}\n""")`;
-  if (!body.includes("'''")) return `mo.md(r'''\n${body}\n''')`;
-  return `mo.md("""\n${body.replace(/\\/g, "\\\\").replace(/"""/g, '\\"\\"\\"')}\n""")`;
+  const trailingBackslashes = /\\*$/u.exec(text)![0].length;
+  if (trailingBackslashes % 2 === 0) {
+    for (const quote of ['"""', "'''"]) {
+      if (!text.includes(quote) && !text.endsWith(quote[0]!)) return `mo.md(r${quote}${text}${quote})`;
+    }
+  }
+  return `mo.md(${JSON.stringify(text)})`;
 }

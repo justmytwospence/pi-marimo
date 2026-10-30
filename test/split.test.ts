@@ -51,6 +51,46 @@ function setup(opts: { fullscreen?: boolean; active?: () => string | undefined; 
 }
 
 describe("NotebookSplit", () => {
+  it("inline ownership leaves native Vim keys alone; only focus/toggle are host keys", async () => {
+    const s = setup();
+    s.split.open(s.ctx, "k", { focus: true });
+    const v = s.views[0];
+    v.editing = true;
+    v.requestClose = vi.fn(async () => false);
+    for (const key of ["\x1b", "q", "?", "#", "\r", "\x1b[104;8u", "\x1b[104;8:2u"]) expect(s.input(key)).toBeUndefined();
+    expect(s.tui.focused).toBe(v);
+    expect(s.input("\x1d")).toEqual({ consume: true });
+    expect(s.tui.focused).toBe(s.editor);
+    expect(v.focused).toBe(false);
+    expect(s.input("\x1d")).toEqual({ consume: true });
+    expect(v.focused).toBe(true);
+    s.split.close();
+    await Promise.resolve();
+    expect(v.requestClose).toHaveBeenCalledOnce();
+    expect(v.dispose).not.toHaveBeenCalled();
+    expect(s.split.isOpen).toBe(true);
+    s.split.close(true);
+    expect(v.dispose).toHaveBeenCalledOnce();
+    expect(v.requestClose).toHaveBeenCalledOnce();
+  });
+
+  it("notebook replacement negotiates before destroying the old editor", async () => {
+    const s = setup();
+    s.split.open(s.ctx, "old", { focus: true });
+    const v = s.views[0];
+    v.editing = true;
+    const decide = Promise.withResolvers<boolean>();
+    v.requestClose = vi.fn(() => decide.promise);
+    expect(s.split.open(s.ctx, "new", { focus: true })).toBe(true);
+    expect(s.views).toHaveLength(1);
+    expect(v.dispose).not.toHaveBeenCalled();
+    v.editing = false;
+    decide.resolve(true);
+    await Promise.resolve();
+    expect(s.split.key).toBe("new");
+    expect(v.dispose).toHaveBeenCalledOnce();
+    s.split.shutdown();
+  });
   it("docks the view beside the chat and focuses it; close puts the chat back", () => {
     const s = setup();
     expect(s.split.open(s.ctx, "k", { focus: true })).toBe(true);

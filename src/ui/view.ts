@@ -5,7 +5,7 @@
 // fills the view and Enter drills into the detail (Esc comes back). It follows the running cell
 // until you move. Keys (also `?`):
 //   j/k move between cells, ctrl+j/ctrl+k (or ] [) between sections, n/p between a cell's parts,
-//   z/Z fold; Enter acts on the part (or opens the code; markdown: edits it); t drives a table; e/E
+//   z/Z fold; Enter acts on the part (or edits source/Markdown); B folds code; t drives a table; e/E
 //   errors, c/C the agent's changes, d its diff; < > upstream/downstream; ^D/^U/PgDn/PgUp/Space
 //   scroll the detail; O stacks the whole section in the detail; / filters; v lists the variables;
 //   r/R/A run cells, x twice interrupts; w drives the cell's widgets; : runs Python in the kernel;
@@ -14,14 +14,15 @@
 //   notebooks; Esc, q, ← or h goes back. The mouse wheel scrolls the pane under it, a click
 //   selects, a double click opens the code.
 // The prompts (ask, Python, a Lens note, a widget's value) dock at the bottom (dock.ts).
-import { type Component, type TUI, type TuiMouseEvent, type TuiMouseEventResult, matchesKey, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { type Component, type Focusable, type TUI, type TuiMouseEvent, type TuiMouseEventResult, colorToHex, matchesKey, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { basename } from "../core/io.js";
 import { type ChartRenderer, VegaRenderer as VegaRendererImpl, type VegaRenderer } from "../core/vega.js";
 import { sharedPlotly } from "../core/plotly.js";
 import { LiveCharts } from "./live-charts.js";
 import { Painter } from "./painter.js";
 import { type Cell, truncate } from "../core/notebook.js";
-import { editableMarkdown, markdownCellCode } from "../core/markdown.js";
+import type { SaveReceipt } from "../core/edit-cell.js";
+import { InlineEditorManager, type InlineEditorHost } from "./inline-editor.js";
 import { summarizeOutput, type TableData, type Widget } from "../core/output.js";
 import { elapsed, shortWhere } from "../core/render.js";
 import type { Followed } from "../core/watcher.js";
@@ -142,7 +143,7 @@ export interface ViewActions {
   liveCharts?: boolean;
   /** Start with the whole section in the detail pane (O toggles it). */
   outputs?: boolean;
-  /** Cells' code open (default) or folded to its first line; Enter flips one cell. */
+  /** Cells' code open (default) or folded to its preview; B flips one cell. */
   code?: "open" | "folded";
   /** A marimo table's kernel functions (search, summaries...), for driving tables. */
   table?: TableRpc;
@@ -150,8 +151,11 @@ export interface ViewActions {
   setTableSelection?(f: Followed, cell: Cell, objectId: string, value: unknown[]): void;
   /** Saves the whole table as CSV in Pi's working directory; resolves with the file name. */
   saveTable?(f: Followed, cell: Cell, objectId: string): Promise<string>;
-  /** Replaces a cell's code through marimo's code mode and reruns it. */
-  editCell?(f: Followed, cell: Cell, code: string): Promise<void>;
+  editors?: InlineEditorManager;
+  saveCell?(f: Followed, cellId: string, code: string, expectedCode: string): Promise<SaveReceipt>;
+  runSavedCell?(f: Followed, cellId: string, canonicalCode: string): Promise<void>;
+  confirm?(question: string, choices: readonly string[]): Promise<string | undefined>;
+  copy?(text: string): void;
   /** Pi's keybindings and the suite's editor, for the docked prompts. */
   keybindings?: unknown;
   editorFactory?: EditorFactoryFn;
@@ -175,7 +179,7 @@ function dockedBanner(file: string, width: number, th: FrameTheme, focused: bool
 
 const message = (e: unknown): string => (e instanceof Error ? e.message : String(e));
 
-export class NotebookView implements Component {
+export class NotebookView implements Component, Focusable {
   private scroll = 0;
   private follow = true;
   private cursor: string | undefined;
@@ -188,6 +192,13 @@ export class NotebookView implements Component {
   private focusedBlock: string | undefined;
   private diagramBlocks = new Set<string>();
   private readonly preferences: SessionPreferences;
+  private readonly editors: InlineEditorManager;
+  private readonly ownsEditors: boolean;
+  private unbindEditor?: () => void;
+  private _focused = true;
+  get focused(): boolean { return this._focused; }
+  set focused(value: boolean) { this._focused = value; this.editors?.setFocused(value); }
+  get editing(): boolean { return this.editors.active; }
   private readonly renderReady = () => { if (!this.closed) this.tui.requestRender(); };
   private readonly renderDiagram = (source: string, options: RowOptions & { blockId: string }): Row[] => {
     this.diagramBlocks.add(options.blockId);
@@ -268,6 +279,29 @@ export class NotebookView implements Component {
     live?: LiveCharts,
   ) {
     this.preferences = actions.preferences ?? new SessionPreferences();
+    this.ownsEditors = !actions.editors;
+    this.editors = actions.editors ?? new InlineEditorManager();
+    const colors = (theme as SyntaxTheme).colors;
+    const highlights: NonNullable<InlineEditorHost["highlights"]> = {};
+    if (colors) {
+      const fg = (key: string) => colors[key] ? colorToHex(colors[key]!) : undefined;
+      highlights.Normal = { ...(fg("text") ? { fg: fg("text")! } : {}), ...(fg("toolPendingBg") ? { bg: fg("toolPendingBg")! } : {}) };
+      for (const [group, key] of Object.entries({ Comment: "syntaxComment", String: "syntaxString", Number: "syntaxNumber", Statement: "syntaxKeyword", Function: "syntaxFunction", Type: "syntaxType", Operator: "syntaxOperator", Delimiter: "syntaxPunctuation", LineNr: "dim" })) if (fg(key)) highlights[group] = { fg: fg(key)! };
+    }
+    const editorHost: InlineEditorHost = {
+      highlights,
+      preferences: () => this.preferences.snapshot(),
+      saveCell: (f, id, code, expected) => actions.saveCell ? actions.saveCell(f, id, code, expected) : Promise.reject(new Error("Saving is not available here; your draft is kept")),
+      runSavedCell: (f, id, code) => actions.runSavedCell ? actions.runSavedCell(f, id, code) : Promise.reject(new Error("Saved, but not run: running is not available here")),
+      confirm: (question, choices) => actions.confirm?.(question, choices) ?? Promise.resolve(undefined),
+      copy: text => { if (!actions.copy) throw new Error("Copying is not available here; your draft is kept"); actions.copy(text); },
+      changed: this.renderReady,
+      note: text => { this.note = text; this.renderReady(); },
+      help: () => { this.help = true; this.renderReady(); },
+      dock: () => { this.toggleDock(); this.renderReady(); },
+      numbers: () => this.preferences.update({ lineNumbers: !this.preferences.snapshot().lineNumbers }),
+    };
+    this.unbindEditor = this.editors.bind(editorHost);
     this.vega = vega;
     this.plotly = plotly;
     this.section = sectionMode ?? actions.outputs ?? false;
@@ -350,7 +384,7 @@ export class NotebookView implements Component {
       else this.note = "Not available here.";
     } else if (this.actions.dock) {
       this.actions.dock(this.key, this.snapshot());
-      this.close();
+      this.close(true);
     } else this.note = "Docking is not available here.";
   }
 
@@ -380,7 +414,7 @@ export class NotebookView implements Component {
 
   /** Read-only scrolling content: global listeners leave its keys alone (a filter or a docked prompt takes them). */
   [INPUT_CONTEXT](): "viewer" | "filter" | "editor" {
-    return this.dock ? "editor" : this.typing ? "filter" : "viewer";
+    return this.editors.active || this.dock ? "editor" : this.typing ? "filter" : "viewer";
   }
 
   private cells(f: Followed): Cell[] {
@@ -504,6 +538,7 @@ export class NotebookView implements Component {
 
   /** Moves to the next (or previous) followed notebook, starting it afresh. */
   private switchNotebook(by: 1 | -1): void {
+    if (this.editors.active) return;
     const all = this.actions.followed();
     const i = all.findIndex((o) => notebookKey(o) === this.key);
     const next = all[((i + by) % Math.max(1, all.length) + all.length) % Math.max(1, all.length)];
@@ -643,32 +678,18 @@ export class NotebookView implements Component {
     });
   }
 
-  private openEditMarkdown(f: Followed, cell: Cell): void {
-    const text = editableMarkdown(cell.code);
-    if (text === undefined) {
-      this.note = "This markdown is built in Python (an f-string); ask the agent (a), or open it in the browser (o).";
-      this.setCode(cell.id, true);
-      return;
-    }
-    this.openDock({
-      kind: "markdown",
-      title: `Edit markdown · ${cellTitle(f.notebook, cell)}`,
-      hint: "enter saves · shift+enter new line · esc cancels (pi-vim: :w saves)",
-      initial: text,
-      submit: (edited) => {
-        this.closeDock();
-        if (edited.replace(/\s+$/u, "") === text.replace(/\s+$/u, "")) { this.note = "No change."; this.tui.requestRender(); return; }
-        const edit = this.actions.editCell;
-        if (!edit) { this.note = "Not available here."; this.tui.requestRender(); return; }
-        this.note = "Saving…";
-        edit(f, cell, markdownCellCode(edited)).then(
-          () => { if (!this.closed) { this.note = "Saved; marimo re-renders it."; this.tui.requestRender(); } },
-          (e: unknown) => { if (!this.closed) { this.note = `Could not save: ${message(e)}`; this.tui.requestRender(); } },
-        );
-        this.tui.requestRender();
-      },
-      cancel: () => { this.closeDock(); this.tui.requestRender(); },
-    });
+  private openInlineEditor(f: Followed, cell: Cell, kind?: "python" | "markdown"): void {
+    this.follow = false;
+    this.cursor = cell.id;
+    this.mode = "cells";
+    this.filter = "";
+    this.folded.clear();
+    this.widget = undefined;
+    this.table = undefined;
+    this.live.leave();
+    this.setCode(cell.id, true);
+    this.sectionCodeOpen.add(cell.id);
+    void this.editors.open(f, cell.id, kind).then(() => this.renderReady(), e => { this.note = message(e); this.renderReady(); });
   }
 
   /** The session and current data of a cell's marimo table, when the view can drive it. */
@@ -865,7 +886,7 @@ export class NotebookView implements Component {
     }
   }
 
-  /** Enter (or a double click): open or fold the cell's code, or go to the variable's cell. */
+  /** Enter (or a double click): edit source/Markdown or activate the focused control. */
   private activate(f: Followed): void {
     if (this.mode === "variables") return this.variablesKey(f, "\r");
     const c = this.cursorCell(f);
@@ -886,14 +907,13 @@ export class NotebookView implements Component {
           else if (f.connection !== "connected") this.note = "The notebook is not connected.";
           else this.widget = { cell: target.id, index: 0, sub: 0 };
           break;
-        case "code": this.toggleCode(target.id); break;
-        case "markdown": this.openEditMarkdown(f, target); break;
+        case "code": this.openInlineEditor(f, target, "python"); break;
+        case "markdown": this.openInlineEditor(f, target); break;
         default: this.note = "e jumps to the next failed cell.";
       }
       return;
     }
-    if (f.notebook.isMarkdown(c)) this.openEditMarkdown(f, c);
-    else this.toggleCode(c.id);
+    this.openInlineEditor(f, c);
   }
 
   private toggleCode(id: string): void {
@@ -928,6 +948,12 @@ export class NotebookView implements Component {
     this.syncConfirmation();
     if (this.help) {
       this.help = false;
+      this.tui.requestRender();
+      return;
+    }
+    if (this.editors.active) {
+      this.editors.updateCurrent(this.current());
+      this.editors.handleInput(data);
       this.tui.requestRender();
       return;
     }
@@ -1026,6 +1052,16 @@ export class NotebookView implements Component {
           else scrollCode(state, data === "H" ? -8 : 8, Number.MAX_SAFE_INTEGER);
           this.codeOffsets.set(blockId, state);
         }
+      }
+      this.tui.requestRender();
+      return;
+    }
+    if (data === "b" && f) {
+      const cell = this.cursorCell(f);
+      if (cell) {
+        const selected = this.part === undefined ? undefined : this.lastParts[this.part];
+        const target = selected ? f.notebook.cells.get(selected.cell) ?? cell : cell;
+        this.openInlineEditor(f, target, selected?.kind === "code" ? "python" : undefined);
       }
       this.tui.requestRender();
       return;
@@ -1256,6 +1292,8 @@ export class NotebookView implements Component {
 
   /** `✗ fit.py  running Model fit · agent: 1 changed`, and flush right when last it ran and where the server is. */
   private header(f: Followed, file: string, inner: number): string {
+    const editor = this.editors.state;
+    if (editor) return truncateToWidth(`Neovim · ${editor.kind}${editor.kind === "python" && f.notebook.cells.has(editor.cellId) && f.notebook.isMarkdown(f.notebook.cells.get(editor.cellId)!) ? " (Python source)" : ""} · ${editor.saving ? "saving" : editor.dirty ? "unsaved" : "saved"}${editor.conflict !== undefined ? " · conflict" : ""}${editor.unavailable ? ` · ${editor.unavailable}` : ""}`, inner);
     const th = this.theme;
     const nb = f.notebook;
     const busy = nb.running() || nb.queued() > 0;
@@ -1319,7 +1357,7 @@ export class NotebookView implements Component {
     const th = this.theme;
     const out = [frameRule(width, th)];
     if (dock.kind === "scratch" && this.scratch) out.push(...this.scratchLines(bodyWidth(width)).map((l) => frameRow(l, width, th)));
-    const half = dock.kind === "markdown" ? Math.max(6, Math.floor(this.tui.terminal.rows * 0.6)) : Math.max(4, Math.floor(this.tui.terminal.rows / 2));
+    const half = Math.max(4, Math.floor(this.tui.terminal.rows / 2));
     const room = Math.max(3, half - out.length);
     out.push(...dock.render(bodyWidth(width), room).map((l) => frameRow(l, width, th)));
     this.lastDock = out.length;
@@ -1353,6 +1391,7 @@ export class NotebookView implements Component {
     const fit = (text: string, w: number) => truncateToWidth(text, Math.max(1, w), "…", true);
     this.syncConfirmation();
     const f = this.current();
+    this.editors.updateCurrent(f);
     const file = basename(f?.attachment.path ?? notebookPath(this.key));
     const out = [this.actions.docked ? dockedBanner(file, width, th, this.actions.docked.focused()) : banner(`Notebook ${file}`, width, th)];
     if (!f && this.dock) this.closeDock();
@@ -1363,7 +1402,8 @@ export class NotebookView implements Component {
     this.lastPage = page;
     if (!f) {
       out.push(row(`${th.bold(file)}  ${th.fg("dim", "No longer followed.")}`), rule);
-      for (let i = 0; i < page; i++) out.push(row(""));
+      const recovery = this.editors.active ? this.editors.render(inner, page) : [];
+      for (let i = 0; i < page; i++) out.push(row(recovery[i] ?? ""));
       this.lastRows = [];
       this.lastOutline = [];
       this.lastDetail = [];
@@ -1376,7 +1416,15 @@ export class NotebookView implements Component {
       for (let i = 0; i < page; i++) out.push(row(rows[i] ?? ""));
     } else if (this.help) {
       out.push(row(this.header(f, file, inner)), rule);
-      const rows = helpLines(th, this.whereText(f)).map((text): Row => ({ text }));
+      const rows = (this.editors.active ? [
+        "Inline Neovim · isolated built-in runtime", "F1 help · F2 save only · F3 save and run",
+        "F4 leave (dirty edits require confirmation)", "F5 dock/fullscreen · F6 revert saved base",
+        "F7 line numbers · ctrl+] chat focus",
+        "Esc, ?, #, Enter and all ordinary keys: Vim",
+        ":w / :wq save only · :q! discards",
+        ":MarimoRun / :MarimoRevert / :MarimoClose",
+        "Conflicts keep drafts; no force overwrite.", "F1 / Esc closes help",
+      ] : helpLines(th, this.whereText(f))).map((text): Row => ({ text }));
       this.lastRows = rows;
       for (let i = 0; i < page; i++) out.push(row(rows[i]?.text ?? ""));
     } else if (this.mode === "variables") {
@@ -1402,6 +1450,10 @@ export class NotebookView implements Component {
       const nb = f.notebook;
       const cells = this.cells(f);
       const running = nb.running();
+      if (this.editors.active) {
+        this.follow = false;
+        if (this.editors.owns(f) && this.editors.state && nb.cells.has(this.editors.state.cellId)) this.cursor = this.editors.state.cellId;
+      }
       // Following: the cursor stays on the running cell, or on the fold that hides it.
       if (this.follow && running) {
         const head = this.filter ? undefined : foldedCells(nb, this.folded).get(running.cell.id);
@@ -1431,7 +1483,7 @@ export class NotebookView implements Component {
         this.reveal = false;
       } else this.place(built.rows.length, at, page);
       // Scrolled away from the cursor: it moves to the nearest cell on screen.
-      if (split && at !== undefined && !this.follow && !this.widget && (at < this.scroll || at >= this.scroll + page)) {
+      if (split && at !== undefined && !this.follow && !this.widget && !this.editors.active && (at < this.scroll || at >= this.scroll + page)) {
         const visible = cells.filter((c) => { const r = built.cellRows.get(c.id); return r !== undefined && r >= this.scroll && r < this.scroll + page; });
         const pick = at < this.scroll ? visible[0] : visible.at(-1);
         if (pick) {
@@ -1499,6 +1551,10 @@ export class NotebookView implements Component {
           onReady: this.renderReady,
           diagramRows: this.diagramRows,
           table: tableSource, tableCard, partFocus: this.part,
+          ...(this.editors.owns(f) && this.editors.state ? { inlineEditor: {
+            cellId: this.editors.state.cellId, kind: this.editors.state.kind,
+            rows: (width: number, _row: number) => this.editors.render(width, Math.max(1, this.section ? Math.min(dh - 1, Math.max(4, Math.floor(dh * 0.6))) : dh - 1)).map((text, editorRow) => ({ text, editorRow })),
+          } } : {}),
           ...(this.widget ? { widgetFocus: this.widget } : {}),
           imageRows: dh - 1, vega: this.vega, plotly: this.plotly,
           ...(this.actions.liveCharts === false ? {} : { live: this.live }),
@@ -1528,7 +1584,19 @@ export class NotebookView implements Component {
           if (focused < this.detailScroll) this.detailScroll = focused;
           else if (focused >= this.detailScroll + dh) this.detailScroll = focused - dh + 1;
         }
+        if (this.editors.active) {
+          const first = detail.findIndex(r => r.editorRow === 0);
+          if (first >= 0) this.detailScroll = Math.max(0, first - 1);
+          else {
+            detail = [...this.editors.render(dw, Math.max(1, dh)).map((text, editorRow) => ({ text, editorRow })), ...detail];
+            this.detailScroll = 0;
+          }
+        }
         this.detailScroll = Math.max(0, Math.min(this.detailScroll, Math.max(0, detail.length - dh)));
+      }
+      if (!cell && this.editors.active) {
+        detail = this.editors.render(dw, Math.max(1, dh)).map((text, editorRow) => ({ text, editorRow }));
+        this.detailScroll = 0;
       }
       this.lastDetail = detail;
       // An image draws only when its whole block is on screen; otherwise a note stands in for it.
@@ -1569,6 +1637,7 @@ export class NotebookView implements Component {
   }
 
   private footer(f: Followed | undefined, inner: number): string {
+    if (this.editors.active) return truncateToWidth(this.note ?? "F1 help · F2 save · F3 save+run · F4 leave", inner);
     const th = this.theme;
     const nav = th.fg("dim", this.actions.docked ? "? keys · esc chat · q close" : "? keys · esc back");
     const withNav = (left: string) => {
@@ -1599,8 +1668,8 @@ export class NotebookView implements Component {
     const focused = this.part !== undefined ? this.lastParts[this.part] : undefined;
     if (f) {
       hints.push("↑↓ cells");
-      if (focused) hints.push(`enter ${focused.kind === "markdown" ? "edit" : focused.kind === "table" || focused.kind === "chart" || focused.kind === "widgets" || focused.kind === "code" ? (focused.kind === "widgets" ? "widgets" : focused.kind) : ""}`.trim());
-      else hints.push(cell && f.notebook.isMarkdown(cell) ? "enter edit" : "enter code");
+      if (focused) hints.push(`enter ${focused.kind === "markdown" || focused.kind === "code" ? "edit" : focused.kind === "table" || focused.kind === "chart" || focused.kind === "widgets" ? (focused.kind === "widgets" ? "widgets" : focused.kind) : ""}`.trim());
+      else hints.push("enter edit");
     }
     const more: string[] = [];
     if (connected && this.actions.run && cell && !f.notebook.isMarkdown(cell)) more.push(busy ? "x interrupt" : "r run");
@@ -1624,10 +1693,17 @@ export class NotebookView implements Component {
     this.live.refresh();
   }
 
-  private close(): void {
+  /** Actual close negotiates; a dock transfer only detaches this view. */
+  async requestClose(): Promise<boolean> {
+    try { return await this.editors.close(); }
+    catch (error) { this.note = message(error); this.renderReady(); return false; }
+  }
+
+  private close(transfer = false): void {
     if (this.closed) return;
-    this.dispose();
-    this.done();
+    const finish = () => { this.dispose(); this.done(); };
+    if (transfer || !this.editors.active) finish();
+    else void this.requestClose().then(ok => { if (ok) finish(); });
   }
 
   /** A live chart takes the mouse over it; elsewhere the wheel scrolls the pane under it, a click selects, a double click opens the code. */
@@ -1670,6 +1746,7 @@ export class NotebookView implements Component {
   }
 
   handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
+    if (this.editors.active) return { handled: true };
     if (this.timing) return { handled: true };
     const live = this.live.mouse(event);
     if (live) return live;
@@ -1754,7 +1831,8 @@ export class NotebookView implements Component {
         const c = this.cursorCell(f);
         if (r.part !== undefined) this.part = r.part;
         const id = this.lastParts[r.part ?? -1]?.cell ?? c?.id;
-        if (id && (!r.blockId || r.blockId === `${id}:source`)) this.toggleCode(id);
+        const target = id ? f.notebook.cells.get(id) : undefined;
+        if (target && (!r.blockId || r.blockId === `${id}:source`)) this.openInlineEditor(f, target, "python");
       }
     } else if (this.paneAt(event.x, line) === "outline") {
       const r = this.lastOutline[this.scroll + line];
@@ -1774,6 +1852,8 @@ export class NotebookView implements Component {
   dispose(): void {
     if (!this.closed && !this.actions.docked) Painter.for(this.tui)?.setExclusive(false);
     this.closed = true;
+    this.unbindEditor?.();
+    if (this.ownsEditors) this.editors.dispose();
     clearInterval(this.timer);
     this.scratch?.abort.abort();
     this.dock?.dispose();

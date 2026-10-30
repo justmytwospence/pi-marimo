@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { editableMarkdown, markdownCellCode, markdownText } from "../src/core/markdown.js";
+import { editableMarkdown, markdownCellCode } from "../src/core/markdown.js";
 import { FUNCTION_CALL_PREFIX, NotebookState } from "../src/core/notebook.js";
 import { summarizeOutput } from "../src/core/output.js";
 import { callFunction, parseSearch } from "../src/core/table-rpc.js";
@@ -62,11 +62,17 @@ describe("table metadata", () => {
 });
 
 describe("markdown cell code", () => {
-  test("round trips through markdownText", () => {
-    for (const text of ["# Title", 'say """hi"""', `both """ and ''' and \\ here`]) {
-      expect(markdownText(markdownCellCode(text))).toBe(text);
+  test("round trips exact drafts without accumulating framing newlines", () => {
+    for (const text of ["", "# Title", 'say """hi"""', "# T\n\n", "  text  \n\t\n"]) {
+      let code = markdownCellCode(text);
+      for (let cycle = 0; cycle < 5; cycle++) {
+        const draft = editableMarkdown(code);
+        expect(draft).toBe(text);
+        expect(markdownCellCode(draft!)).toBe(code);
+        code = markdownCellCode(draft!);
+      }
     }
-    expect(markdownCellCode("# T\n\n")).toBe('mo.md(r"""\n# T\n""")');
+    expect(markdownCellCode("# T\n\n")).toBe('mo.md(r"""# T\n\n""")');
   });
   test("f-string markdown is not editable", () => {
     expect(editableMarkdown('mo.md(f"# {x}")')).toBeUndefined();

@@ -10,6 +10,36 @@ import { row as notebookRow, CONTENT_LEFT, bodyWidth } from "../src/ui/notebook-
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { NotebookSource } from "../src/ui/source.js";
 import { notebookKey } from "../src/ui/identity.js";
+import { InlineEditorManager } from "../src/ui/inline-editor.js";
+import type { NeovimOpenOptions, NeovimSession } from "../src/core/neovim.js";
+
+function fakeEditors() {
+  let options: NeovimOpenOptions;
+  let text = "";
+  const redraw = (width = 80, height = 12) => options.onRedraw?.([
+    ["grid_resize", [1, width, height]],
+    ["grid_line", [1, 0, 0, Array.from(text.slice(0, width), ch => [ch, 0])]],
+    ["flush", []],
+  ]);
+  const session = {
+    input: vi.fn(async (_data: string) => {}),
+    focus: vi.fn(async (_focused: boolean) => {}),
+    resize: vi.fn(async (width: number, height: number) => redraw(width, height)),
+    getText: vi.fn(async () => text),
+    replaceText: vi.fn(async (value: string) => { text = value; }),
+    setLineNumbers: vi.fn(async () => {}),
+    dispose: vi.fn(),
+  };
+  const openSession = vi.fn(async (value: NeovimOpenOptions) => {
+    options = value; text = value.text; redraw();
+    return session as unknown as NeovimSession;
+  });
+  const editors = new InlineEditorManager(openSession);
+  return { editors, session, openSession, options: () => options,
+    draft(value: string) { text = value; options.onDraft?.(value); redraw(); } };
+}
+const editorReady = async () => { await Promise.resolve(); await Promise.resolve(); };
+const plain = (text: string) => text.replace(/\x1b\[[0-9;]*m|\x1b_pi:[^\x07]*\x07/gu, "");
 
 const theme = { fg: (_: string, text: string) => text, bold: (text: string) => text };
 const tui = { requestRender: () => {}, terminal: { rows: 28 } };
@@ -124,6 +154,135 @@ const make = (f: Followed, extra: Partial<ConstructorParameters<typeof NotebookV
   new NotebookView(tui as any, theme2, notebookKey(f), { followed: () => [f], interrupt: async () => {}, openInBrowser: () => {}, ...extra }, () => {});
 const screen = (v: NotebookView) => v.render(100).join("\n");
 
+test.each([46, 80, 100, 120, 180].flatMap(width => [
+  { width, kind: "python" as const, code: "source = 42", text: "source = 42" },
+  { width, kind: "markdown" as const, code: 'mo.md("# Body text")', text: "# Body text" },
+]))("inline $kind replaces exactly its source location at $width columns", async ({ width, kind, code, text }) => {
+  const f = nbWith([{ id: "a", code }]);
+  const fake = fakeEditors();
+  const v = make(f, { editors: fake.editors, outputs: false });
+  try {
+    v.render(width);
+    const before = (v as any).lastDetail as Array<any>;
+    const sourceAt = kind === "python" ? before.findIndex(r => r.blockId === "a:source") : before.findIndex(r => plain(r.text).includes("Body text"));
+    expect(sourceAt).toBeGreaterThanOrEqual(0);
+    const prefix = before.slice(0, sourceAt).map(r => r.text);
+    v.handleInput("b");
+    await editorReady();
+    const lines = v.render(width);
+    const detail = (v as any).lastDetail as Array<any>;
+    expect(detail.findIndex(r => r.editorRow === 0)).toBe(sourceAt);
+    expect(detail.slice(0, sourceAt).map(r => r.text)).toEqual(prefix);
+    expect(plain(detail[sourceAt].text)).toContain(text);
+    expect(lines.every(line => visibleWidth(line) === width)).toBe(true);
+    expect(fake.session.resize).toHaveBeenLastCalledWith(fake.editors.state!.viewport.width, fake.editors.state!.viewport.height);
+    expect(fake.options()).toMatchObject({ filetype: kind, text });
+  } finally { v.dispose(); fake.editors.dispose(); }
+});
+
+test.each(["python", "markdown"])("inline %s retains the other section cells and pins selection during running events", async kind => {
+  const f = nbWith([
+    { id: "h", code: 'mo.md("# Section")' },
+    { id: "a", code: "source = 42" },
+    { id: "b", code: "other = 2", name: "other" },
+  ]);
+  const fake = fakeEditors();
+  const v = make(f, { editors: fake.editors, outputs: true });
+  try {
+    if (kind === "python") v.handleInput("j");
+    v.render(120);
+    v.handleInput("b");
+    await editorReady();
+    expect(plain(v.render(120).join("\n"))).toContain("other");
+    let detail = (v as any).lastDetail as Array<any>;
+    expect(detail.some(r => r.text.includes("Section"))).toBe(true);
+    expect(detail.some(r => r.text.includes("other"))).toBe(true);
+    expect(detail.some(r => r.editorRow === 0)).toBe(true);
+    f.notebook.apply("cell-op", { cell_id: "b", status: "running" });
+    v.render(120);
+    const selected = kind === "python" ? "a" : "h";
+    expect(v.snapshot().cursor).toBe(selected);
+    expect(v.snapshot().follow).toBe(false);
+    expect(fake.editors.state?.cellId).toBe(selected);
+    detail = (v as any).lastDetail;
+    expect(detail.some(r => r.text.includes("other"))).toBe(true);
+  } finally { v.dispose(); fake.editors.dispose(); }
+});
+
+test("all ordinary keys go to native editing, not notebook commands", async () => {
+  const f = nbWith([{ id: "a", code: "x = 1" }, { id: "b", code: "y = 2" }]);
+  const fake = fakeEditors();
+  const run = vi.fn();
+  const v = make(f, { editors: fake.editors, run });
+  try {
+    v.render(120);
+    v.handleInput("\r");
+    await editorReady();
+    v.render(120);
+    const keys = [...Array.from({ length: 95 }, (_, i) => String.fromCharCode(i + 32)), "\r", "\n", "\t", "\x1b", "\x7f", "\x03", "\x04", "\x15", "\x1b[A", "\x1b[B", "\x1b[5~", "\x1b[6~"];
+    for (const key of keys) v.handleInput(key);
+    expect(fake.session.input.mock.calls.map(([data]) => data)).toEqual(keys);
+    expect(v[INPUT_CONTEXT]()).toBe("editor");
+    expect(v.snapshot().cursor).toBe("a");
+    expect(run).not.toHaveBeenCalled();
+  } finally { v.dispose(); fake.editors.dispose(); }
+});
+
+test("Focusable and F5 transfer retain the native process across two views", async () => {
+  const f = nbWith([{ id: "a", code: "x = 1" }]);
+  const fake = fakeEditors();
+  const dock = vi.fn();
+  const undock = vi.fn();
+  const first = make(f, { editors: fake.editors, dock });
+  let second: NotebookView | undefined;
+  try {
+    first.render(120);
+    first.handleInput("\r");
+    await editorReady();
+    fake.draft("unsaved = 2");
+    first.focused = false;
+    expect(fake.session.focus).toHaveBeenLastCalledWith(false);
+    first.focused = true;
+    expect(fake.session.focus).toHaveBeenLastCalledWith(true);
+    first.handleInput("\x1b[15~"); // F5
+    expect(dock).toHaveBeenCalledOnce();
+    expect(fake.session.dispose).not.toHaveBeenCalled();
+    second = make(f, { editors: fake.editors, initial: dock.mock.calls[0]![1], docked: { focused: () => true, focusMain: () => {} }, undock });
+    second.render(80);
+    expect(second[INPUT_CONTEXT]()).toBe("editor");
+    expect(fake.editors.state).toMatchObject({ draft: "unsaved = 2", dirty: true, cellId: "a" });
+    expect(fake.openSession).toHaveBeenCalledOnce();
+    second.focused = false;
+    expect(fake.session.focus).toHaveBeenLastCalledWith(false);
+    second.focused = true;
+    second.handleInput("j");
+    expect(fake.session.input).toHaveBeenLastCalledWith("j");
+    second.handleInput("\x1b[15~");
+    expect(undock).toHaveBeenCalledOnce();
+    expect(fake.session.dispose).not.toHaveBeenCalled();
+  } finally { first.dispose(); second?.dispose(); fake.editors.dispose(); }
+  expect(fake.session.dispose).toHaveBeenCalledOnce();
+});
+
+test("legacy editorFactory still supplies the ask prompt", () => {
+  const f = nbWith([{ id: "a", code: "x = 1" }]);
+  const ask = vi.fn();
+  const editor = { focused: false, render: () => ["legacy prompt"], handleInput: vi.fn(), dispose: vi.fn() };
+  const editorFactory = vi.fn((_options: any) => editor as any);
+  const v = make(f, { editorFactory, keybindings: {} as any, ask });
+  try {
+    v.handleInput("a");
+    expect(editorFactory).toHaveBeenCalledWith(expect.objectContaining({ surface: "embedded", initialMode: "insert" }));
+    expect(screen(v)).toContain("legacy prompt");
+    expect(v[INPUT_CONTEXT]()).toBe("editor");
+    v.handleInput("hello");
+    expect(editor.handleInput).toHaveBeenCalledWith("hello");
+    editorFactory.mock.calls[0]![0].onSubmit("question");
+    expect(ask).toHaveBeenCalledWith(f, f.notebook.cells.get("a"), "question");
+    expect(editor.dispose).toHaveBeenCalledOnce();
+  } finally { v.dispose(); }
+});
+
 test("STEP2 local frame has a single content origin and no vertical borders", () => {
   expect(CONTENT_LEFT).toBe(1);
   expect(bodyWidth(46)).toBe(44);
@@ -218,7 +377,7 @@ test("the header is one line: state, the agent, the last run and where the serve
   } finally { v.dispose(); }
 });
 
-test("j/k move the cursor between cells; the detail shows the cell's output, folds its code, and Enter opens it", async () => {
+test("j/k move the cursor between cells; the detail shows the cell's output, folds its code, and B opens it", async () => {
   const f = nbWith([{ id: "a", code: "print('hi')\nx = 1", name: "first" }, { id: "b", code: "y = 2", name: "second" }]);
   f.notebook.apply("cell-op", { cell_id: "a", status: "running", timestamp: 1 });
   f.notebook.apply("cell-op", { cell_id: "a", console: [{ channel: "stdout", mimetype: "text/plain", data: "hi\n" }], output: { channel: "output", mimetype: "text/html", data: "<span>value &amp; more</span>" } });
@@ -239,12 +398,12 @@ test("j/k move the cursor between cells; the detail shows the cell's output, fol
     expect(screen(v)).toMatch(/▌  second/u);
     expect(screen(v)).not.toContain("│ value & more");
     v.handleInput("k");
-    v.handleInput("\r");
+    v.handleInput("B");
     const open = screen(v);
     expect(open).toMatch(/▌  first/u);
     expect(open).toContain("│ x = 1");
     expect(open).toContain("│ ▾ python");
-    v.handleInput("\r");
+    v.handleInput("B");
     expect(screen(v)).toContain("│ x = 1");
     expect(screen(v)).toContain("│ ▸ python");
   } finally { v.dispose(); }
@@ -600,9 +759,10 @@ test("{ goes to the previous notebook, } to the next", () => {
   } finally { v.dispose(); }
 });
 
-test("the mouse: the wheel scrolls the pane under it, a click selects a cell, a second click (or a double click) opens its code, a click on the code line toggles it", () => {
+test("the mouse: the wheel scrolls, a click selects, and a double click edits inline", async () => {
   const f = followed();
-  const v = new NotebookView(tui as any, theme, notebookKey(f), { followed: () => [f], interrupt: async () => {}, openInBrowser: () => {} }, () => {});
+  const fake = fakeEditors();
+  const v = make(f, { editors: fake.editors });
   const ev = (type: string, y: number, extra = {}) => ({ type, button: type === "wheel" ? "none" : "left", x: 10, y, screenX: 10, screenY: y, width: 100, height: 28, shift: false, alt: false, ctrl: false, ...extra }) as any;
   try {
     v.render(100);
@@ -612,15 +772,15 @@ test("the mouse: the wheel scrolls the pane under it, a click selects a cell, a 
     v.handleMouse(ev("click", 7));
     expect(screen(v)).toMatch(/▌  cell-7/u);
     expect(screen(v)).toContain("│ x = 1");
-    v.handleMouse(ev("click", 7, { clickCount: 2 }));
-    expect(screen(v)).toContain("│ x = 1");
-    // On the detail: a click on the code folds or opens it (one line either way here).
-    const codeRow = v.render(100).findIndex((l) => l.includes("│ x = 1"));
-    expect(v.handleMouse(ev("click", codeRow, { x: 60 }))).toEqual({ handled: true });
-    // Outside the rows, and moves, are left alone.
+    // Outside the rows, and moves, are left alone before the editor owns input.
     expect(v.handleMouse(ev("click", 1))).toBeUndefined();
     expect(v.handleMouse(ev("move", 7, { button: "none" }))).toBeUndefined();
-  } finally { v.dispose(); }
+    v.handleMouse(ev("click", 7, { clickCount: 2 }));
+    await editorReady();
+    expect(v[INPUT_CONTEXT]()).toBe("editor");
+    expect(fake.editors.state?.cellId).toBe("cell-7");
+    expect(plain(screen(v))).toContain("x = 1");
+  } finally { v.dispose(); fake.editors.dispose(); }
 });
 
 test("? lists every key and any key closes it", () => {
@@ -855,7 +1015,8 @@ test("narrow, a few outline rows around the cursor sit above the detail, and the
   const f = notebookWithResults();
   await f.notebook.settled();
   let closed = false;
-  const v = new NotebookView(tui as any, theme2, notebookKey(f), { followed: () => [f], interrupt: async () => {}, openInBrowser: () => {} }, () => { closed = true; });
+  const fake = fakeEditors();
+  const v = new NotebookView(tui as any, theme2, notebookKey(f), { followed: () => [f], interrupt: async () => {}, openInBrowser: () => {}, editors: fake.editors }, () => { closed = true; });
   const ev = (type: string, y: number, extra = {}) => ({ type, button: type === "wheel" ? "none" : "left", x: 10, y, screenX: 10, screenY: y, width: 80, height: 28, shift: false, alt: false, ctrl: false, ...extra }) as any;
   try {
     for (const l of v.render(80)) expect(visibleWidth(l)).toBe(80);
@@ -866,40 +1027,37 @@ test("narrow, a few outline rows around the cursor sit above the detail, and the
     const text = lines.join("\n");
     // The outline (with the cursor's neighbours), a rule, then the cell's detail with its traceback.
     expect(text).toMatch(/daily[\s\S]*▌ {2}✗ model +\[KeyError\][\s\S]*chart[\s\S]*─{20,}[\s\S]*Traceback \(most recent call last\)/u);
-    expect(text).toContain("enter code");
+    expect(text).toContain("enter edit");
     const rule = lines.findIndex((l, i) => i > 2 && /^ ─{20,} /u.test(l));
     // As many outline rows above the cursor as below it.
     const cursorRow = lines.findIndex((l) => l.includes("▌  ✗ model"));
     expect(cursorRow - 3).toBe(rule - 1 - cursorRow);
     expect(rule).toBeGreaterThan(3);
     expect(rule).toBeLessThan(12);
-    // Enter opens the code in place.
-    v.handleInput("\r");
+    // B opens the code for reading in place.
+    v.handleInput("B");
     expect(v.render(80).join("\n")).toContain("model = boom(daily)");
-    // A click on an outline row selects it; a click on the detail's code line folds the code.
+    // A click on an outline row selects it; a click on the detail's code starts inline editing.
     const row = v.render(80).findIndex((l) => l.includes("  chart"));
     v.handleMouse(ev("click", row, { clickCount: 1 }));
     expect(v.render(80).join("\n")).toMatch(/▌ {2}  chart/u);
     v.handleInput("k");
     const code = v.render(80).findIndex((l) => l.includes(" model = boom(daily)"));
-    const column = v.render(80)[code]!.indexOf("model = boom");
     v.handleMouse(ev("click", code));
-    // Focus stays in the header; source rows keep their column without a gutter.
-    const after = v.render(80);
-    expect((v as any).lastParts[(v as any).part]?.kind).toBe("code");
-    expect(after.join("\n")).toMatch(/^ code\s*$/mu);
-    expect(after.join("\n")).toContain("▾ python");
-    expect(after.find((l) => l.includes("model = boom(daily)"))!.indexOf("model = boom")).toBe(column);
-    expect(after[code]!.indexOf("model = boom")).toBe(column);
+    await editorReady();
+    expect(v[INPUT_CONTEXT]()).toBe("editor");
+    expect(f.notebook.cells.get(fake.editors.state!.cellId)?.code).toBe("model = boom(daily)");
+    expect(plain(v.render(80).join("\n"))).toContain("model = boom(daily)");
+    await fake.editors.close();
     // The wheel over the outline moves the cursor.
     v.handleMouse(ev("wheel", 4, { wheelDelta: 1 }));
     expect(v.render(80).join("\n")).toMatch(/▌ {2}  chart/u);
     v.handleInput("\x1b");
     expect(closed).toBe(true);
-  } finally { v.dispose(); }
+  } finally { v.dispose(); fake.editors.dispose(); }
 });
 
-test("the detail of a failed cell: its error, the traceback, the code folded to a line count that Enter opens", async () => {
+test("the detail of a failed cell shows its error, traceback and source", async () => {
   const f = notebookWithResults();
   await f.notebook.settled();
   const v = make(f);
@@ -970,7 +1128,7 @@ test("| docks the full-screen view with its state, and undocks the docked one", 
   const v = new NotebookView(tui as any, theme2, notebookKey(f), { followed: () => [f], interrupt: async () => {}, openInBrowser: () => {}, dock }, done);
   try {
     for (let i = 0; i < 10; i++) v.handleInput("j");
-    v.handleInput("\r");
+    v.handleInput("B");
     v.handleInput("O");
     v.handleInput("|");
     expect(dock).toHaveBeenCalledWith(notebookKey(f), expect.objectContaining({ cursor: "cell-10", codeOpen: ["cell-10"], section: true }));
@@ -1008,7 +1166,7 @@ test("ctrl+j and ctrl+k move between sections", () => {
   } finally { v.dispose(); }
 });
 
-test("n and p walk a cell's parts and Enter acts on the focused one", async () => {
+test("n and p walk a cell's parts and B opens the code for reading", async () => {
   const f = nbWith([{ id: "a", code: "x = 1\nprint(x)" }, { id: "b", code: "y = 2" }]);
   const slider = "<marimo-ui-element object-id='a-0' random-id='x'><marimo-slider data-initial-value='1' data-label='&quot;s&quot;' data-start='0' data-stop='2' data-step='1' data-steps='[]'></marimo-slider></marimo-ui-element>";
   f.notebook.apply("cell-op", { cell_id: "a", status: "idle", console: [{ channel: "stdout", mimetype: "text/plain", data: "one\ntwo\n" }], output: { channel: "marimo-error", mimetype: "application/vnd.marimo+error", data: [{ type: "exception", exception_type: "KeyError", msg: "k" }] } });
@@ -1034,7 +1192,7 @@ test("n and p walk a cell's parts and Enter acts on the focused one", async () =
     v.handleInput("n");
     expect(focused()).toBe("code");
     expect(screen(v)).toContain("▸ python");
-    v.handleInput("\r");
+    v.handleInput("B");
     expect(screen(v)).toContain("▾ python");
     expect(screen(v)).toContain("print(x)");
     v.handleInput("p");
@@ -1111,20 +1269,24 @@ test("t drives a marimo table: paging, sorting and selection go through the kern
   } finally { v.dispose(); clearTableSessions(); }
 });
 
-test("Enter on a markdown cell edits it and saves through editCell", () => {
-  const f = nbWith([{ id: "m", code: 'mo.md("# Title")' }, { id: "a", code: "x = 1" }]);
-  const editCell = vi.fn(async () => {});
-  const v = make(f, { editCell });
+test("Enter edits native Markdown text and saves its exact body with the original expected code", async () => {
+  const original = 'mo.md("# Title")';
+  const f = nbWith([{ id: "m", code: original }, { id: "a", code: "x = 1" }]);
+  const fake = fakeEditors();
+  const saveCell = vi.fn(async (_f: Followed, _id: string, code: string, _expected: string) => ({ canonicalCode: code, requestId: "save-1" }));
+  const v = make(f, { editors: fake.editors, saveCell });
   try {
     expect(screen(v)).not.toContain("│ mo.md");
     v.handleInput("\r");
-    const text = screen(v);
-    expect(text).toContain("Edit markdown");
-    expect(text).toContain("# Title");
-    v.handleInput("!");
-    v.handleInput("\r");
-    expect(editCell).toHaveBeenCalledWith(f, expect.objectContaining({ id: "m" }), 'mo.md(r"""\n# Title!\n""")');
-  } finally { v.dispose(); }
+    await editorReady();
+    expect(v[INPUT_CONTEXT]()).toBe("editor");
+    expect(fake.options()).toMatchObject({ text: "# Title", filetype: "markdown" });
+    expect(plain(screen(v))).toContain("# Title");
+    fake.draft("# Title!");
+    await fake.options().onWrite("# Title!", "# Title");
+    expect(saveCell).toHaveBeenCalledExactlyOnceWith(f, "m", 'mo.md(r"""# Title!""")', original);
+    expect(fake.editors.state?.dirty).toBe(false);
+  } finally { v.dispose(); fake.editors.dispose(); }
 });
 
 test("code has a background block when the theme has one", () => {
@@ -1133,7 +1295,7 @@ test("code has a background block when the theme has one", () => {
   const v = new NotebookView(tui as any, bgTheme as any, notebookKey(f), { followed: () => [f], interrupt: async () => {}, openInBrowser: () => {} }, () => {});
   try {
     screen(v);
-    v.handleInput("\r");
+    v.handleInput("B");
     const text = screen(v);
     expect(text).toContain("<toolPendingBg>");
     expect(text).not.toContain("│ y = 2");
@@ -1197,7 +1359,7 @@ test("focusing the code does not move it: only the header carries the bar", () =
   const bgTheme = { ...theme, bg: (c: string, t: string) => `<${c}>${t}</${c}>` };
   const v = new NotebookView(tui as any, bgTheme as any, notebookKey(f), { followed: () => [f], interrupt: async () => {}, openInBrowser: () => {}, code: "folded" }, () => {});
   try {
-    v.handleInput("\r");
+    v.handleInput("B");
     const column = () => { const l = v.render(100).find((x) => x.includes("y = 2"))!; return l.indexOf("y = 2"); };
     const before = column();
     v.handleInput("n");
@@ -1229,16 +1391,16 @@ test("r shows the cell queued at once, then marimo's run: a spinner in the outli
   } finally { v.dispose(); }
 });
 
-test("code is open by default; Enter folds a cell's code and opens it again", () => {
+test("code is open by default; B folds a cell's code and opens it again", () => {
   const f = nbWith([{ id: "a", code: "x = 1\ny = 2" }]);
   const v = make(f);
   try {
     expect(screen(v)).toContain("│ y = 2");
-    v.handleInput("\r");
+    v.handleInput("B");
     expect(screen(v)).toContain("▸ python");
     expect(screen(v)).toContain("│ x = 1");
     expect(screen(v)).toContain("│ y = 2");
-    v.handleInput("\r");
+    v.handleInput("B");
     expect(screen(v)).toContain("│ y = 2");
     expect(screen(v)).toContain("▾ python");
   } finally { v.dispose(); }

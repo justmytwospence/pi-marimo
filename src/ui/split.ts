@@ -138,6 +138,11 @@ export class NotebookSplit {
       if (!o.quiet) ctx.ui.notify("marimo: docking needs Pi's interactive terminal UI.", "warning");
       return false;
     }
+    if (this.view?.editing && this.key !== key) {
+      const previous = this.view;
+      void previous.requestClose().then(ok => { if (ok && this.view === previous) this.open(ctx, key, o); });
+      return true;
+    }
     const tui = this.probe(ctx);
     const theme = this.theme;
     if (!tui || !theme || !canSplit(tui)) {
@@ -170,6 +175,7 @@ export class NotebookSplit {
     const host: DockedHost = { focused: () => this.focused, focusMain: () => this.focusMain() };
     this.view = this.make(tui, theme, key, host, () => this.closeByUser(), o.state ?? this.states.get(key));
     this.host.view = this.view;
+    this.view.focused = false;
     old?.dispose();
     if (!this.layout!.mount()) {
       this.view.dispose();
@@ -196,6 +202,7 @@ export class NotebookSplit {
     const current = tui.getFocusedComponent?.() ?? null;
     if (current && current !== view) this.mainFocus = current;
     tui.setFocus(view as never);
+    view.focused = true;
     // The chat's editor borders turn muted while the notebook has focus.
     muteEditorBorders(this.mainFocus, () => {
       const theme = this.theme;
@@ -207,11 +214,19 @@ export class NotebookSplit {
   focusMain(): void {
     const tui = this.tui;
     if (!tui) return;
-    if (this.focused && this.mainFocus) tui.setFocus(this.mainFocus as never);
+    if (this.focused && this.mainFocus) {
+      if (this.view) this.view.focused = false;
+      tui.setFocus(this.mainFocus as never);
+    }
     tui.requestRender();
   }
 
-  close(): void {
+  close(transfer = false): void {
+    if (!transfer && this.view?.editing) {
+      const previous = this.view;
+      void previous.requestClose().then(ok => { if (ok && this.view === previous) this.close(true); });
+      return;
+    }
     if (!this.layout || !this.layout.mounted) {
       this.view?.dispose();
       this.host.view = undefined;
@@ -257,7 +272,7 @@ export class NotebookSplit {
     if (isKeyRelease(data)) return undefined;
     const repeat = isKeyRepeat(data);
     if ((this.options.toggleKeys ?? toggleKeys()).some((k) => matchesKey(data, k as never))) return repeat ? (this.isOpen ? { consume: true } : undefined) : this.toggle();
-    if (repeat && (matchesKey(data, FOCUS_KEY as never) || Object.values(NAV_KEYS).some((k) => matchesKey(data, k as never)))) return this.isOpen ? { consume: true } : undefined;
+    if (repeat && (matchesKey(data, FOCUS_KEY as never) || (!(this.focused && this.view?.editing) && Object.values(NAV_KEYS).some((k) => matchesKey(data, k as never))))) return this.isOpen ? { consume: true } : undefined;
     if (!this.isOpen || this.collapsed || !this.tui) return undefined;
     if (matchesKey(data, FOCUS_KEY as never)) {
       if (this.focused) {
@@ -270,6 +285,9 @@ export class NotebookSplit {
       }
       return undefined;
     }
+    // Vim owns every ordinary/reserved navigation key while editing. Only the two
+    // documented split focus/toggle shortcuts may bypass it.
+    if (this.focused && this.view?.editing) return undefined;
     const direction = (Object.keys(NAV_KEYS) as Direction[]).find((d) => matchesKey(data, NAV_KEYS[d] as never));
     if (!direction) return undefined;
     if (this.focused) {
@@ -290,7 +308,7 @@ export class NotebookSplit {
   }
 
   shutdown(): void {
-    this.close();
+    this.close(true);
     this.release?.();
     this.release = undefined;
     this.blocked = 0;

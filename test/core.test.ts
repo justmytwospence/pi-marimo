@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, test, vi } from "vitest";
 import { insertState } from "../src/index.js";
-import { headingsFromCode, isMarkdownCell, mdLiterals } from "../src/core/markdown.js";
+import { editableMarkdown, markdownCellCode, headingsFromCode, isMarkdownCell, mdLiterals } from "../src/core/markdown.js";
 import { NotebookState } from "../src/core/notebook.js";
 import { snapshot, statusParts, shortWhere, statusText } from "../src/core/render.js";
 import { SseParser } from "../src/core/sse.js";
@@ -22,6 +22,54 @@ function replay(file: string, until?: (op: string, data: any) => boolean): Noteb
 }
 
 describe("markdown", () => {
+  test.each([
+    'mo.md("hello" + name)', 'mo.md("hello" "world")',
+    'mo.md("hello")\nprint("important")', 'mo.md("hello") # comment',
+    'mo.md("hello", width=10)', 'mo.md(f"{name}")', 'mo.md(value)',
+    'mo.md("hello\\nworld")', 'mo.md("a\\\"b")', 'mo.md(b"bytes")',
+    'mo.md("hello" # comment\n)', 'mo.md("hello\nworld")',
+  ])("does not grant text editing to %s", code => {
+    expect(editableMarkdown(code)).toBeUndefined();
+  });
+  test("text editing accepts only whole literal expressions and preserves raw body", () => {
+    expect(editableMarkdown('  mo.md("hello") \n\t')).toBe("hello");
+    expect(editableMarkdown('mo.md(r"hello\\nworld")')).toBe('hello\\nworld');
+    expect(editableMarkdown('mo.md(r"""\n  hello  \n""")')).toBe('\n  hello  \n');
+  });
+  test("markdown drafts retain trailing spaces and blank lines", () => {
+    const text = "hello  \n\n  ";
+    expect(markdownCellCode(text)).toBe(`mo.md(r"""${text}""")`);
+    expect(editableMarkdown(markdownCellCode(text))).toBe(text);
+  });
+  test.each([
+    "", "\n\n", "  \t\nhello  \n\n  ", "# T\n\n",
+    'ends in "', 'ends in ""', "ends in '", "ends in ''",
+    'contains """', "contains '''", "even backslashes\\\\", "four backslashes\\\\\\\\",
+  ])("raw markdown drafts remain stable across repeated saves: %j", text => {
+    let code = markdownCellCode(text);
+    for (let cycle = 0; cycle < 5; cycle++) {
+      const draft = editableMarkdown(code);
+      expect(draft).toBe(text);
+      expect(markdownCellCode(draft!)).toBe(code);
+      code = markdownCellCode(draft!);
+    }
+  });
+  test("raw quoting prefers double quotes then safe single quotes", () => {
+    expect(markdownCellCode("")).toBe('mo.md(r"""""")');
+    expect(markdownCellCode('ends in "')).toBe(`mo.md(r'''ends in "''')`);
+    expect(markdownCellCode("ends in '")).toBe(`mo.md(r"""ends in '""")`);
+    expect(markdownCellCode('contains """')).toBe(`mo.md(r'''contains """''')`);
+  });
+  test.each([
+    "odd backslash\\", "three backslashes\\\\\\", 'both """ and \'\'\'',
+    '""" and terminal \'', '\'\'\' and terminal "',
+    '""" and \'\'\'\n\t  \\',
+  ])("unsafe raw drafts use an escaped Python string: %j", text => {
+    const code = markdownCellCode(text);
+    expect(code).toBe(`mo.md(${JSON.stringify(text)})`);
+    expect(JSON.parse(code.slice(6, -1))).toBe(text);
+    expect(editableMarkdown(code)).toBeUndefined();
+  });
   test("headings come from mo.md literals, not comments or fences", () => {
     const code = [
       "# a python comment",
