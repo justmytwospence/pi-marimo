@@ -1,9 +1,9 @@
 import { readFileSync } from "node:fs";
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import { insertState } from "../src/index.js";
 import { headingsFromCode, isMarkdownCell, mdLiterals } from "../src/core/markdown.js";
 import { NotebookState } from "../src/core/notebook.js";
-import { snapshot, statusParts, statusText } from "../src/core/render.js";
+import { snapshot, statusParts, shortWhere, statusText } from "../src/core/render.js";
 import { SseParser } from "../src/core/sse.js";
 import { normalize, within } from "../src/core/io.js";
 import { parseMode } from "../src/core/watcher.js";
@@ -141,12 +141,21 @@ describe("render", () => {
     const nb = replay("kiosk-run.sse", (op, data) => op === "cell-op" && data.cell_id === "lEQa" && data.status === "running");
     const since = nb.running()!.since!;
     expect(statusText(statusParts(nb, attachment, "connected", since + 12_400))).toBe(
-      "marimo: nb.py · running Data loading › Slow model fit (12s) · 1 queued",
+      "marimo: nb.py · :2799 · running Data loading › Slow model fit (12s) · 1 queued",
     );
-    expect(statusText(statusParts(nb, attachment, "disconnected"))).toBe("marimo: nb.py · disconnected");
+    expect(statusText(statusParts(nb, attachment, "disconnected"))).toBe("marimo: nb.py · :2799 · disconnected");
+    expect(shortWhere("http://localhost:2718")).toBe(":2718");
+    expect(shortWhere("https://nb.example.com/lab/")).toBe("nb.example.com/lab");
     expect(statusText(statusParts(nb, attachment, "connected", since + 1000, [{ ...attachment, path: "/w/prep.py" }, { ...attachment, path: "/w/plots.py" }]))).toBe(
-      "marimo: nb.py · running Data loading › Slow model fit (1s) · 1 queued · also prep.py, plots.py",
+      "marimo: nb.py · :2799 · running Data loading › Slow model fit (1s) · 1 queued · also prep.py, plots.py",
     );
+  });
+
+  test("status line names the first error", () => {
+    const nb = replay("kiosk-run.sse");
+    expect(statusText(statusParts(nb, attachment, "connected"))).toMatch(/ · 1 error: [^·]+ \(ZeroDivisionError\)$/);
+    const two = statusText({ notebook: "nb.py", connection: "connected", queued: 0, errors: 2, firstError: "Fit (KeyError)" });
+    expect(two).toBe("marimo: nb.py · 2 errors: Fit (KeyError) +1");
   });
 
   test("snapshot outline", () => {
@@ -195,8 +204,25 @@ describe("render", () => {
     expect(text).toContain("=== /tmp/pmt/nb.py (current; http://127.0.0.1:2799, session s1) ===");
     expect(text).toContain("  lEQa: defines y");
     const prep = text.slice(text.indexOf("=== /w/prep.py"));
-    expect(prep).toContain("(also followed; http://127.0.0.1:2799, session s2) ===\nKernel: 1 cell with errors.\n# Prep  [m1]\n  … 2 more cells\n  c: z = 1 / 0 -- ERROR ZeroDivisionError: division by zero");
+    expect(prep).toContain("(also followed; http://127.0.0.1:2799, session s2) ===\nmarimo-pair: --url http://127.0.0.1:2799 --file /w/prep.py\nKernel: 1 cell with errors.\n# Prep  [m1]\n  … 2 more cells\n  c: z = 1 / 0 -- ERROR ZeroDivisionError: division by zero");
     expect(prep).not.toContain("Deep detail");
+    // Marked full, it lists every cell and heading too, and the block says each is in full.
+    const both = snapshot([
+      { notebook: current, attachment, current: true },
+      { notebook: other, attachment: { ...attachment, path: "/w/prep.py", sessionId: "s2" }, full: true },
+    ]);
+    expect(both).toContain("each is shown in full");
+    expect(both).toContain("  a: raw = load()");
+    expect(both).toContain("### Deep detail");
+  });
+
+  test("marimo-pair flags for a notebook, quoted when the shell needs it, and the note for an ambiguous call", async () => {
+    const { pairFlags, ambiguityNote } = await import("../src/core/render.js");
+    expect(pairFlags({ url: "http://127.0.0.1:2718", sessionId: "s1", path: "/w/fit.py" })).toBe("--url http://127.0.0.1:2718 --file /w/fit.py");
+    expect(pairFlags({ url: "http://127.0.0.1:2718", sessionId: "s1", path: "/w/my nb's.py" })).toBe("--url http://127.0.0.1:2718 --file '/w/my nb'\\''s.py'");
+    const note = ambiguityNote([{ url: "http://h:1", sessionId: "a", path: "/w/a.py" }, { url: "http://h:1", sessionId: "b", path: "/w/b.py" }]);
+    expect(note).toMatch(/^pi-marimo: a marimo-pair call here could mean any of 2 followed notebooks/u);
+    expect(note).toContain("  b.py: --url http://h:1 --file /w/b.py");
   });
 
   test("large notebooks fold quiet cells", () => {
@@ -249,7 +275,7 @@ PY`;
     expect(pairTargets(JSON.stringify({ command: `marimo pair execute --url "http://127.0.0.1:2718" --session s_ab12 --code-file -` }))).toEqual([
       { url: "http://127.0.0.1:2718", session: "s_ab12" },
     ]);
-    expect(pairTargets(`marimo pair execute --url $URL --file="$F" -c 'x'`)).toEqual([{}]);
+    expect(pairTargets(`marimo pair execute --url $URL --file="$F" -c 'x'`)).toEqual([{ unresolved: true }]);
     expect(pairTargets("ls -la")).toEqual([]);
   });
 });
@@ -299,5 +325,80 @@ describe("the kernel hold after a turn", async () => {
     expect(hold.begin(3000)).toEqual({ kind: "released" });
     hold.end(followed(running(), 3500), 4000);
     expect(hold.update(followed(running(), 3500, "disconnected"), 5000)).toEqual({ kind: "finished", title: "nb.py stopped", body: "ran 1s · disconnected" });
+  });
+});
+
+describe("what the view shows beyond the agent's snapshot", () => {
+  const ready = (nb: NotebookState, extra: Record<string, unknown> = {}) =>
+    nb.apply("kernel-ready", { cell_ids: ["a", "b", "c"], codes: ["x = 1", "y = x + 1", "z = y * x"], names: ["load", "_", "_"], ...extra });
+
+  test("run times: from a run's start and end, and the milliseconds kernel-ready replays (not a start time)", () => {
+    const nb = new NotebookState();
+    ready(nb, { last_execution_time: { a: 1234, b: 1_760_000_000.5 } });
+    expect(nb.cells.get("a")!.lastRunMs).toBe(1234);
+    expect(nb.cells.get("b")!.lastRunMs).toBeUndefined();
+    nb.apply("cell-op", { cell_id: "c", status: "running", timestamp: 100 });
+    nb.apply("cell-op", { cell_id: "c", status: "idle", timestamp: 102.5 });
+    expect(nb.cells.get("c")!.lastRunMs).toBe(2500);
+  });
+
+  test("the dataflow graph: what a cell uses, its parents and children; variable values pruned with their variables", () => {
+    const nb = new NotebookState();
+    ready(nb);
+    nb.apply("variables", { variables: [{ name: "x", declared_by: ["a"], used_by: ["b", "c"] }, { name: "y", declared_by: ["b"], used_by: ["c"] }, { name: "z", declared_by: ["c"], used_by: [] }] });
+    expect(nb.uses("c")).toEqual(["x", "y"]);
+    expect(nb.parents("c")).toEqual(["a", "b"]);
+    expect(nb.children("a")).toEqual(["b", "c"]);
+    expect(nb.apply("variable-values", { variables: [{ name: "x", value: "1", datatype: "int" }, { name: "z", value: "4", datatype: "int" }] })).toBe(false);
+    expect(nb.values.get("x")).toEqual({ value: "1", datatype: "int" });
+    nb.apply("variables", { variables: [{ name: "x", declared_by: ["a"], used_by: [] }] });
+    expect(nb.values.has("z")).toBe(false);
+  });
+
+  test("the agent's code-mode changes since the last prompt, live only; browser edits are not the agent's", () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(1_000_000);
+      const nb = new NotebookState();
+      ready(nb);
+      // The replay on connect is history.
+      nb.apply("notebook-document-transaction", { transaction: { source: "code-mode", changes: [{ type: "set-code", cellId: "a", code: "x = 0" }] } });
+      expect(nb.agentChanges.size).toBe(0);
+      vi.setSystemTime(1_005_000);
+      const tx = (changes: unknown[], source = "code-mode") => nb.apply("notebook-document-transaction", { transaction: { source, changes } });
+      tx([{ type: "set-code", cellId: "b", code: "y = x + 2" }]);
+      tx([{ type: "set-code", cellId: "b", code: "y = x + 3" }]);
+      expect(nb.agentChanges.get("b")).toMatchObject({ kind: "edited", before: "y = x + 1" });
+      tx([{ type: "create-cell", cellId: "n", code: "w = 1", after: "c" }]);
+      expect(nb.agentChanges.get("n")).toMatchObject({ kind: "created", before: "" });
+      tx([{ type: "delete-cell", cellId: "n" }]);
+      expect(nb.agentChanges.has("n")).toBe(false);
+      tx([{ type: "delete-cell", cellId: "c" }]);
+      expect(nb.agentChanges.get("c")).toMatchObject({ kind: "deleted", before: "z = y * x", name: "_" });
+      tx([{ type: "set-code", cellId: "a", code: "x = 5" }], "frontend");
+      expect(nb.agentChanges.has("a")).toBe(false);
+      // A reconnect keeps them; the user's next prompt clears them.
+      ready(nb);
+      expect(nb.agentChanges.size).toBe(2);
+      nb.markPrompt();
+      expect(nb.agentChanges.size).toBe(0);
+    } finally { vi.useRealTimers(); }
+  });
+
+  test("widget values: kernel-ready's, then the user's from Pi, dropped when their cell runs again", () => {
+    const nb = new NotebookState();
+    ready(nb, { ui_values: { "a-0": 4 } });
+    expect(nb.uiValues.get("a-0")).toBe(4);
+    nb.setUserValue("a", "a-0", "n", 7);
+    expect(nb.uiValues.get("a-0")).toBe(7);
+    const text = snapshot([{ notebook: nb, attachment }]);
+    expect(text).toContain('the user set "n" to 7 from Pi');
+    nb.apply("cell-op", { cell_id: "a", status: "running", timestamp: 1 });
+    expect(nb.uiValues.has("a-0")).toBe(false);
+    nb.setUserValue("a", "a-1", "", true);
+    nb.apply("remove-ui-elements", { cell_id: "a" });
+    expect(nb.uiValues.has("a-1")).toBe(false);
+    nb.markPrompt();
+    expect(snapshot([{ notebook: nb, attachment }])).not.toContain("the user set");
   });
 });

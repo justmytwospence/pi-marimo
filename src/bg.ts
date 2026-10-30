@@ -10,6 +10,13 @@
 // - A pi-bg task tied to a followed notebook gets its kernel state (`bg:annotate`): a `marimo edit
 //   nb.py` server, or a job whose marimo-pair calls target it. pi-bg shows the state in the task's
 //   row, lists the notebook under the task, and bg_wait on a server that is up waits for its cells.
+// - One row per run: while a job's marimo-pair calls keep its notebooks busy, the annotation says the
+//   notebook rows stand for it (`represented`), and pi-bg leaves the job out of /tasks and its pill
+//   and waits on the job when bg_wait names the notebook (its result carries the call's output). The
+//   notebook row names the job. Stopping such a job (bg:killed) interrupts the kernels it drove,
+//   since killing the marimo-pair client alone leaves the cells running.
+// - A `marimo edit` server of a followed notebook is likewise represented by that notebook's row for
+//   as long as it runs, idle or busy, so the pill does not count `6 tasks` beside the 6 notebooks.
 //
 // A notebook's id is `marimo:` and its path relative to the cwd (absolute outside it), so it stays
 // the same whatever else is followed; pi-bg also takes `marimo:<file>` when only one matches.
@@ -26,6 +33,7 @@ export interface EventBus {
 /** What pi-bg's `bg:tasks` snapshot says about a task (only the fields used here). */
 export interface BgTask {
   id: string;
+  name?: string;
   kind?: string;
   cwd?: string;
   command: string;
@@ -67,6 +75,12 @@ export function kernelStateParts(f: Followed): string[] {
   return parts;
 }
 
+/** Open marimo-lens selections, as a part for a notebook's row: `2 selections`. */
+export function lensParts(f: Followed): string[] {
+  const n = f.connection === "connected" ? f.notebook.lens.selections().length : 0;
+  return n ? [`${n} selection${n === 1 ? "" : "s"}`] : [];
+}
+
 /** A notebook's kernel in a few words: `fit.py: running Model fit · 2 queued`, `fit.py: idle · 1 error`. */
 export function kernelState(f: Followed): string {
   return `${basename(f.attachment.path)}: ${kernelStateParts(f).join(" · ")}`;
@@ -79,12 +93,42 @@ export class BgBridge {
   /** Held notebooks, each with the waking pi-bg jobs that drove it during the hold. */
   private covered = new Map<string, Set<string>>();
   private runs = new Map<string, Run>();
+  /** Running jobs whose notebook rows stand for them, with the notebooks they keep busy. */
+  private driving = new Map<string, string[]>();
+  /** Running `marimo edit` servers whose notebook rows stand for them, with the notebooks they serve. */
+  private serving = new Map<string, string[]>();
 
   constructor(
     private readonly events: EventBus | undefined,
     /** The followed notebooks a command's marimo-pair calls target, by path. */
     private readonly targeted: (command: string) => string[],
+    /** Whether notebook rows are shown (an interactive TUI), so a job may be left to them. */
+    private readonly represent: () => boolean = () => false,
   ) {}
+
+  /** The names of the running pi-bg jobs that keep this notebook busy. */
+  drivers(path: string): string[] {
+    return [...this.driving].filter(([, paths]) => paths.includes(path)).map(([id]) => this.tasks.find((t) => t.id === id)?.name ?? id);
+  }
+
+  /** The names of the running pi-bg services that serve this notebook (shown on its row instead of in /tasks). */
+  servers(path: string): string[] {
+    return [...this.serving].filter(([, paths]) => paths.includes(path)).map(([id]) => this.tasks.find((t) => t.id === id)?.name ?? id);
+  }
+
+  /** Asks pi-bg to stop the servers standing for this notebook; how many were asked. */
+  stopServers(path: string): number {
+    const ids = [...this.serving].filter(([, paths]) => paths.includes(path)).map(([id]) => id);
+    for (const id of ids) this.emit("bg:stop", { task: id });
+    return ids.length;
+  }
+
+  /** A pi-bg task was stopped: the notebooks it was driving, which still run cells (to interrupt). */
+  killed(id: unknown): string[] {
+    const paths = typeof id === "string" ? this.driving.get(id) ?? [] : [];
+    if (typeof id === "string") this.driving.delete(id);
+    return paths;
+  }
 
   onTasks(tasks: unknown): void {
     this.tasks = Array.isArray(tasks) ? (tasks as BgTask[]) : [];
@@ -139,13 +183,25 @@ export class BgBridge {
       const served = t.kind === "service" ? servedNotebook(t.command) : undefined;
       const paths = served ? [resolve(t.cwd ?? cwd, served)] : t.kind === "job" ? this.targeted(t.command) : [];
       const hits = [...new Set(paths)].map((p) => byPath.get(p)).filter((f): f is Followed => f !== undefined);
-      const note = hits.length ? { task: t.id, by: "pi-marimo", detail: hits.map(kernelState).join(" · "), wait: hits.map((f) => BgBridge.id(f.attachment.path, cwd)) } : { task: t.id, by: "pi-marimo" };
+      // A job whose notebooks are busy is shown as those notebooks.
+      const driven = t.kind === "job" && this.represent() ? hits.filter(busy) : [];
+      if (driven.length) this.driving.set(t.id, driven.map((f) => f.attachment.path));
+      else this.driving.delete(t.id);
+      // A server of a followed notebook is that notebook's row, busy or idle.
+      const served_ = served && this.represent() ? hits : [];
+      if (served_.length) this.serving.set(t.id, served_.map((f) => f.attachment.path));
+      else this.serving.delete(t.id);
+      const note = hits.length
+        ? { task: t.id, by: "pi-marimo", detail: hits.map(kernelState).join(" · "), wait: hits.map((f) => BgBridge.id(f.attachment.path, cwd)), ...(driven.length || served_.length ? { represented: true } : {}) }
+        : { task: t.id, by: "pi-marimo" };
       const key = JSON.stringify(note);
       if ((this.notes.get(t.id) ?? JSON.stringify({ task: t.id, by: "pi-marimo" })) === key) continue;
       this.notes.set(t.id, key);
       this.emit("bg:annotate", note);
     }
     for (const id of this.notes.keys()) if (!live.has(id)) this.notes.delete(id);
+    for (const id of this.driving.keys()) if (!live.has(id)) this.driving.delete(id);
+    for (const id of this.serving.keys()) if (!live.has(id)) this.serving.delete(id);
   }
 
   /** Reports busy notebooks to pi-bg as outside work, and their end. */

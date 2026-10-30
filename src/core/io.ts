@@ -19,8 +19,14 @@ export interface Io {
   registryEntries(): Promise<unknown[]>;
   /** GET a JSON document; undefined on any failure. */
   getJson(url: string, headers: Record<string, string>, timeoutMs: number): Promise<unknown>;
+  /** GET a text document (a page); undefined on any failure. Hosts without it cannot send marimo's server token. */
+  getText?(url: string, headers: Record<string, string>, timeoutMs: number): Promise<string | undefined>;
+  /** POST a JSON body and parse the JSON answer; undefined on any failure. Hosts without it do not see waiting servers. */
+  postJson?(url: string, headers: Record<string, string>, body: unknown, timeoutMs: number): Promise<unknown>;
   /** GET a streaming body, handing over its text as it arrives. */
   stream(url: string, headers: Record<string, string>, onText: (text: string) => void): Cancellable<StreamEnd>;
+  /** Whether a file or directory exists. Hosts without it treat other repositories under the cwd as the cwd's. */
+  exists?(path: string): Promise<boolean>;
   /** The path with symlinks resolved (macOS /tmp is /private/tmp); the path itself when that fails. */
   realpath(path: string): Promise<string>;
   sleep(ms: number): Cancellable<void>;

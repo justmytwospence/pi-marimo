@@ -1,6 +1,6 @@
 // The Io of a Node or Bun host (pi, opencode).
 
-import { readdir, readFile, realpath } from "node:fs/promises";
+import { access, readdir, readFile, realpath } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { Cancellable, Io, StreamEnd } from "./io.js";
@@ -52,6 +52,24 @@ export function nodeIo(options: { registryDir?: string; fetch?: typeof fetch } =
       }
     },
 
+    async getText(url, headers, timeoutMs) {
+      try {
+        const response = await doFetch(url, { headers, signal: AbortSignal.timeout(timeoutMs) });
+        return response.ok ? await response.text() : undefined;
+      } catch {
+        return undefined;
+      }
+    },
+
+    async postJson(url, headers, body, timeoutMs) {
+      try {
+        const response = await doFetch(url, { method: "POST", headers: { ...headers, "Content-Type": "application/json" }, body: JSON.stringify(body), signal: AbortSignal.timeout(timeoutMs) });
+        return response.ok ? await response.json() : undefined;
+      } catch {
+        return undefined;
+      }
+    },
+
     stream(url, headers, onText): Cancellable<StreamEnd> {
       const controller = new AbortController();
       const done = (async (): Promise<StreamEnd> => {
@@ -75,6 +93,15 @@ export function nodeIo(options: { registryDir?: string; fetch?: typeof fetch } =
         }
       })();
       return { done, cancel: () => controller.abort() };
+    },
+
+    async exists(path) {
+      try {
+        await access(path);
+        return true;
+      } catch {
+        return false;
+      }
     },
 
     async realpath(path) {
