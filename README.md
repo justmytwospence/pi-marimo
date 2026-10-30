@@ -1,34 +1,24 @@
 # pi-marimo
 
+[![npm](https://img.shields.io/npm/v/pi-marimo)](https://www.npmjs.com/package/pi-marimo) [![checks](https://github.com/justmytwospence/pi-marimo/actions/workflows/check.yml/badge.svg)](https://github.com/justmytwospence/pi-marimo/actions/workflows/check.yml)
+
 Pi follows the [marimo](https://marimo.io) notebooks you work in with an agent, and gives you a terminal view of them that you read and steer in, so you need the browser much less. The agent edits cells through the [marimo-pair](https://github.com/marimo-team/marimo-pair) skill; pi-marimo shows what each notebook's kernel is doing, puts the notebooks' state in the model's context when you send a prompt, and in the TUI lets you read the notebook (prose, tables, charts, variables, the agent's changes), run cells, drive widgets, run Python in the kernel, mark results for the agent, ask the agent about a cell, and start notebooks without a browser at all.
 
 Cells are only ever changed by the agent. What you do in the view (running cells, interrupting, setting widgets, the scratchpad, Lens marks) goes through marimo's own kernel endpoints, as the browser's buttons do. pi-marimo also follows [marimo-lens](https://marimo-team.github.io/marimo-lens/) selections, the results you point at, whether you make them in the browser or in the view.
 
-Part of [Pi Plugins](https://github.com/justmytwospence/pi-plugins). Reference: <https://pi-plugins.vercel.app/plugins/pi-marimo/>.
+A [Pi](https://pi.dev) package. It works on its own and integrates with [Pi Plugins](https://pi-plugins.vercel.app) components when they are loaded (below).
 
 ## Install
 
-Install the suite and select only this component. Merge this object into the `packages` array of `~/.pi/agent/settings.json` (or a trusted project's `.pi/settings.json`):
-
-```json
-{
-  "source": "git:github.com/justmytwospence/pi-plugins",
-  "extensions": ["packages/pi-marimo/src/index.ts"],
-  "skills": [],
-  "prompts": [],
-  "themes": []
-}
-```
-
-Alternatively, `pi install git:github.com/justmytwospence/pi-plugins` loads every suite component; use `pi config` to keep only the ones you want, then `/reload`. One Git ref versions every selected component. Do not also enable a standalone copy of this component: Pi does not deduplicate different packages that register the same tools, commands or shortcuts.
-
-To try it alone from a checkout of the suite repository, for one run:
-
 ```sh
-pi -e ./packages/pi-marimo
+pi install npm:pi-marimo
 ```
 
-Add `-ne` to disable your other discovered and configured extensions for that run (an explicit `-e` still loads). No `npm install` is needed to run it: the package.json has no `dependencies`; Pi supplies its peer dependencies.
+Or pin the Git repository: `pi install git:github.com/justmytwospence/pi-marimo@<commit>`. To try it from a checkout for one run: `pi -e .`.
+
+Requirements: Pi in a terminal (the notebook view needs the TUI; docking beside the chat needs `"tuiMode": "fullscreen"`), Node 22 or later, and a marimo server (verified with marimo 0.25). Agents edit cells through the [marimo-pair](https://github.com/marimo-team/marimo-pair) skill.
+
+Pi Plugins bundled pi-marimo until it moved back here. With a suite pin from before that move, do not also install this package; Pi would load both.
 
 ## Start a notebook from Pi
 
@@ -152,7 +142,7 @@ A cell's code is a block on Pi's pending-tool background (a `│` gutter where t
 
 #### Markdown
 
-Markdown cells show only as rendered markdown. Enter edits one in the suite's editor (pi-vim when loaded); Enter saves, `esc` cancels. The edit is saved through marimo's code mode (as marimo-pair does), so the browser shows it at once, and it is not counted as an agent change. Markdown built in Python (`mo.md(f"...")`) cannot be edited here: Enter shows its code instead.
+Markdown cells show only as rendered markdown. Enter edits one in Pi's editor (pi-vim when loaded); Enter saves, `esc` cancels. The edit is saved through marimo's code mode (as marimo-pair does), so the browser shows it at once, and it is not counted as an agent change. Markdown built in Python (`mo.md(f"...")`) cannot be edited here: Enter shows its code instead.
 
 #### Docked beside the chat
 
@@ -283,15 +273,27 @@ A Lens selection you make while Pi is idle offers `Use Lens to address S1 in fit
 - The rows and the notebook view exist only in the TUI.
 - `src/core/` is plain ECMAScript behind a small `Io` interface (`node-io.ts` for Node and Bun), shared with the opencode and Claude Code ports.
 
+## With Pi Plugins
+
+Optional; see the integrations above. Each links to its reference:
+
+- [pi-bg](https://pi-plugins.vercel.app/plugins/pi-bg/): notebooks in `/tasks`, `bg_wait` on `marimo:<path>`, and the pill.
+- [pi-subagents](https://pi-plugins.vercel.app/plugins/pi-subagents/): FleetView ends with the notebook pill.
+- [pi-sidebar](https://pi-plugins.vercel.app/plugins/pi-sidebar/): they share the right-hand side.
+- [pi-status-footer](https://pi-plugins.vercel.app/plugins/pi-status-footer/): notebook rows.
+- [pi-next-prompt](https://pi-plugins.vercel.app/plugins/pi-next-prompt/): Lens offers.
+- [pi-vim](https://pi-plugins.vercel.app/plugins/pi-vim/): the docked prompts.
+- [pi-herdr](https://pi-plugins.vercel.app/plugins/pi-herdr/): the `$marimo` pane token.
+
 ## Development
 
 ```sh
-cd packages/pi-marimo
-npm ci
-npm run check
+npm ci && npm run check
 ```
 
-`npm run check` runs `tsc --noEmit` and then `vitest run`. Two end-to-end tests run against a real marimo only with `PI_MARIMO_LIVE_TEST=1` and `marimo` on `PATH` (`PI_MARIMO_LIVE_TEST=1 npx vitest run test/e2e.test.ts test/e2e-actions.test.ts`): one follows notebooks on a scratch server, the other has Pi start a server and runs cells, sets a widget, runs the scratchpad and, when marimo-lens is installed, makes and removes a Lens selection. For the full suite, the repository root's `npm run check` runs every component's check after the root loader test.
+- Live tests (need `marimo` on PATH): `PI_MARIMO_LIVE_TEST=1 npx vitest run test/e2e.test.ts test/e2e-actions.test.ts`
+- The demo: `uvx --with pandas,numpy,matplotlib,plotly marimo edit examples/coffee.py`
+- Releases: see `AGENTS.md`.
 
 ## License
 
