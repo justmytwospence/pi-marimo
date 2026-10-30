@@ -353,6 +353,11 @@ describe("chart specs", () => {
     const attr = JSON.stringify(spec).replace(/"/gu, "&quot;");
     expect(summarizeOutput({ channel: "output", mimetype: "text/html", data: `<marimo-ui-element><marimo-vega data-initial-value='{}' data-spec='${attr}'></marimo-vega></marimo-ui-element>` })?.vega).toBe(JSON.stringify(spec));
   });
+  test.each([false, true])("Vega MIME bundles retain the chart ahead of text fallbacks (serialized=%s)", serialized => {
+    const vega = { $schema: "https://vega.github.io/schema/vega/v5.json", width: 100, marks: [] };
+    const bundle = { "application/vnd.vega.v5+json": vega, "text/html": "<p>fallback</p>", "text/plain": "fallback" };
+    expect(summarizeOutput({ channel: "output", mimetype: "application/vnd.marimo+mimebundle", data: serialized ? JSON.stringify(bundle) : bundle })).toMatchObject({ kind: "chart", vega: JSON.stringify(vega) });
+  });
   test("plotly and oversized or malformed specs keep only their label", () => {
     expect(summarizeOutput({ channel: "output", mimetype: "text/html", data: "<marimo-plotly data-figure='x'></marimo-plotly>" })?.vega).toBeUndefined();
     expect(summarizeOutput({ channel: "output", mimetype: "application/vnd.vegalite.v6+json", data: "x".repeat(10) })?.vega).toBeUndefined();

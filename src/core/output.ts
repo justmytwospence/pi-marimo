@@ -460,7 +460,7 @@ export function summarizeOutput(raw: unknown): CellOutput | undefined {
   // A mimebundle (matplotlib figures in marimo 0.25): the richest form the view can show.
   if (mime.includes("mimebundle")) {
     const bundle = typeof data === "string" ? (() => { try { return record(JSON.parse(data)); } catch { return {}; } })() : record(data);
-    for (const kind of ["image/png", "application/vnd.vegalite.v5+json", "application/vnd.vegalite.v6+json", "text/html", "image/svg+xml", "text/markdown", "text/plain"]) {
+    for (const kind of ["image/png", "application/vnd.vegalite.v5+json", "application/vnd.vegalite.v6+json", "application/vnd.vega.v5+json", "text/html", "image/svg+xml", "text/markdown", "text/plain"]) {
       if (bundle[kind] !== undefined && bundle[kind] !== null && bundle[kind] !== "") return summarizeOutput({ channel: output.channel, mimetype: kind, data: bundle[kind] });
     }
     return undefined;
