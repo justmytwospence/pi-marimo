@@ -28,18 +28,24 @@ import type { Followed } from "../core/watcher.js";
 import { kernelStateParts, lensParts } from "../bg.js";
 import { INPUT_CONTEXT } from "../activity.js";
 import { interruptKey, notebookKey, notebookPath } from "./identity.js";
-import { banner, bottom, row as frameRow, rule as frameRule, type FrameTheme } from "../frame.ts";
+import type { FrameTheme } from "../frame.ts";
+import { banner, bottom, row as frameRow, rule as frameRule, CONTENT_LEFT, bodyWidth } from "./notebook-frame.js";
+import { type CodeBlockState, codeRows, scrollCode } from "./code.js";
+import type { SyntaxHighlighter, SyntaxTheme } from "./syntax.js";
+import type { MermaidRenderer } from "../core/mermaid.js";
+import { mermaidRows } from "./outputs.js";
 import type { EditorFactoryFn } from "../editor-contract.ts";
 import { Dock, type DockSpec } from "./dock.js";
 import { type Part, detailRows } from "./detail.js";
 import { helpLines } from "./help.js";
 import { type PaneTheme, outlineRows, spinner } from "./outline.js";
-import { MAX_WIDGETS, type Row, firstLine, foldedCells, selectableCells } from "./rows.js";
+import { MAX_WIDGETS, type Row, type RowOptions, firstLine, foldedCells, selectableCells } from "./rows.js";
 import { cellTitle } from "./titles.js";
 import type { ScratchEvent, ScratchResult } from "./scratch.js";
 import { columnCard, rowCard, tableLines } from "./table.js";
 import { type TableRpc, type TableSession, parseFilter, tableSession } from "./table-session.js";
 import { variableList, variableRows } from "./variables.js";
+import { SessionPreferences } from "./settings.js";
 import { type WidgetAction, nextValue, typeable, typedValue, widgetHit, widgetValue } from "./widgets.js";
 
 export { notebookLines, outlineRows } from "./outline.js";
@@ -60,8 +66,8 @@ const stackedOutlineRows = (page: number): number => {
   const rows = Math.max(1, Math.min(9, Math.round(page * 0.3), page - 4));
   return rows % 2 ? rows : rows - 1;
 };
-/** Columns before a widget's line in the detail: the part's bar, a space, the widget's glyph and a space. */
-const WIDGET_TEXT = 4;
+/** Columns before a widget's control: its glyph and a space, from the central content origin. */
+const WIDGET_TEXT = 2;
 /** Between the panes. */
 const SEPARATOR_WIDTH = 3;
 /** Lines of a scratch run shown above its prompt, at most. */
@@ -87,9 +93,16 @@ export interface ViewState {
   mode: "cells" | "variables";
   varCursor?: string;
   varFilter: string;
+  codeOffsets?: Array<[string, CodeBlockState]>;
+  diagramSources?: string[];
+  sectionCodeOpen?: string[];
+  focusedBlock?: string;
 }
 
 export interface ViewActions {
+  preferences?: SessionPreferences;
+  syntax?: SyntaxHighlighter;
+  diagrams?: MermaidRenderer;
   /** Set when the view is docked beside the chat. */
   docked?: DockedHost;
   /** Start from this state (a view that moved between full screen and docked). */
@@ -154,8 +167,7 @@ interface ScratchState {
 /** `╭─ Notebook nb.py · ctrl+] focus ──╮` for the docked view: no "back" arrow, it sits beside the chat. */
 function dockedBanner(file: string, width: number, th: FrameTheme, focused: boolean): string {
   const label = ` Notebook ${file} · ${focused ? "ctrl+] chat" : "ctrl+] focus"} `;
-  const text = truncateToWidth(label, Math.max(4, width - 3));
-  return th.fg("accent", `╭─${th.bold(text)}${"─".repeat(Math.max(0, width - 3 - visibleWidth(text)))}╮`);
+  return frameRow(th.fg("accent", th.bold(truncateToWidth(label.trim(), bodyWidth(width)))), width, th);
 }
 
 const message = (e: unknown): string => (e instanceof Error ? e.message : String(e));
@@ -167,6 +179,22 @@ export class NotebookView implements Component {
   /** Cells whose code shows in the detail. */
   /** Cells whose code is flipped from the default (`view.code`). */
   private codeOpen = new Set<string>();
+  private sectionCodeOpen = new Set<string>();
+  private codeOffsets = new Map<string, CodeBlockState>();
+  private diagramSources = new Set<string>();
+  private focusedBlock: string | undefined;
+  private diagramBlocks = new Set<string>();
+  private readonly preferences: SessionPreferences;
+  private readonly renderReady = () => { if (!this.closed) this.tui.requestRender(); };
+  private readonly renderDiagram = (source: string, options: RowOptions & { blockId: string }): Row[] => {
+    this.diagramBlocks.add(options.blockId);
+    if (this.diagramSources.has(options.blockId)) return codeRows(source, { ...options, language: "mermaid" });
+    return mermaidRows(source, this.theme, {
+      ...options, bar: "", renderer: this.actions.diagrams,
+      appearance: (this.theme as SyntaxTheme).appearance ?? "dark",
+    });
+  };
+  private diagramRows = this.renderDiagram;
   /** The detail's scroll, in its own rows. */
   private detailScroll = 0;
   /** Which cell (and view) the detail last drew, so a new one starts at its top. */
@@ -234,6 +262,7 @@ export class NotebookView implements Component {
     plotly: ChartRenderer = sharedPlotly(),
     live?: LiveCharts,
   ) {
+    this.preferences = actions.preferences ?? new SessionPreferences();
     this.vega = vega;
     this.plotly = plotly;
     this.section = sectionMode ?? actions.outputs ?? false;
@@ -272,6 +301,10 @@ export class NotebookView implements Component {
       mode: this.mode,
       ...(this.varCursor !== undefined ? { varCursor: this.varCursor } : {}),
       varFilter: this.varFilter,
+      codeOffsets: [...this.codeOffsets].map(([id, state]) => [id, { ...state }]),
+      diagramSources: [...this.diagramSources],
+      sectionCodeOpen: [...this.sectionCodeOpen],
+      ...(this.focusedBlock ? { focusedBlock: this.focusedBlock } : {}),
     };
   }
 
@@ -288,6 +321,10 @@ export class NotebookView implements Component {
     this.mode = s.mode;
     this.varCursor = s.varCursor;
     this.varFilter = s.varFilter;
+    this.codeOffsets = new Map(s.codeOffsets ?? []);
+    this.diagramSources = new Set(s.diagramSources ?? []);
+    this.sectionCodeOpen = new Set(s.sectionCodeOpen ?? []);
+    this.focusedBlock = s.focusedBlock;
     // So the detail's scroll survives the first render.
     this.detailKey = `${s.cursor ?? ""}\0${s.section}`;
   }
@@ -851,11 +888,13 @@ export class NotebookView implements Component {
   }
 
   private toggleCode(id: string): void {
-    if (!this.codeOpen.delete(id)) this.codeOpen.add(id);
+    if (this.section) {
+      if (!this.sectionCodeOpen.delete(id)) this.sectionCodeOpen.add(id);
+    } else if (!this.codeOpen.delete(id)) this.codeOpen.add(id);
   }
 
   private codeShown(id: string): boolean {
-    return (this.actions.code !== "folded") !== this.codeOpen.has(id);
+    return this.section ? this.sectionCodeOpen.has(id) : (this.actions.code !== "folded") !== this.codeOpen.has(id);
   }
 
   private setCode(id: string, open: boolean): void {
@@ -929,6 +968,35 @@ export class NotebookView implements Component {
     }
     if (matchesKey(data, "escape") || matchesKey(data, "ctrl+c") || matchesKey(data, "q") || matchesKey(data, "h") || matchesKey(data, "left")) {
       this.leave();
+      return;
+    }
+    if (data === "#" || matchesKey(data, "f7")) {
+      this.preferences.update({ lineNumbers: !this.preferences.snapshot().lineNumbers });
+      this.tui.requestRender();
+      return;
+    }
+    if (data === "H" || data === "L" || data === "0" || data === "s") {
+      const candidates = this.lastDetail.filter(r => r.blockId && (this.part === undefined || r.part === this.part));
+      const blockId = candidates.find(r => r.blockId === this.focusedBlock)?.blockId ?? candidates[0]?.blockId;
+      if (blockId) {
+        if (data === "s" && this.diagramBlocks.has(blockId)) {
+          if (!this.diagramSources.delete(blockId)) this.diagramSources.add(blockId);
+          // Markdown caches the adapter identity; change it only when source visibility changes.
+          this.diagramRows = (source, options) => this.renderDiagram(source, options);
+        } else if (data !== "s") {
+          const state = this.codeOffsets.get(blockId) ?? { offset: 0 };
+          if (data === "0") state.offset = 0;
+          else scrollCode(state, data === "H" ? -8 : 8, Number.MAX_SAFE_INTEGER);
+          this.codeOffsets.set(blockId, state);
+        }
+      }
+      this.tui.requestRender();
+      return;
+    }
+    if (data === "B" && f) {
+      const cell = this.cursorCell(f);
+      if (cell) this.toggleCode(cell.id);
+      this.tui.requestRender();
       return;
     }
     const page = this.viewport();
@@ -1048,6 +1116,7 @@ export class NotebookView implements Component {
         const last = this.lastParts.length - 1;
         if (data === "n") this.part = this.part === undefined ? 0 : Math.min(last, this.part + 1);
         else this.part = this.part === undefined ? last : Math.max(0, this.part - 1);
+        this.focusedBlock = undefined;
         this.scrollToPart = true;
       }
     } else if (f && data === "t") this.enterTable(f, this.cursorCell(f));
@@ -1192,10 +1261,10 @@ export class NotebookView implements Component {
     }
     const th = this.theme;
     const out = [frameRule(width, th)];
-    if (dock.kind === "scratch" && this.scratch) out.push(...this.scratchLines(width - 4).map((l) => frameRow(l, width, th)));
+    if (dock.kind === "scratch" && this.scratch) out.push(...this.scratchLines(bodyWidth(width)).map((l) => frameRow(l, width, th)));
     const half = dock.kind === "markdown" ? Math.max(6, Math.floor(this.tui.terminal.rows * 0.6)) : Math.max(4, Math.floor(this.tui.terminal.rows / 2));
     const room = Math.max(3, half - out.length);
-    out.push(...dock.render(width - 4, room).map((l) => frameRow(l, width, th)));
+    out.push(...dock.render(bodyWidth(width), room).map((l) => frameRow(l, width, th)));
     this.lastDock = out.length;
     return out;
   }
@@ -1221,7 +1290,7 @@ export class NotebookView implements Component {
   render(width: number): string[] {
     if (width < 8) return [];
     const th = this.theme;
-    const inner = width - 4;
+    const inner = bodyWidth(width);
     const row = (s: string) => frameRow(s, width, th);
     const rule = frameRule(width, th);
     const fit = (text: string, w: number) => truncateToWidth(text, Math.max(1, w), "…", true);
@@ -1251,7 +1320,7 @@ export class NotebookView implements Component {
       const nb = f.notebook;
       const list = variableList(nb, this.varFilter);
       if (!this.varCursor || !list.some((v) => v.name === this.varCursor)) this.varCursor = list[0]?.name;
-      let built = variableRows(list, nb, th, this.varCursor, width - 4, this.varFilter);
+      let built = variableRows(list, nb, th, this.varCursor, inner, this.varFilter);
       const at = this.varCursor !== undefined ? built.index.get(this.varCursor) : undefined;
       this.place(built.rows.length, at, page);
       // Scrolled away from the cursor: it moves to the nearest variable on screen.
@@ -1259,7 +1328,7 @@ export class NotebookView implements Component {
         const pick = list[at < this.scroll ? this.scroll : Math.min(list.length - 1, this.scroll + page - 1)];
         if (pick) {
           this.varCursor = pick.name;
-          built = variableRows(list, nb, th, this.varCursor, width - 4, this.varFilter);
+          built = variableRows(list, nb, th, this.varCursor, inner, this.varFilter);
         }
       }
       this.lastRows = built.rows;
@@ -1284,7 +1353,7 @@ export class NotebookView implements Component {
       const oh = split ? page : stackedOutlineRows(page);
       const dh = split ? page : page - oh - 1;
       const detailTop = split ? 0 : oh + 1;
-      this.panes = { lw, detailLeft: split ? 2 + lw + SEPARATOR_WIDTH : 2, detailTop, outlineHeight: oh, shows };
+      this.panes = { lw, detailLeft: split ? CONTENT_LEFT + lw + SEPARATOR_WIDTH : CONTENT_LEFT, detailTop, outlineHeight: oh, shows };
       const outline = (): ReturnType<typeof outlineRows> => outlineRows(nb, th as PaneTheme, Date.now(), { cursor: this.cursor, folded: this.folded, filter: this.filter, width: lw });
       let built = outline();
       const at = this.cursor !== undefined ? built.cellRows.get(this.cursor) : undefined;
@@ -1320,7 +1389,9 @@ export class NotebookView implements Component {
           const s = t.session;
           if (c.id === cell.id && s.needsFetch() && this.actions.table) void s.refresh(f, this.actions.table);
           const focused = this.table?.cell === c.id;
-          if (focused) s.ensureVisible(dw - 6);
+          // Match tableGrid's selection marker, not the removed detail gutter.
+          const rowSelect = t.data.selection === "single" || t.data.selection === "multi";
+          if (focused) s.ensureVisible(dw - (rowSelect ? 5 : 0));
           const picked = s.selection(nb);
           const cells = new Set<string>();
           const rows = new Set<string>();
@@ -1348,20 +1419,28 @@ export class NotebookView implements Component {
           const card = t?.session.card;
           if (!t || !card || this.table?.cell !== c.id) return undefined;
           const lines = card.kind === "row"
-            ? rowCard(t.data, card.index, dw - 2, th as PaneTheme, t.session.page * t.session.pageSize + card.index)
-            : columnCard(t.data, card.column, t.session.summaries, card.top, dw - 2, th as PaneTheme);
+            ? rowCard(t.data, card.index, dw, th as PaneTheme, t.session.page * t.session.pageSize + card.index)
+            : columnCard(t.data, card.column, t.session.summaries, card.top, dw, th as PaneTheme);
           return lines;
         };
         const d = detailRows(nb, th, Date.now(), {
           cell, width: dw, codeOpen: this.codeShown(cell.id), diff: this.diffs.has(cell.id), section: this.section,
+          sectionCodeOpen: this.sectionCodeOpen,
+          syntax: this.actions.syntax, theme: this.theme as SyntaxTheme,
+          lineNumbers: this.preferences.snapshot().lineNumbers,
+          tabstop: this.preferences.snapshot().editor.options.tabstop,
+          codeOffsets: this.codeOffsets,
+          onReady: this.renderReady,
+          diagramRows: this.diagramRows,
           table: tableSource, tableCard, partFocus: this.part,
           ...(this.widget ? { widgetFocus: this.widget } : {}),
           imageRows: dh - 1, vega: this.vega, plotly: this.plotly,
           ...(this.actions.liveCharts === false ? {} : { live: this.live }),
-          onVega: () => { if (!this.closed) this.tui.requestRender(); },
+          onVega: this.renderReady,
         });
         detail = d.rows;
         this.lastParts = d.parts;
+        for (const r of detail) if (r.blockId && !this.codeOffsets.has(r.blockId)) this.codeOffsets.set(r.blockId, { offset: 0 });
         if (this.part !== undefined && this.part >= d.parts.length) this.part = d.parts.length ? d.parts.length - 1 : undefined;
         const key = `${cell.id}\0${this.section}`;
         if (key !== this.detailKey) {
@@ -1399,14 +1478,14 @@ export class NotebookView implements Component {
         if (!split && i < oh) { out.push(row(left)); continue; }
         const di = this.detailScroll + i - detailTop;
         const r = detail[di];
-        if (r?.image?.live && r.image.index === 0 && visible(di)) this.live.rects.push({ top: out.length, left: this.panes.detailLeft + 2, geometry: r.image.live.geometry, output: r.image.live.output });
+        if (r?.image?.live && r.image.index === 0 && visible(di)) this.live.rects.push({ top: out.length, left: this.panes.detailLeft, geometry: r.image.live.geometry, output: r.image.live.output });
         out.push(row(split ? `${fit(left, lw)}${th.fg("dim", " │ ")}${fit(detailText(di), dw)}` : detailText(di)));
       }
       this.live.endFrame();
     }
     out.push(...dock);
     out.push(rule);
-    out.push(row(this.footer(f, width - 4)));
+    out.push(row(this.footer(f, inner)));
     out.push(bottom(width, th));
     // The images this frame draws stay when the painter wipes the transcript's from under the view.
     const ids = new Set<number>();
@@ -1470,6 +1549,7 @@ export class NotebookView implements Component {
 
   /** A theme change or resize: the terminal may have dropped image data with the redraw, so live charts upload their frames again. */
   invalidate(): void {
+    this.actions.syntax?.invalidate();
     this.live.refresh();
   }
 
@@ -1584,6 +1664,7 @@ export class NotebookView implements Component {
       }
     } else if (this.paneAt(event.x, line) === "detail") {
       const r = this.lastDetail[this.detailScroll + line - this.panes.detailTop];
+      this.focusedBlock = r?.blockId;
       if (this.table && r?.tableRow !== undefined) {
         const t = f.notebook.cells.get(this.table.cell);
         const tf = t ? this.tableFor(f, t) : undefined;
@@ -1592,6 +1673,7 @@ export class NotebookView implements Component {
         this.part = r.part;
         if (twice) this.activate(f);
       } else if (r?.widget && this.actions.setWidget && f.connection === "connected") {
+        this.part = r.part;
         const at = this.widgetAt(event);
         // A slider was set by its press already.
         if (at && !(at.w.kind.endsWith("slider") && widgetHit(at.w, widgetValue(f.notebook, at.w), at.col))) this.clickWidget(at);
@@ -1599,7 +1681,8 @@ export class NotebookView implements Component {
       } else if (r?.code) {
         const c = this.cursorCell(f);
         if (r.part !== undefined) this.part = r.part;
-        if (c) this.toggleCode(this.lastParts[r.part ?? -1]?.cell ?? c.id);
+        const id = this.lastParts[r.part ?? -1]?.cell ?? c?.id;
+        if (id && (!r.blockId || r.blockId === `${id}:source`)) this.toggleCode(id);
       }
     } else if (this.paneAt(event.x, line) === "outline") {
       const r = this.lastOutline[this.scroll + line];

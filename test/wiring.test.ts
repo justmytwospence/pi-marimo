@@ -216,6 +216,10 @@ test("the notebooks as background work: a source for the hosts, its own pill alo
   await section.open(entries[0].key, x.ui);
   const view = x.customs.at(-1)?.view;
   expect(x.customs.at(-1)?.options).toMatchObject({ overlay: true, overlayOptions: { width: "100%" } });
+  expect(view.actions.syntax).toBeDefined();
+  expect(view.actions.diagrams).toBeDefined();
+  const syntaxDisposed = vi.spyOn(view.actions.syntax, "dispose");
+  const diagramsDisposed = vi.spyOn(view.actions.diagrams, "dispose");
   const screen = view.render(100).join("\n");
   expect(screen).toMatch(/◀ esc · Notebook nb\.py · not your main session/u);
   expect(screen).toMatch(/Data loading[\s\S]*Slow model fit[\s\S]*▌ {2}[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] y /u);
@@ -237,6 +241,8 @@ test("the notebooks as background work: a source for the hosts, its own pill alo
   expect(x.pillText()).toMatch(/○ nb\.py:2799 · 1 error: Slow model fit/u);
   expect(section.entries(Date.now())[0]).toMatchObject({ status: "done" });
   await x.fire("session_shutdown");
+  expect(syntaxDisposed).toHaveBeenCalledOnce();
+  expect(diagramsDisposed).toHaveBeenCalledOnce();
   expect(x.of("activity:gone")).toEqual([{ id: "subagents" }, { id: "marimo" }]);
   const offered = x.of("activity:section").length;
   x.pi.events.emit("activity:host", {});

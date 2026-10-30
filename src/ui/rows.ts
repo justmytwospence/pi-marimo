@@ -1,8 +1,11 @@
 // What the notebook view's panes share: its row type, the highlight, markdown and diff helpers, and
 // which cells the cursor can stand on and which a fold hides. The outline is outline.ts, the
 // selected cell's detail detail.ts.
-import { generateDiffString, getMarkdownTheme, highlightCode, renderDiff } from "@earendil-works/pi-coding-agent";
-import { Markdown } from "@earendil-works/pi-tui";
+import { generateDiffString, renderDiff } from "@earendil-works/pi-coding-agent";
+import { sliceByColumn } from "@earendil-works/pi-tui";
+import type { SyntaxHighlighter, SyntaxTheme } from "./syntax.js";
+import type { CodeBlockState } from "./code.js";
+import { markdownRows } from "./markdown.js";
 import type { Geometry } from "../core/live.js";
 import type { Cell, NotebookState } from "../core/notebook.js";
 import type { CellOutput, TableData } from "../core/output.js";
@@ -16,6 +19,11 @@ export const MAX_WIDGETS = 8;
 /** One display line. The first line of a cell in the outline carries its id (the cursor can stand there); a widget's line, its place. */
 export interface Row {
   text: string;
+  blockId?: string;
+  sourceLine?: number;
+  editorRow?: number;
+  package?: string;
+  progress?: { id: string };
   cell?: string;
   /** The `▸ code` line of the detail, which a click opens or folds. */
   code?: boolean;
@@ -31,6 +39,18 @@ export interface Row {
 }
 
 export interface RowOptions {
+  syntax?: SyntaxHighlighter;
+  theme?: SyntaxTheme;
+  onReady?: () => void;
+  lineNumbers?: boolean;
+  tabstop?: number;
+  codeOffsets?: Map<string, CodeBlockState>;
+  /** Stable cell/output namespace for extracted block IDs. */
+  blockPrefix?: string;
+  diagnostics?: "all" | "errors" | "warnings" | "none";
+  showOutput?: boolean;
+  /** Diagram image adapter; source fallback is provided when absent. */
+  diagramRows?: (source: string, options: RowOptions & { blockId: string }) => Row[];
   /** Draw image outputs inline with at most this many rows (default: when the terminal shows images, 14; 0 never). */
   imageRows?: number;
   /** The width the pane draws at, for sizing images, tables and prose. */
@@ -52,44 +72,28 @@ export interface RowOptions {
 export const firstLine = (code: string) => code.split("\n").find((l) => l.trim())?.trim() ?? "";
 
 /** Python highlighted with Pi's theme; plain where there is none (Pi's theme is set up only in Pi). */
-export function safeHighlight(code: string): string[] {
-  try {
-    return highlightCode(code, "python");
-  } catch {
-    return code.split("\n");
-  }
+export function safeHighlight(code: string, options: RowOptions = {}): string[] {
+  return [...(options.syntax && options.theme ? options.syntax.request(code, "python", options.theme, options.onReady) : code.split("\n"))];
 }
-
-const markdownCache = new Map<string, string[]>();
 
 /** Markdown rendered with Pi's markdown theme, plain where there is none. */
 export function safeMarkdown(text: string, width: number): string[] {
-  const key = `${width}\0${text}`;
-  const known = markdownCache.get(key);
-  if (known) return known;
-  let lines: string[];
-  try {
-    lines = new Markdown(text, 0, 0, getMarkdownTheme()).render(Math.max(10, width));
-  } catch {
-    lines = text.split("\n");
-  }
-  if (markdownCache.size > 200) markdownCache.clear();
-  markdownCache.set(key, lines);
-  return lines;
+  return markdownRows(text, { width }).map(row => row.text);
 }
 
 /** The agent's change to a cell as Pi draws an edit's diff; plain without Pi's theme. */
-export function diffLines(before: string, after: string): string[] {
+export function diffLines(before: string, after: string, options?: { width: number; offset?: number }): string[] {
+  const viewport = (lines: string[]) => options ? lines.map(line => sliceByColumn(line, options.offset ?? 0, options.width, true)) : lines;
   let diff: string;
   try {
     diff = generateDiffString(before, after, 2).diff;
   } catch {
-    return after.split("\n");
+    return viewport(after.split("\n"));
   }
   try {
-    return renderDiff(diff).split("\n");
+    return viewport(renderDiff(diff).split("\n"));
   } catch {
-    return diff.split("\n");
+    return viewport(diff.split("\n"));
   }
 }
 

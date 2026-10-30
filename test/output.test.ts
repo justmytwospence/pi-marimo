@@ -1,8 +1,13 @@
 import { describe, expect, test } from "vitest";
+import { visibleWidth } from "@earendil-works/pi-tui";
+import { tableGrid } from "../src/ui/table.js";
+import { codeRows } from "../src/ui/code.js";
+import { markdownRows } from "../src/ui/markdown.js";
 import { NotebookState } from "../src/core/notebook.js";
 import { appendConsole, htmlToText, summarizeOutput } from "../src/core/output.js";
 import { snapshot } from "../src/core/render.js";
 import { runCells } from "../src/ui/interrupt.js";
+import { mermaidRows, outputRows } from "../src/ui/outputs.js";
 
 describe("cell output for the notebook view", () => {
   test("html becomes text; tables, images and charts are named, not dumped", () => {
@@ -47,6 +52,82 @@ describe("cell output for the notebook view", () => {
     nb.apply("cell-op", { cell_id: "a", status: "queued" });
     expect(cell.console).toBeUndefined();
     expect(cell.output?.text).toBe("secret-output");
+  });
+});
+
+describe("output prefixes", () => {
+  const theme = { fg: (_: string, text: string) => text, bold: (text: string) => text };
+  const limits = { textLines: 1, tableRows: 1 };
+  const cell = () => {
+    const nb = new NotebookState();
+    nb.apply("kernel-ready", { cell_ids: ["a"], codes: ["pass"], names: ["_"] });
+    return nb.cells.get("a")!;
+  };
+  test.each([46, 80, 120, 180])("empty bars leave all %i columns for text, code, prose and tables", width => {
+    const c = cell();
+    const text = "x".repeat(width);
+    c.output = { kind: "text", text: `${text}\nmore` };
+    const opts = { width, pad: "", bar: "" };
+    expect(outputRows(c, theme, opts, limits).map(row => row.text)).toEqual([text, "… 1 more lines"]);
+    expect(visibleWidth(outputRows(c, theme, opts, limits)[0]!.text)).toBe(width);
+    expect(codeRows(text, opts).find(row => row.sourceLine !== undefined)?.text).toBe(text);
+    expect(markdownRows(text, opts).some(row => row.text === text)).toBe(true);
+    const table = { columns: ["first", "second", "third"], numeric: [false, false, false], rows: [["a".repeat(25), "b".repeat(25), "c".repeat(25)]], totalRows: 1, totalColumns: 3 };
+    c.output = { kind: "table", text: "table", table };
+    expect(outputRows(c, theme, opts, limits).map(row => row.text)).toEqual(tableGrid(table, width, theme, 1).lines);
+    expect(outputRows(c, theme, opts, limits).some(row => row.tableRow === 0)).toBe(true);
+  });
+  test("default padding and bars stay intact; custom prefixes use visible columns", () => {
+    const c = cell(); c.output = { kind: "text", text: "value" };
+    expect(outputRows(c, theme, {}, limits)[0]!.text).toBe("      ▍ value");
+    expect(outputRows(c, theme, { bar: "" }, limits)[0]!.text).toBe("      value");
+    const table = { columns: ["first", "second"], numeric: [false, false], rows: [["a".repeat(25), "b".repeat(25)]], totalRows: 1, totalColumns: 2 };
+    c.output = { kind: "table", text: "table", table };
+    const prefix = "\x1b[31m界\x1b[0m";
+    const rows = outputRows(c, theme, { width: 46, pad: prefix, bar: prefix }, limits);
+    expect(rows.map(row => row.text)).toEqual(tableGrid(table, 41, theme, 1).lines.map(line => `${prefix}${prefix} ${line}`));
+    c.output.table = { ...table, rows: [], lazy: true };
+    expect(outputRows(c, theme, { pad: "", bar: "" }, limits)[0]!.text).toBe("loading table…");
+  });
+});
+
+describe("structured source output", () => {
+  const theme = { fg: (_: string, text: string) => text, bold: (text: string) => text };
+  const html = (data: string) => summarizeOutput({ mimetype: "text/html", data });
+  const attr = (value: string) => JSON.stringify(value).replace(/&/gu, "&amp;").replace(/'/gu, "&#39;");
+  test("Mermaid props take precedence over generic HTML, including multiple independent diagrams", () => {
+    const sources = ['flowchart TD; A["quoted & <tag>"]-->B', "sequenceDiagram\n A->>B: hello"];
+    const output = html(sources.map(source => `<marimo-mermaid data-diagram='${attr(source)}'></marimo-mermaid>`).join(""));
+    expect(output?.mermaid).toEqual(sources);
+    const nb = new NotebookState(); nb.apply("kernel-ready", { cell_ids: ["a"], codes: ["pass"], names: ["_"] });
+    const cell = nb.cells.get("a")!; cell.output = output;
+    const rows = outputRows(cell, theme, { width: 100, imageRows: 0, pad: "" }, { textLines: 1, tableRows: 1 });
+    expect(new Set(rows.map(row => row.blockId))).toEqual(new Set(["a:mermaid:0", "a:mermaid:1"]));
+    expect(rows.map(row => row.text).join("\n")).toContain("A->>B: hello");
+  });
+  test("pre/code source preserves all tabs, blank lines, entities and the tail before MAX_TEXT", () => {
+    const source = `\t<head>\n\n${"line\n".repeat(10_001)}tail\n`;
+    const output = html(`<pre><code class='language-python'>${source.replace(/</gu, "&lt;").replace(/>/gu, "&gt;")}</code></pre>`);
+    expect(output?.codeBlocks).toEqual([{ source, language: "python" }]);
+    expect(output!.text.length).toBeLessThanOrEqual(8_000);
+    const nb = new NotebookState(); nb.apply("kernel-ready", { cell_ids: ["a"], codes: ["pass"], names: ["_"] });
+    const cell = nb.cells.get("a")!; cell.output = output;
+    const rows = outputRows(cell, theme, { width: 100, pad: "" }, { textLines: 1, tableRows: 1 });
+    expect(rows.filter(row => row.sourceLine !== undefined)).toHaveLength(source.split("\n").length);
+    expect(rows.map(row => row.text)).toContain("tail");
+  });
+  test("oversized diagram remains fully readable without an image, regardless of summary limits", () => {
+    const source = `flowchart TD\n${"A-->B\n".repeat(45_000)}LAST`;
+    const output = html(`<marimo-mermaid data-diagram='${attr(source)}'></marimo-mermaid>`);
+    expect(output?.mermaid?.[0]).toBe(source);
+    const rows = mermaidRows(source, theme, { blockId: "diagram", imageRows: 0, width: 80 });
+    expect(rows[0]!.text).toContain("Mermaid:");
+    expect(rows.at(-1)!.text).toBe("LAST");
+    expect(rows.filter(row => row.sourceLine !== undefined)).toHaveLength(45_002);
+  });
+  test("malformed props and active content never become diagram sources", () => {
+    expect(html('<script><marimo-mermaid data-diagram=\'"bad"\'></marimo-mermaid></script>')?.mermaid).toBeUndefined();
+    expect(html('<marimo-mermaid data-diagram="not-json"></marimo-mermaid>')?.mermaid).toBeUndefined();
   });
 });
 

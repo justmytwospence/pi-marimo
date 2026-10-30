@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, expect, test } from "vitest";
 import { loadConfig } from "../src/config.ts";
 import { DEFAULT_CONFIG } from "../src/index.js";
+import { normalizeViewPreferences } from "../src/ui/settings.js";
 
 const saved = { agent: process.env.PI_CODING_AGENT_DIR, xdg: process.env.XDG_CONFIG_HOME };
 let home: string;
@@ -34,4 +35,19 @@ test("marimo.json: defaults without files, the project's file on top, wrong type
   expect(config.context).toBe(true);
   expect(config.view.outputs).toBe(true);
   expect(config.server.command).toEqual([]);
+});
+
+test("view settings retain loader precedence and wrong-type fallback before semantic normalization", () => {
+  mkdirSync(join(home, "agent"), { recursive: true });
+  writeFileSync(join(home, "agent", "marimo.json"), JSON.stringify({ view: { lineNumbers: true, showOutput: false, editor: { options: { tabstop: 8 } } } }));
+  mkdirSync(join(project, ".pi"), { recursive: true });
+  writeFileSync(join(project, ".pi", "marimo.json"), JSON.stringify({ view: { lineNumbers: "no", outputs: true, diagnostics: "invalid", editor: { options: { tabstop: 50 } } } }));
+  const merged = loadConfig("marimo", DEFAULT_CONFIG, project);
+  expect(merged.view.lineNumbers).toBe(true);
+  expect(merged.view.outputs).toBe(true);
+  expect(merged.view.diagnostics).toBe("invalid");
+  const preferences = normalizeViewPreferences(merged.view);
+  expect(preferences.diagnostics).toBe("all");
+  expect(preferences.editor.options.tabstop).toBe(4);
+  expect(preferences.showOutput).toBe(false);
 });

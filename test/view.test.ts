@@ -2,7 +2,9 @@ import { expect, test, vi } from "vitest";
 import { NotebookState } from "../src/core/notebook.js";
 import type { Followed } from "../src/core/watcher.js";
 import { INPUT_CONTEXT } from "../src/activity.js";
-import { NotebookView, notebookLines } from "../src/ui/view.js";
+import { NotebookView, notebookLines, detailRows } from "../src/ui/view.js";
+import { SessionPreferences } from "../src/ui/settings.js";
+import { row as notebookRow, CONTENT_LEFT, bodyWidth } from "../src/ui/notebook-frame.js";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { NotebookSource } from "../src/ui/source.js";
 import { notebookKey } from "../src/ui/identity.js";
@@ -21,18 +23,18 @@ test("^U/^D scroll the detail by half a page and the page keys by a whole one; j
   f.notebook.apply("cell-op", { cell_id: "a", status: "idle", output: { channel: "output", mimetype: "text/plain", data: Array.from({ length: 40 }, (_, i) => `line ${i}`).join("\n") } });
   const view = new NotebookView(tui as any, theme, notebookKey(f), { followed: () => [f], interrupt: async () => {}, openInBrowser: () => {} }, () => {});
   try {
-    expect(view.render(100).join("\n")).toContain("▍ line 0");
+    expect(view.render(100).join("\n")).toContain("│ line 0");
     view.handleInput("\x04");
     let text = view.render(100).join("\n");
-    expect(text).not.toContain("▍ line 0");
-    expect(text).toContain("▍ line 9");
+    expect(text).not.toContain("│ line 0");
+    expect(text).toContain("│ line 9");
     expect(text).toMatch(/▌  long/u);
     view.handleInput("\x1b[6~");
     expect(view.render(100).join("\n")).toContain("│ x = 1");
     view.handleInput("\x15");
     view.handleInput("\x1b[5~");
     text = view.render(100).join("\n");
-    expect(text).toContain("▍ line 0");
+    expect(text).toContain("│ line 0");
     view.handleInput("j");
     expect(view.render(100).join("\n")).toMatch(/▌  next/u);
     expect(view[INPUT_CONTEXT]()).toBe("viewer");
@@ -120,6 +122,80 @@ const make = (f: Followed, extra: Partial<ConstructorParameters<typeof NotebookV
   new NotebookView(tui as any, theme2, notebookKey(f), { followed: () => [f], interrupt: async () => {}, openInBrowser: () => {}, ...extra }, () => {});
 const screen = (v: NotebookView) => v.render(100).join("\n");
 
+test("STEP2 local frame has a single content origin and no vertical borders", () => {
+  expect(CONTENT_LEFT).toBe(1);
+  expect(bodyWidth(46)).toBe(44);
+  expect(notebookRow("x".repeat(60), 46, theme)).toBe(` ${"x".repeat(44)} `);
+  expect(visibleWidth(notebookRow("wide 界", 46, theme))).toBe(46);
+});
+
+test("STEP2 expanded detail retains all logical source lines and trailing whitespace", () => {
+  const source = Array.from({ length: 10002 }, (_, i) => `value_${i}\t= ${i}`).join("\n") + "\n  \n";
+  const f = nbWith([{ id: "a", code: source }]);
+  const rows = detailRows(f.notebook, theme, 0, { cell: f.notebook.cells.get("a")!, width: 80, codeOpen: true, section: false, diff: false, lineNumbers: true, tabstop: 8 }).rows.filter(r => r.sourceLine !== undefined);
+  expect(rows).toHaveLength(10004);
+  expect(rows.at(-3)?.text).toContain("value_10001");
+  expect(rows.at(-2)?.text).toBe("10003   ");
+  expect(rows.at(-1)?.text).toBe("10004 ");
+});
+
+test("STEP2 H/L/0 offsets and session line numbers survive view transfers", () => {
+  const f = nbWith([{ id: "a", code: `prefix_${"x".repeat(150)}_TAIL` }]);
+  const preferences = new SessionPreferences();
+  const v = make(f, { preferences });
+  let next: NotebookView | undefined;
+  try {
+    expect(v.render(80).join("\n")).toContain("prefix_");
+    v.handleInput("L");
+    v.render(80);
+    expect((v as any).lastDetail.find((r: any) => r.sourceLine === 0).text).not.toContain("prefix_");
+    v.handleInput("#");
+    expect(preferences.snapshot().lineNumbers).toBe(true);
+    next = make(f, { preferences, initial: v.snapshot() });
+    expect(next.snapshot().codeOffsets).toEqual(v.snapshot().codeOffsets);
+    next.render(80);
+    next.handleInput("0");
+    next.render(80);
+    expect((next as any).lastDetail.find((r: any) => r.sourceLine === 0).text).toContain("1 prefix_");
+    next.handleInput("\x1b[18~"); // F7
+    expect(preferences.snapshot().lineNumbers).toBe(false);
+  } finally { v.dispose(); next?.dispose(); }
+});
+
+test("STEP2 Mermaid source toggle keeps independent fenced blocks and invalidates prose cache", () => {
+  const f = nbWith([{ id: "m", code: 'mo.md("""# Diagram\n\n```mermaid\nflowchart LR\nA-->B\n```\n\n```mermaid\nsequenceDiagram\nA->>B: hi\n```\n""")' }]);
+  const v = make(f);
+  try {
+    v.render(120);
+    const detail = (v as any).lastDetail as Array<{ blockId?: string; text: string }>;
+    const ids = [...new Set(detail.map(r => r.blockId).filter(Boolean))];
+    expect(ids).toHaveLength(2);
+    expect(detail.filter(r => r.text.includes("Mermaid:")).length).toBe(2);
+    (v as any).focusedBlock = ids[1];
+    v.handleInput("s");
+    v.render(120);
+    expect(v.snapshot().diagramSources).toEqual([ids[1]]);
+    expect((v as any).lastDetail.filter((r: any) => r.text.includes("Mermaid:")).length).toBe(1);
+    expect((v as any).lastDetail.some((r: any) => r.text.includes("A->>B: hi"))).toBe(true);
+    v.handleInput("s");
+    v.render(120);
+    expect((v as any).lastDetail.filter((r: any) => r.text.includes("Mermaid:")).length).toBe(2);
+  } finally { v.dispose(); }
+});
+
+test("STEP2 section code appears only after explicit opening", () => {
+  const f = nbWith([{ id: "a", code: "secret_source = 42" }]);
+  const v = make(f, { outputs: true });
+  try {
+    // The outline names the cell; inspect the detail rather than the whole screen.
+    v.render(80);
+    expect((v as any).lastDetail.some((r: any) => r.sourceLine !== undefined)).toBe(false);
+    v.handleInput("B");
+    v.render(80);
+    expect((v as any).lastDetail.some((r: any) => r.text.includes("secret_source = 42") && r.sourceLine === 0)).toBe(true);
+  } finally { v.dispose(); }
+});
+
 test("the header is one line: state, the agent, the last run and where the server is; the path and URL are on the ? page", () => {
   const f = nbWith([{ id: "a", code: "x = 1" }, { id: "b", code: "y = x" }, { id: "m", code: 'mo.md("# T")' }]);
   f.notebook.apply("cell-op", { cell_id: "b", status: "idle", stale_inputs: true, output: { channel: "marimo-error", mimetype: "application/vnd.marimo+error", data: [{ type: "exception", exception_type: "ValueError", msg: "bad" }] } });
@@ -149,24 +225,25 @@ test("j/k move the cursor between cells; the detail shows the cell's output, fol
   try {
     const first = screen(v);
     expect(first).toMatch(/▌  first/u);
-    expect(first).toContain("▍ hi");
-    expect(first).toContain("▍ value & more");
-    // Folded: the first line, dim, and how many more.
-    expect(first).toContain("│ print('hi')  ⋯ +1");
-    expect(first).not.toContain("x = 1");
-    expect(v.render(100).slice(3, -3).join("\n")).not.toMatch(/\bcode\b/u);
+    expect(first).toContain("│ hi");
+    expect(first).toContain("│ value & more");
+    // Folded: a short preview retains both source lines.
+    expect(first).toContain("│ ▸ python");
+    expect(first).toContain("│ print('hi')");
+    expect(first).toContain("│ x = 1");
+    expect(v.render(100).slice(3, -3).join("\n")).toMatch(/│ code\s/u);
     v.handleInput("j");
     expect(screen(v)).toMatch(/▌  second/u);
-    expect(screen(v)).not.toContain("▍ value & more");
+    expect(screen(v)).not.toContain("│ value & more");
     v.handleInput("k");
     v.handleInput("\r");
     const open = screen(v);
     expect(open).toMatch(/▌  first/u);
     expect(open).toContain("│ x = 1");
-    expect(open).not.toContain("⋯ +1");
+    expect(open).toContain("│ ▾ python");
     v.handleInput("\r");
-    expect(screen(v)).not.toContain("│ x = 1");
-    expect(screen(v)).toContain("│ print('hi')  ⋯ +1");
+    expect(screen(v)).toContain("│ x = 1");
+    expect(screen(v)).toContain("│ ▸ python");
   } finally { v.dispose(); }
 });
 
@@ -347,9 +424,9 @@ test("a Plotly figure is drawn through its own renderer", async () => {
   } finally { v.dispose(); setCapabilities({ images: null, trueColor: true, hyperlinks: false } as any); }
 });
 
-test("a live Plotly chart is drawn from its page's frames, and the mouse over it goes to that page", async () => {
+test.each([46, 80, 100, 120, 180])("a live Plotly chart is drawn from its page's frames, and the mouse over it goes to that page (%i columns)", async (width) => {
   const { setCapabilities, setCellDimensions } = await import("@earendil-works/pi-tui");
-  const { LiveCharts } = await import("../src/ui/live-charts.js");
+  const { LiveCharts, liveGeometry } = await import("../src/ui/live-charts.js");
   const png = "iVBORw0KGgoAAAANSUhEUgAAAAoAAAAKCAYAAACNMs+9AAAAFUlEQVR42mP8z8BQz0AEYBxVSF+FABJADveWkH6oAAAAAElFTkSuQmCC";
   setCellDimensions({ widthPx: 9, heightPx: 18 });
   setCapabilities({ images: "kitty", trueColor: true, hyperlinks: false } as any);
@@ -361,9 +438,9 @@ test("a live Plotly chart is drawn from its page's frames, and the mouse over it
   const written: string[] = [];
   const v = new NotebookView(tui as any, theme2, notebookKey(f), { followed: () => [f], interrupt: async () => {}, openInBrowser: () => {} }, () => {}, undefined, undefined, live);
   try {
-    expect(screen(v)).toContain("starting");
+    expect(v.render(width).join("\n")).toContain("starting");
     await new Promise((r) => setTimeout(r, 0));
-    const shown = v.render(100);
+    const shown = v.render(width);
     expect(shown.filter((l) => l.includes("\x1b_G"))).toHaveLength(1);
     // The frame was uploaded out of band and the line only places it.
     expect(written.at(-1)).toMatch(/^\x1b_Ga=t,f=100,q=2,i=\d+;/u);
@@ -371,8 +448,11 @@ test("a live Plotly chart is drawn from its page's frames, and the mouse over it
     expect(live.rects).toHaveLength(1);
     const r = live.rects[0]!;
     expect(shown[r.top]).toContain("\x1b_G");
-    expect(shown.every((l) => visibleWidth(l) === 100)).toBe(true);
-    const ev = (type: string, x: number, y: number, extra = {}) => ({ type, button: "left", x, y, screenX: x, screenY: y, width: 100, height: 40, shift: false, alt: false, ctrl: false, ...extra }) as any;
+    expect(visibleWidth(shown[r.top]!.split("\x1b_G")[0]!)).toBe(r.left);
+    const imageRows = (v as any).lastPage - (v as any).panes.detailTop - 5;
+    expect(r.geometry).toEqual(liveGeometry(width - r.left - CONTENT_LEFT, imageRows));
+    expect(shown.every((l) => visibleWidth(l) === width)).toBe(true);
+    const ev = (type: string, x: number, y: number, extra = {}) => ({ type, button: "left", x, y, screenX: x, screenY: y, width, height: 40, shift: false, alt: false, ctrl: false, ...extra }) as any;
     // Hover inside the chart reaches the page, in cells from its corner; outside it is left alone.
     expect(v.handleMouse(ev("move", r.left + 3, r.top + 2, { button: "none" }))).toEqual({ handled: true });
     expect(events.at(-1)).toMatchObject({ type: "move", x: 3.5, y: 2.5 });
@@ -385,7 +465,7 @@ test("a live Plotly chart is drawn from its page's frames, and the mouse over it
     expect(v.handleMouse(ev("move", 0, 0, { button: "none" }))).toBeUndefined();
     // Moving to a cell without the chart closes its page.
     v.handleInput("j");
-    v.render(100);
+    v.render(width);
     expect(closed).toBe(true);
   } finally { v.dispose(); setCapabilities({ images: null, trueColor: true, hyperlinks: false } as any); }
 });
@@ -446,10 +526,10 @@ test("O stacks the cell's whole section in the detail, the markdown as prose; O 
   try {
     v.handleInput("j");
     expect(screen(v)).not.toContain("Some prose here.");
-    expect(screen(v)).toContain("▍ forty-two");
+    expect(screen(v)).toContain("│ forty-two");
     v.handleInput("O");
     expect(screen(v)).toContain("Some prose here.");
-    expect(screen(v)).toContain("▍ forty-two");
+    expect(screen(v)).toContain("│ forty-two");
     expect(screen(v)).toContain("Section view: the whole section.");
     expect(screen(v)).toMatch(/▌  x = 1/u);
     v.handleInput("O");
@@ -783,7 +863,7 @@ test("narrow, a few outline rows around the cursor sit above the detail, and the
     // The outline (with the cursor's neighbours), a rule, then the cell's detail with its traceback.
     expect(text).toMatch(/daily[\s\S]*▌ {2}✗ model +KeyError[\s\S]*chart[\s\S]*─{20,}[\s\S]*Traceback \(most recent call last\)/u);
     expect(text).toContain("enter code");
-    const rule = lines.findIndex((l, i) => i > 2 && /│ ─{20,} │/u.test(l));
+    const rule = lines.findIndex((l, i) => i > 2 && /^ ─{20,} /u.test(l));
     // As many outline rows above the cursor as below it.
     const cursorRow = lines.findIndex((l) => l.includes("▌  ✗ model"));
     expect(cursorRow - 3).toBe(rule - 1 - cursorRow);
@@ -797,13 +877,16 @@ test("narrow, a few outline rows around the cursor sit above the detail, and the
     v.handleMouse(ev("click", row, { clickCount: 1 }));
     expect(v.render(80).join("\n")).toMatch(/▌ {2}  chart/u);
     v.handleInput("k");
-    const code = v.render(80).findIndex((l) => l.includes("│ model = boom(daily)"));
+    const code = v.render(80).findIndex((l) => l.includes(" model = boom(daily)"));
+    const column = v.render(80)[code]!.indexOf("model = boom");
     v.handleMouse(ev("click", code));
-    // Focused by the click, the code keeps its column: its gutter becomes the accent bar.
+    // Focus stays in the header; source rows keep their column without a gutter.
     const after = v.render(80);
-    expect(after.join("\n")).toContain("▌ model = boom(daily)");
-    expect(after.find((l) => l.includes("▌ model = boom"))!.indexOf("▌ model")).toBe(v.render(80)[code]!.indexOf("▌ model"));
-    expect(after.find((l) => l.includes("▌ model = boom"))!.indexOf("▌ model")).toBe(after[code]!.indexOf("▌ model"));
+    expect((v as any).lastParts[(v as any).part]?.kind).toBe("code");
+    expect(after.join("\n")).toMatch(/^ code\s*$/mu);
+    expect(after.join("\n")).toContain("▾ python");
+    expect(after.find((l) => l.includes("model = boom(daily)"))!.indexOf("model = boom")).toBe(column);
+    expect(after[code]!.indexOf("model = boom")).toBe(column);
     // The wheel over the outline moves the cursor.
     v.handleMouse(ev("wheel", 4, { wheelDelta: 1 }));
     expect(v.render(80).join("\n")).toMatch(/▌ {2}  chart/u);
@@ -822,7 +905,7 @@ test("the detail of a failed cell: its error, the traceback, the code folded to 
     expect(text).toContain("KeyError: 'revenue'");
     expect(text).toContain("Traceback (most recent call last)");
     expect(text).toContain("│ model = boom(daily)");
-    expect(v.render(100).slice(3, -3).join("\n")).not.toMatch(/\b(error|code|printed)\b/u);
+    expect(v.render(100).slice(3, -3).join("\n")).toMatch(/│ error\s[\s\S]*│ code\s/u);
   } finally { v.dispose(); }
 });
 
@@ -929,23 +1012,27 @@ test("n and p walk a cell's parts and Enter acts on the focused one", () => {
   f.notebook.cells.get("a")!.error = "KeyError: k";
   const v = make(f, { setWidget: () => {}, code: "folded" });
   try {
-    // The focused part's rows carry the accent bar; there are no labels.
-    const focused = () => screen(v).split("\n").filter((l) => / │ ▌/u.test(l)).join("\n");
-    expect(v.render(100).slice(3, -3).map((l) => l.split(" │ ")[1] ?? "").join("\n")).not.toMatch(/\bprinted\b/u);
+    // Focus belongs to the short header, not the content rows.
+    const focused = () => { screen(v); return (v as any).lastParts[(v as any).part]?.kind ?? ""; };
+    expect(v.render(100).slice(3, -3).map((l) => l.split(" │ ")[1] ?? "").join("\n")).toMatch(/\bprinted\b/u);
     v.handleInput("n");
-    expect(focused()).toContain("KeyError: k");
+    expect(focused()).toBe("error");
+    expect(screen(v)).toContain("│ KeyError: k");
     v.handleInput("n");
-    expect(focused()).toContain("one");
+    expect(focused()).toBe("printed");
+    expect(screen(v)).toContain("│ one");
+    expect(screen(v)).toContain("│ two");
     v.handleInput("n");
-    expect(focused()).toMatch(/◆ s/u);
+    expect(focused()).toBe("widgets");
+    expect(screen(v)).toMatch(/◆ s/u);
     v.handleInput("n");
-    expect(focused()).toContain("x = 1");
-    expect(screen(v)).toContain("⋯ +1");
+    expect(focused()).toBe("code");
+    expect(screen(v)).toContain("▸ python");
     v.handleInput("\r");
-    expect(screen(v)).not.toContain("⋯ +1");
+    expect(screen(v)).toContain("▾ python");
     expect(screen(v)).toContain("print(x)");
     v.handleInput("p");
-    expect(focused()).toMatch(/◆ s/u);
+    expect(focused()).toBe("widgets");
     v.handleInput("j");
     v.handleInput("k");
     expect(focused()).toBe("");
@@ -953,6 +1040,34 @@ test("n and p walk a cell's parts and Enter acts on the focused one", () => {
 });
 
 const tableHtml = (selection = "multi") => `<marimo-ui-element object-id='t-0' random-id='r'><marimo-table data-data='&quot;[{&#92;&quot;city&#92;&quot;:&#92;&quot;Oslo&#92;&quot;,&#92;&quot;pop&#92;&quot;:709000,&#92;&quot;_marimo_row_id&#92;&quot;:&#92;&quot;0&#92;&quot;}]&quot;' data-total-rows='30' data-total-columns='2' data-page-size='1' data-selection='&quot;${selection}&quot;' data-field-types='[[&quot;city&quot;,[&quot;string&quot;,&quot;object&quot;]],[&quot;pop&quot;,[&quot;integer&quot;,&quot;int64&quot;]]]'></marimo-table></marimo-ui-element>`;
+
+test.each([46, 80, 100, 120, 180])("table focus uses the rendered column width (%i columns)", async (width) => {
+  const { clearTableSessions, tableSession } = await import("../src/ui/table-session.js");
+  clearTableSessions();
+  const f = nbWith([{ id: "a", code: "df" }]);
+  f.notebook.apply("cell-op", { cell_id: "a", status: "idle", output: { channel: "output", mimetype: "text/html", data: tableHtml() } });
+  const cell = f.notebook.cells.get("a")!;
+  const data = cell.output!.table!;
+  const session = tableSession(`${notebookKey(f)}\0${data.objectId}`, cell, data);
+  const ensure = vi.spyOn(session, "ensureVisible");
+  const v = make(f, { table: { call: async () => ({}), file: async () => "[]" } });
+  try {
+    v.render(width);
+    v.handleInput("t");
+    for (const selection of ["multi", "single", "single-cell", "multi-cell", undefined] as const) {
+      data.selection = selection;
+      const lines = v.render(width);
+      const detailWidth = width - (v as any).panes.detailLeft - CONTENT_LEFT;
+      expect(ensure).toHaveBeenLastCalledWith(detailWidth - (selection === "multi" || selection === "single" ? 5 : 0));
+      expect(lines.every(line => visibleWidth(line) === width)).toBe(true);
+      const row = (v as any).lastDetail.findIndex((r: any) => r.tableRow === 0);
+      const y = 3 + (v as any).panes.detailTop + row - (v as any).detailScroll;
+      session.row = 1;
+      v.handleMouse({ type: "click", button: "left", x: (v as any).panes.detailLeft, y, screenX: 0, screenY: y, width, height: 28, shift: false, alt: false, ctrl: false } as any);
+      expect(session.row).toBe(0);
+    }
+  } finally { v.dispose(); clearTableSessions(); }
+});
 
 test("t drives a marimo table: paging, sorting and selection go through the kernel", async () => {
   const { clearTableSessions } = await import("../src/ui/table-session.js");
@@ -1019,17 +1134,17 @@ test("code has a background block when the theme has one", () => {
   } finally { v.dispose(); }
 });
 
-test("the mouse drives widgets: a press on a slider sets it and a drag moves it, a click toggles a checkbox, the wheel steps the focused one", () => {
+test.each([46, 80, 100, 120, 180])("the mouse drives widgets: a press on a slider sets it and a drag moves it, a click toggles a checkbox, the wheel steps the focused one (%i columns)", (width) => {
   const f = nbWith([{ id: "a", code: "n = mo.ui.slider(0, 10)" }]);
   f.notebook.apply("cell-op", { cell_id: "a", status: "idle", output: { channel: "output", mimetype: "text/html", data: widgetHtml } });
   const setWidget = vi.fn((g: Followed, cell: any, w: any, value: unknown) => g.notebook.setUserValue(cell.id, w.objectId, w.label, value));
   const v = make(f, { setWidget });
-  const ev = (type: string, x: number, y: number, extra = {}) => ({ type, button: type === "wheel" ? "none" : "left", x, y, screenX: x, screenY: y, width: 100, height: 28, shift: false, alt: false, ctrl: false, ...extra }) as any;
+  const ev = (type: string, x: number, y: number, extra = {}) => ({ type, button: type === "wheel" ? "none" : "left", x, y, screenX: x, screenY: y, width, height: 28, shift: false, alt: false, ctrl: false, ...extra }) as any;
   try {
-    const lines = v.render(100);
+    const lines = v.render(width);
     const sliderRow = lines.findIndex((l) => l.includes("◆ n "));
     const boxRow = lines.findIndex((l) => l.includes("◆ on "));
-    // Where the slider's bar starts: the line's text, from the frame's border.
+    // Where the slider's bar starts: the line's text, from the local content origin.
     const strip = (l: string) => l.replace(/\x1b\[[0-9;]*m/gu, "");
     const barAt = strip(lines[sliderRow]!).indexOf("━");
     // The press at the bar's last cell sets the top value and captures the drag.
@@ -1042,11 +1157,12 @@ test("the mouse drives widgets: a press on a slider sets it and a drag moves it,
     v.handleMouse(ev("wheel", barAt, sliderRow, { wheelDelta: -1 }));
     expect(setWidget).toHaveBeenLastCalledWith(f, expect.anything(), expect.objectContaining({ objectId: "a-0" }), 1);
     // A click on the checkbox toggles it.
-    const boxAt = strip(v.render(100)[boxRow]!).indexOf("[x]");
+    const boxAt = strip(v.render(width)[boxRow]!).indexOf("[x]");
     v.handleMouse(ev("press", boxAt, boxRow));
     v.handleMouse(ev("click", boxAt, boxRow));
     expect(setWidget).toHaveBeenLastCalledWith(f, expect.anything(), expect.objectContaining({ objectId: "a-1" }), false);
-    expect(v.render(100).join("\n")).toContain("▸ on");
+    expect(v.render(width).join("\n")).toContain("▸ on");
+    expect((v as any).lastParts[(v as any).part]?.kind).toBe("widgets");
   } finally { v.dispose(); }
 });
 
@@ -1070,7 +1186,7 @@ test("ctrl+j and ctrl+k move through a filter's matches, while typing it and aft
   } finally { v.dispose(); }
 });
 
-test("focusing the code does not move it: the bar takes the block's first column", () => {
+test("focusing the code does not move it: only the header carries the bar", () => {
   const f = nbWith([{ id: "a", code: "x = 1\ny = 2" }]);
   const bgTheme = { ...theme, bg: (c: string, t: string) => `<${c}>${t}</${c}>` };
   const v = new NotebookView(tui as any, bgTheme as any, notebookKey(f), { followed: () => [f], interrupt: async () => {}, openInBrowser: () => {}, code: "folded" }, () => {});
@@ -1079,7 +1195,9 @@ test("focusing the code does not move it: the bar takes the block's first column
     const column = () => { const l = v.render(100).find((x) => x.includes("y = 2"))!; return l.indexOf("y = 2"); };
     const before = column();
     v.handleInput("n");
-    expect(v.render(100).join("\n")).toContain("<toolPendingBg>▌y = 2");
+    expect(v.render(100).join("\n")).toContain("<toolPendingBg>y = 2</toolPendingBg>");
+    expect((v as any).lastParts[(v as any).part]?.kind).toBe("code");
+    expect(v.render(100).join("\n")).not.toContain("<toolPendingBg>▌");
     expect(column()).toBe(before);
   } finally { v.dispose(); }
 });
@@ -1111,9 +1229,11 @@ test("code is open by default; Enter folds a cell's code and opens it again", ()
   try {
     expect(screen(v)).toContain("│ y = 2");
     v.handleInput("\r");
-    expect(screen(v)).toContain("x = 1  ⋯ +1");
-    expect(screen(v)).not.toContain("y = 2");
+    expect(screen(v)).toContain("▸ python");
+    expect(screen(v)).toContain("│ x = 1");
+    expect(screen(v)).toContain("│ y = 2");
     v.handleInput("\r");
     expect(screen(v)).toContain("│ y = 2");
+    expect(screen(v)).toContain("▾ python");
   } finally { v.dispose(); }
 });

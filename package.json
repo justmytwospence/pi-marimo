@@ -40,14 +40,15 @@
     "prepublishOnly": "npm run check"
   },
   "peerDependencies": {
+    "@earendil-works/pi-agent-core": "*",
+    "@earendil-works/pi-ai": "*",
     "@earendil-works/pi-coding-agent": "*",
     "@earendil-works/pi-tui": "*",
-    "@earendil-works/pi-ai": "*",
-    "@earendil-works/pi-agent-core": "*",
     "typebox": "*"
   },
   "devDependencies": {
     "@earendil-works/pi-coding-agent": "1.2.0",
+    "@types/markdown-it": "^14.2.0",
     "@types/node": "^22.0.0",
     "typescript": "^7.0.0",
     "vitest": "^5.0.0"
@@ -59,5 +60,13 @@
   "homepage": "https://github.com/justmytwospence/pi-marimo#readme",
   "bugs": {
     "url": "https://github.com/justmytwospence/pi-marimo/issues"
+  },
+  "dependencies": {
+    "@xterm/headless": "^6.0.0",
+    "markdown-it": "^15.0.3",
+    "mermaid": "^12.2.0",
+    "neovim": "^5.5.0",
+    "parse5": "^8.0.1",
+    "shiki": "^4.5.0"
   }
 }

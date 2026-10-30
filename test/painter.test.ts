@@ -1,5 +1,10 @@
 import { expect, test, vi } from "vitest";
 import { Painter, marker } from "../src/ui/painter.js";
+import { row as notebookRow } from "../src/ui/notebook-frame.js";
+import { getCapabilities, getCellDimensions, setCapabilities, setCellDimensions } from "@earendil-works/pi-tui";
+import { NotebookState } from "../src/core/notebook.js";
+import { outputRows } from "../src/ui/outputs.js";
+import type { LiveCharts } from "../src/ui/live-charts.js";
 
 function fakeTui(screen: string[]) {
   const writes: string[] = [];
@@ -15,6 +20,58 @@ const PNG = "iVBORw0KGgoAAAANSUhEUgAAAAoAAAAKCAYAAACNMs+9AAAAFUlEQVR42mP8z8BQz0A
 const placements = (w: string) => [...w.matchAll(/a=p,i=(\d+)/gu)].map((m) => Number(m[1]));
 const deletes = (w: string) => [...w.matchAll(/a=d,d=i,i=(\d+)/gu)].map((m) => Number(m[1]));
 const uploads = (w: string) => [...w.matchAll(/a=t,f=100,q=2,i=(\d+)/gu)].map((m) => Number(m[1]));
+
+test("empty-bar output images and live charts use the full body width and local content origin", () => {
+  const caps = getCapabilities(); const dimensions = getCellDimensions();
+  const { tui, writes } = fakeTui(Array.from({ length: 30 }, () => ""));
+  const p = Painter.for(tui)!;
+  const theme = { fg: (_: string, text: string) => text, bold: (text: string) => text };
+  const nb = new NotebookState(); nb.apply("kernel-ready", { cell_ids: ["a"], codes: ["pass"], names: ["_"] });
+  const cell = nb.cells.get("a")!;
+  const opts = { width: 46, pad: "", bar: "", imageRows: 100 };
+  const limits = { textLines: 10, tableRows: 1 };
+  try {
+    setCapabilities({ images: "kitty", trueColor: true, hyperlinks: false });
+    setCellDimensions({ widthPx: 9, heightPx: 18 });
+    cell.output = { kind: "image", text: "image", image: { mime: "image/png", data: PNG } };
+    const rows = outputRows(cell, theme, opts, limits);
+    expect(rows[0]!.text.startsWith("\x1b_G")).toBe(true);
+    expect(rows[0]!.text).toMatch(/[,;]c=46[,;]/u);
+    expect(rows[0]!.image).toMatchObject({ index: 0, height: rows.length, alt: "[image png: scroll until it fits on screen]" });
+    expect(rows.slice(1).every(row => row.text === "")).toBe(true);
+    tui.screen[1] = notebookRow(rows[0]!.text, 48, theme);
+    expect(tui.screen[1]!.startsWith(" \x1b_G")).toBe(true);
+    const state = vi.fn((_output, _figure, geometry) => {
+      const slot = p.add(geometry); p.present(slot, PNG);
+      return { status: "ready", geometry, slot };
+    });
+    const live = { state, lines: (ready: { slot: number; geometry: { rows: number } }) => p.lines(ready.slot, ready.geometry.rows) } as unknown as LiveCharts;
+    cell.output = { kind: "chart", text: "chart", plotly: "{}" };
+    const chart = outputRows(cell, theme, { ...opts, live }, limits);
+    expect(state.mock.calls[0]![2].cols).toBe(46);
+    expect(chart[0]!.image).toMatchObject({ index: 0, height: chart.length, alt: "[chart: scroll until it fits on screen]", live: { output: cell.output, geometry: state.mock.calls[0]![2] } });
+    expect(chart.slice(1).every(row => row.text === "")).toBe(true);
+    tui.screen[1] = notebookRow(chart[0]!.text, 48, theme);
+    writes.length = 0; tui.doRender();
+    expect(writes.join("")).toContain("\x1b[2;2H");
+    expect(outputRows(cell, theme, opts, limits)[0]!.text).toBe("static image (live charts are off)");
+    const prefixed = outputRows(cell, theme, { ...opts, pad: "\x1b[31m界\x1b[0m", bar: "界", live }, limits);
+    expect(state.mock.calls[1]![2].cols).toBe(41);
+    expect(prefixed[0]!.text.startsWith("\x1b[31m界\x1b[0m界 ")).toBe(true);
+  } finally { p.retire(); setCapabilities(caps); setCellDimensions(dimensions); }
+});
+
+test("notebook-local image placement shares the one-column content origin", () => {
+  const { tui, writes } = fakeTui(["", "", "", ""]);
+  const p = Painter.for(tui)!;
+  const slot = p.add({ cols: 8, rows: 2 });
+  p.present(slot, PNG);
+  const theme = { fg: (_: string, text: string) => text, bold: (text: string) => text };
+  tui.screen[1] = notebookRow(marker(slot), 46, theme);
+  tui.doRender();
+  expect(writes.at(-1)).toContain("\x1b[2;2H");
+  p.retire();
+});
 
 test("the chart's rows are text to the renderer; after a render the painter places the frame where the marker is", () => {
   const { tui, writes } = fakeTui(["", "", "", "", "", ""]);

@@ -1,6 +1,8 @@
 // What a cell printed, kept compact for the notebook view (never for the agent's snapshot): the
 // last output as text (HTML stripped, images named), its table's first page and its widgets, and
 // the last console lines.
+import { componentProps, outputElements, parseOutputFragment, textContent } from "./html.js";
+
 export type OutputKind = "text" | "table" | "image" | "chart" | "widgets" | "other";
 
 /** The rows a table output carries (marimo sends its first page), as text. */
@@ -61,6 +63,9 @@ export interface Widget {
 export interface CellOutput {
   kind: OutputKind;
   text: string;
+  /** Complete sources, in document order; never subject to summary limits. */
+  mermaid?: string[];
+  codeBlocks?: Array<{ source: string; language?: string }>;
   /** A PNG the view can draw inline (base64, no data: prefix), when the output is small enough. */
   image?: { mime: "image/png"; data: string };
   /** A Vega or Vega-Lite spec (JSON text) the view can turn into `image`, for a chart. */
@@ -387,6 +392,17 @@ export function summarizeOutput(raw: unknown): CellOutput | undefined {
   // mo.md arrives as text/markdown whose data is already HTML.
   if (mime === "text/markdown" && typeof data === "string") return summarizeOutput({ ...output, mimetype: "text/html" });
   if (mime === "text/html" && typeof data === "string") {
+    const elements = [...outputElements(parseOutputFragment(data))];
+    const mermaid = elements.filter((node) => node.tagName === "marimo-mermaid")
+      .map((node) => componentProps(node).diagram).filter((source): source is string => typeof source === "string");
+    if (mermaid.length) return { kind: "chart", text: "[Mermaid]", mermaid };
+    const codeBlocks = elements.filter((node) => node.tagName === "pre").map((node) => {
+      const code = [...outputElements(node)].find((child) => child.tagName === "code");
+      const classes = code?.attrs.find((attr) => attr.name === "class")?.value ?? "";
+      const language = /(?:^|\s)language-([^\s]+)/u.exec(classes)?.[1];
+      return { source: textContent(code ?? node), ...(language ? { language } : {}) };
+    });
+    if (codeBlocks.length) return { kind: "text", text: clip(htmlToText(data)), codeBlocks };
     const widgets = parseWidgets(data);
     const extra = widgets.length ? { widgets } : {};
     const marimo = marimoTable(data);

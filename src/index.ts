@@ -54,11 +54,14 @@ import { getKeybindings } from "@earendil-works/pi-tui";
 import { ChatChart, type ChartEntry, disposeCharts, latestChart } from "./ui/chat-chart.js";
 import { Painter } from "./ui/painter.js";
 import { stopSharedChrome } from "./core/chrome.js";
+import { MermaidRenderer } from "./core/mermaid.js";
+import { SyntaxHighlighter } from "./ui/syntax.js";
 import { stopSharedPlotly } from "./core/plotly.js";
 import { type ChartRenderer, VegaRenderer } from "./core/vega.js";
 import { sharedPlotly } from "./core/plotly.js";
 import type { Followed } from "./core/watcher.js";
 import { loadConfig } from "./config.ts";
+import { DEFAULT_VIEW_PREFERENCES, SessionPreferences } from "./ui/settings.js";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { realpath } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
@@ -86,6 +89,7 @@ export const DEFAULT_CONFIG = {
   /** Run Plotly figures live (hover, zoom) in the view and the transcript; false draws pictures. */
   liveCharts: true,
   view: {
+    ...structuredClone(DEFAULT_VIEW_PREFERENCES),
     /** Open the notebook view with the whole section in the detail pane (O toggles it). */
     outputs: false,
     /** Cells' code in the detail: "open", or "folded" to its first line (Enter flips a cell). */
@@ -196,6 +200,10 @@ export default function piMarimo(pi: ExtensionAPI): void {
   const vega = new VegaRenderer();
   let inspectOff: (() => void) | undefined;
   let config: Config = DEFAULT_CONFIG;
+  const preferences = new SessionPreferences();
+  // Runtime-owned services: constructors do not load grammars or start browser processes.
+  const syntax = new SyntaxHighlighter(message => ctxRef?.ui.notify(`marimo: ${message}`, "warning"));
+  const diagrams = new MermaidRenderer();
 
   /** A notebook cell's chart as a transcript entry: a Plotly figure to run live, else a picture. */
   const chartEntry = async (cellRef: string, notebook?: string): Promise<ChartEntry> => {
@@ -384,6 +392,9 @@ export default function piMarimo(pi: ExtensionAPI): void {
     const suite = pi.events ? requestEditorFactory(pi.events) : undefined;
     return {
       ...viewActions,
+      preferences,
+      syntax,
+      diagrams,
       liveCharts: config.liveCharts,
       outputs: config.view.outputs,
       code: config.view.code === "folded" ? "folded" : "open",
@@ -662,6 +673,7 @@ export default function piMarimo(pi: ExtensionAPI): void {
     herdr = ctx.mode === "tui" ? new HerdrHold(pi.events) : undefined;
     await watcher?.stop();
     config = loadConfig("marimo", DEFAULT_CONFIG, ctx.cwd);
+    preferences.configure(config.view, message => ctx.ui.notify(message, "warning"));
     const maxNotebooks = Math.max(1, Math.min(32, Math.floor(Number(config.maxNotebooks) || DEFAULT_CONFIG.maxNotebooks)));
     watcher = new MarimoWatcher({ io: nodeIo(), cwd: ctx.cwd, token: process.env.MARIMO_TOKEN, maxNotebooks, onChange: schedule });
     const branch = ctx.sessionManager.getBranch() as Entry[];
@@ -685,6 +697,8 @@ export default function piMarimo(pi: ExtensionAPI): void {
 
   pi.on("session_shutdown", async () => {
     widgetSender.dispose();
+    syntax.dispose();
+    diagrams.dispose();
     inspectOff?.();
     inspectOff = undefined;
     disposeCharts();
