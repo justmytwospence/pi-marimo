@@ -104,6 +104,7 @@ export interface ViewState {
   codeOffsets?: Array<[string, CodeBlockState]>;
   diagramSources?: string[];
   sectionCodeOpen?: string[];
+  sectionCodeFolded?: string[];
   focusedBlock?: string;
   preferences?: ViewPreferences;
   timing?: boolean;
@@ -195,10 +196,10 @@ export class NotebookView implements Component, Focusable {
   private scroll = 0;
   private follow = true;
   private cursor: string | undefined;
-  /** Cells whose code shows in the detail. */
   /** Cells whose code is flipped from the default (`view.code`). */
   private codeOpen = new Set<string>();
   private sectionCodeOpen = new Set<string>();
+  private sectionCodeFolded = new Set<string>();
   private codeOffsets = new Map<string, CodeBlockState>();
   private diagramSources = new Set<string>();
   private focusedBlock: string | undefined;
@@ -375,6 +376,7 @@ export class NotebookView implements Component, Focusable {
       codeOffsets: [...this.codeOffsets].map(([id, state]) => [id, { ...state }]),
       diagramSources: [...this.diagramSources],
       sectionCodeOpen: [...this.sectionCodeOpen],
+      sectionCodeFolded: [...this.sectionCodeFolded],
       preferences: this.preferences.snapshot(),
       timing: this.timing,
       ...(this.help ? { help: { ...this.helpView.state } } : {}),
@@ -420,6 +422,7 @@ export class NotebookView implements Component, Focusable {
     this.codeOffsets = new Map(s.codeOffsets ?? []);
     this.diagramSources = new Set(s.diagramSources ?? []);
     this.sectionCodeOpen = new Set(s.sectionCodeOpen ?? []);
+    this.sectionCodeFolded = new Set(s.sectionCodeFolded ?? []);
     this.focusedBlock = s.focusedBlock;
     // So the detail's scroll survives the first render.
     this.detailKey = `${s.cursor ?? ""}\0${s.section}`;
@@ -606,6 +609,7 @@ export class NotebookView implements Component, Focusable {
     this.folded.clear();
     this.diffs.clear();
     this.codeOpen.clear();
+    this.sectionCodeFolded.clear();
     this.detailScroll = 0;
     this.widget = undefined;
     this.table = undefined;
@@ -1121,13 +1125,23 @@ export class NotebookView implements Component, Focusable {
   }
 
   private toggleCode(id: string): void {
-    if (this.section) {
+    if (this.sectionMarkdown(id)) {
       if (!this.sectionCodeOpen.delete(id)) this.sectionCodeOpen.add(id);
-    } else if (!this.codeOpen.delete(id)) this.codeOpen.add(id);
+    } else {
+      const flipped = this.section ? this.sectionCodeFolded : this.codeOpen;
+      if (!flipped.delete(id)) flipped.add(id);
+    }
+  }
+
+  private sectionMarkdown(id: string): boolean {
+    const nb = this.current()?.notebook;
+    const cell = nb?.cells.get(id);
+    return this.section && !!cell && nb!.isMarkdown(cell);
   }
 
   private codeShown(id: string): boolean {
-    return this.section ? this.sectionCodeOpen.has(id) : (this.actions.code !== "folded") !== this.codeOpen.has(id);
+    if (this.section) return this.sectionMarkdown(id) ? this.sectionCodeOpen.has(id) : !this.sectionCodeFolded.has(id);
+    return (this.actions.code !== "folded") !== this.codeOpen.has(id);
   }
 
   private setCode(id: string, open: boolean): void {
@@ -1839,6 +1853,7 @@ export class NotebookView implements Component, Focusable {
         const d = detailRows(nb, th, Date.now(), {
           cell, width: dw, codeOpen: this.codeShown(cell.id), diff: this.diffs.has(cell.id), section: this.section,
           sectionCodeOpen: this.sectionCodeOpen,
+          sectionCodeFolded: this.sectionCodeFolded,
           syntax: this.actions.syntax, theme: this.theme as SyntaxTheme,
           diagnostics: this.preferences.snapshot().diagnostics,
           showOutput: this.preferences.snapshot().showOutput,

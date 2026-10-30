@@ -342,16 +342,43 @@ test("STEP2 Mermaid source toggle keeps independent fenced blocks and invalidate
   } finally { v.dispose(); }
 });
 
-test("STEP2 section code appears only after explicit opening", () => {
-  const f = nbWith([{ id: "a", code: "secret_source = 42" }]);
-  const v = make(f, { outputs: true });
+test.each(["open", "folded"] as const)("section folds are independent of cell source state (view.code=%s) and survive restore", code => {
+  const f = nbWith([{ id: "a", code: "secret_source = 42" }, { id: "b", code: "other_source = 7" }]);
+  const v = make(f, { outputs: true, code });
+  if (!v.snapshot().section) v.handleInput("O");
+  const panel = (view: NotebookView, id: string) => {
+    view.render(100);
+    return (view as any).lastDetail.filter((r: any) => r.blockId === `${id}:source`).map((r: any) => r.text).join("\n");
+  };
   try {
-    // The outline names the cell; inspect the detail rather than the whole screen.
-    v.render(80);
-    expect((v as any).lastDetail.some((r: any) => r.sourceLine !== undefined)).toBe(false);
+    expect(panel(v, "a")).toContain("▾ python");
+    expect(panel(v, "b")).toContain("▾ python");
     v.handleInput("B");
-    v.render(80);
-    expect((v as any).lastDetail.some((r: any) => r.text.includes("secret_source = 42") && r.sourceLine === 0)).toBe(true);
+    expect(panel(v, "a")).toContain("▸ python");
+    expect(panel(v, "b")).toContain("▾ python");
+    v.handleInput("j");
+    v.handleInput("k");
+    expect(panel(v, "a")).toContain("▸ python");
+    expect(v.snapshot().sectionCodeFolded).toEqual(["a"]);
+    expect(v.snapshot().codeOpen).toEqual([]);
+    v.handleInput("O");
+    expect(panel(v, "a")).toContain(code === "open" ? "▾ python" : "▸ python");
+    v.handleInput("B"); // Change only the cell-mode source state.
+    expect(panel(v, "a")).toContain(code === "open" ? "▸ python" : "▾ python");
+    v.handleInput("O");
+    expect(panel(v, "a")).toContain("▸ python");
+    const restored = make(f, { code, initial: v.snapshot() });
+    try {
+      expect(panel(restored, "a")).toContain("▸ python");
+      expect(panel(restored, "b")).toContain("▾ python");
+      restored.handleInput("B");
+      expect(panel(restored, "a")).toContain("▾ python");
+      expect(restored.snapshot().sectionCodeFolded).toEqual([]);
+      restored.handleInput("O");
+      expect(panel(restored, "a")).toContain(code === "open" ? "▸ python" : "▾ python");
+      restored.handleInput("O");
+    } finally { restored.dispose(); }
+    v.handleInput("O"); // Restore the process-wide cell-view preference for later tests.
   } finally { v.dispose(); }
 });
 
@@ -1312,6 +1339,22 @@ test("a view started from a state shows the same cell and code", () => {
 });
 
 // --- parts, tables, markdown editing, code blocks ---
+
+test.each([false, true])("section renders Python source before its output, including inline editing (editor=%s)", editing => {
+  const f = nbWith([{ id: "a", code: "value = 42" }]);
+  const cell = f.notebook.cells.get("a")!;
+  cell.output = { kind: "text", text: "result text" };
+  const d = detailRows(f.notebook, theme, 0, {
+    cell, width: 80, section: true, codeOpen: false, diff: false,
+    sectionCodeFolded: editing ? new Set(["a"]) : undefined,
+    inlineEditor: editing ? { cellId: "a", kind: "python", rows: () => [{ text: "inline draft", editorRow: 0 }] } : undefined,
+  });
+  expect(d.parts.map(p => p.kind)).toEqual(["code", "output"]);
+  const source = d.rows.findIndex(r => editing ? r.editorRow === 0 : r.sourceLine === 0);
+  const output = d.rows.findIndex(r => r.text.includes("result text"));
+  expect(source).toBeGreaterThanOrEqual(0);
+  expect(output).toBeGreaterThan(source);
+});
 
 test.each([false, true])("detail finalization drops mixed-output wrappers and remaps anchors (section=%s)", section => {
   const f = nbWith([{ id: "a", code: "mo.md(dynamic)" }]);

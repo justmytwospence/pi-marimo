@@ -1,6 +1,6 @@
 // The detail: the notebook view's right pane, the selected cell as a reader wants it. Prose is
-// rendered, the output is large, an error comes with its traceback, the code is folded (B opens
-// it) and the dataflow is named by variable. In section view (`O`) it is the whole section stacked
+// rendered, the output is large, an error comes with its traceback, source is open by default
+// (B folds it) and the dataflow is named by variable. In section view (`O`) it is the whole section stacked
 // as a document, the selected cell marked. No cell ids and no Python reprs: values are in the
 // variables pane.
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
@@ -37,8 +37,10 @@ export interface DetailOptions extends RowOptions {
   width: number;
   /** The selected cell's source is expanded instead of folded. */
   codeOpen: boolean;
-  /** Explicitly opened cells in section mode (ordinary reading stays output-first). */
+  /** Explicitly revealed Markdown source in section mode. */
   sectionCodeOpen?: ReadonlySet<string>;
+  /** Cells whose section source is folded to a preview. */
+  sectionCodeFolded?: ReadonlySet<string>;
   /** The code shows as the agent's diff. */
   diff: boolean;
   /** The whole section, stacked, instead of the cell. */
@@ -290,8 +292,8 @@ export function detailRows(nb: NotebookState, theme: FrameTheme, now: number, o:
       push(`${selected ? theme.fg("accent", "▌") : " "}${cellGlyph(nb, theme, cell, now)} ${selected ? theme.bold(oneLine(cellTitle(nb, cell))) : dim(oneLine(cellTitle(nb, cell)))}`);
       const status = statusOf(cell);
       if (status) push(status);
+      codeBlock(cell, !o.sectionCodeFolded?.has(cell.id), selected && o.diff);
       resultBlock(cell, { textLines: 12, tableRows: 10 }, 5);
-      if (o.sectionCodeOpen?.has(cell.id) || (o.inlineEditor?.cellId === cell.id && o.inlineEditor.kind === "python")) codeBlock(cell, true, selected && o.diff);
     }
     return finalize(focusRow);
   }
