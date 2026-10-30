@@ -1,0 +1,125 @@
+[
+  {
+    "name": "marimo escaped JSON",
+    "producer": "marimo",
+    "version": "0.25.0",
+    "sourceUrl": "https://github.com/marimo-team/marimo/blob/0.25.0/marimo/_plugins/stateless/status/_progress.py",
+    "kind": "html",
+    "provenance": "Synthetic serialization of the producer's documented data props, not a live capture",
+    "input": "<marimo-progress data-title='&quot;Fetch &amp; \\\"cache\\\"&quot;' data-subtitle='&quot;Batch &lt;2&gt;&quot;' data-total='10' data-progress='4' data-rate='2.5' data-eta='2.4'></marimo-progress>",
+    "expected": [{"label":"Fetch & \"cache\"","completed":4,"total":10,"rate":2.5,"etaSeconds":2.4,"state":"running","stats":{"subtitle":"Batch <2>"}}]
+  },
+  {
+    "name": "marimo spinner",
+    "producer": "marimo",
+    "version": "0.25.0",
+    "sourceUrl": "https://github.com/marimo-team/marimo/blob/0.25.0/marimo/_plugins/stateless/status/_progress.py",
+    "kind": "html",
+    "provenance": "Synthetic data-prop contract example",
+    "input": "<marimo-progress data-title='&quot;Waiting&quot;' data-progress='true'></marimo-progress>",
+    "expected": [{"label":"Waiting","state":"running","stats":{}}]
+  },
+  {
+    "name": "PyMC current native producer row",
+    "producer": "PyMC MarimoSimpleProgress",
+    "version": "pymc-progress-table contract (synthetic; not a versioned capture)",
+    "sourceUrl": "https://github.com/pymc-devs/pymc/blob/main/pymc/progress_bar/marimo_progress.py",
+    "kind": "html",
+    "provenance": "Synthetic native-table structure with supplied clocks and counters; not a live capture",
+    "input": "<table class='pymc-progress-table'><thead><tr><th>Progress</th><th>Samples</th><th>Speed</th><th>Elapsed</th><th>Remaining</th></tr></thead><tbody><tr><td><div class='pymc-progress-bar-container'><div class='pymc-progress-bar' style='width: 40.0%'></div></div></td><td>4/10 (40%)</td><td>5.0 samples/s</td><td>0.8s</td><td>0:01</td></tr></tbody></table>",
+    "expected": [{"label":"Sampling 1","completed":4,"total":10,"elapsedSeconds":0.8,"etaSeconds":1,"state":"running","stats":{"Progress":"","percent":"40.0","Samples":"4/10 (40%)","Speed":"5.0 samples/s","Elapsed":"0.8s","Remaining":"0:01"}}]
+  },
+  {
+    "name": "PyMC split chains dynamic reordered columns",
+    "producer": "PyMC",
+    "version": "pymc-progress-table contract (synthetic; not a versioned capture)",
+    "sourceUrl": "https://github.com/pymc-devs/pymc",
+    "kind": "html",
+    "provenance": "Synthetic native-table contract with reordered and extra stat columns",
+    "input": "<table class='other pymc-progress-table'><thead><tr><th>Divergences</th><th>Chain</th><th>Progress</th><th>Step Size</th><th>Grad Evals</th><th>Sampling Speed</th><th>Elapsed</th><th>Extra stat</th></tr></thead><tbody><tr><td>2</td><td>0</td><td><div style='width:100%'><div style='background:blue; width: 37.5%;'></div></div></td><td>0.15</td><td>31</td><td>40 draws/s</td><td>0:01:12</td><td>alpha</td></tr><tr><td>0</td><td>1</td><td><div style='width:100%;'></div></td><td>0.2</td><td>15</td><td>50 draws/s</td><td>0:00:50</td><td>beta</td></tr></tbody></table>",
+    "expected": [
+      {"label":"Chain 0","state":"running","elapsedSeconds":72,"stats":{"Divergences":"2","Chain":"0","Progress":"","Step Size":"0.15","Grad Evals":"31","Sampling Speed":"40 draws/s","Elapsed":"0:01:12","Extra stat":"alpha","percent":"37.5"}},
+      {"label":"Chain 1","state":"complete","elapsedSeconds":50,"stats":{"Divergences":"0","Chain":"1","Progress":"","Step Size":"0.2","Grad Evals":"15","Sampling Speed":"50 draws/s","Elapsed":"0:00:50","Extra stat":"beta","percent":"100"}}
+    ]
+  },
+  {
+    "name": "PyMC combined stats without numeric bar",
+    "producer": "PyMC",
+    "version": "pymc-progress-table contract (synthetic; not a versioned capture)",
+    "sourceUrl": "https://github.com/pymc-devs/pymc",
+    "kind": "html",
+    "provenance": "Synthetic combined-row and missing-column variant",
+    "input": "<table class='pymc-progress-table'><tr><th>Chains</th><th>Progress</th><th>Divergences</th></tr><tr><td>0, 1</td><td><div style='width:calc(50% - 1px)'></div></td><td>3</td><td>unheaded</td></tr></table>",
+    "expected": [{"label":"Chain 0, 1","state":"running","stats":{"Chains":"0, 1","Progress":"","Divergences":"3","Column 4":"unheaded"}}]
+  },
+  {
+    "name": "native fastprogress",
+    "producer": "fastprogress",
+    "version": "1.0.3",
+    "sourceUrl": "https://github.com/fastai/fastprogress/blob/1.0.3/fastprogress/fastprogress.py",
+    "kind": "html",
+    "provenance": "Synthetic native HTML progress element (not a display-handle transport capture)",
+    "input": "<progress value='25' max='100' title='Epoch'>25%</progress><progress aria-label='Loading'></progress>",
+    "expected": [{"label":"Epoch","completed":25,"total":100,"state":"running","stats":{}},{"label":"Loading","state":"running","stats":{}}]
+  },
+  {
+    "name": "tqdm",
+    "producer": "tqdm",
+    "version": "4.67.1",
+    "sourceUrl": "https://github.com/tqdm/tqdm/blob/v4.67.1/tqdm/std.py",
+    "kind": "text",
+    "provenance": "Synthetic standard format_meter screen line",
+    "input": ["Fetch:  40%|████      | 4/10 [00:02<00:03, 2.00it/s]"],
+    "expected": [{"label":"Fetch","completed":4,"total":10,"rate":2,"elapsedSeconds":2,"etaSeconds":3,"state":"running","stats":{"percent":"40","rate":"2.00it/s"}}]
+  },
+  {
+    "name": "tqdm unknown total",
+    "producer": "tqdm",
+    "version": "4.67.1",
+    "sourceUrl": "https://github.com/tqdm/tqdm/blob/v4.67.1/tqdm/std.py",
+    "kind": "text",
+    "provenance": "Synthetic unknown-total format_meter screen line",
+    "input": ["Read: 7it [00:14, 2.00s/it]"],
+    "expected": [{"label":"Read","completed":7,"rate":0.5,"elapsedSeconds":14,"state":"running","stats":{"rate":"2.00s/it"}}]
+  },
+  {
+    "name": "Rich multi chain",
+    "producer": "Rich",
+    "version": "14.1.0",
+    "sourceUrl": "https://github.com/Textualize/rich/blob/v14.1.0/rich/progress.py",
+    "kind": "text",
+    "provenance": "Synthetic reduced screen with two tasks (no raw cursor controls)",
+    "input": ["Chain 0 ━━━━━━━━━━ 50% 0:00:10 0:00:10", "Chain 1 ━━━━━━━━━━ 100% 0:00:20 0:00:00"],
+    "expected": [{"label":"Chain 0","elapsedSeconds":10,"etaSeconds":10,"state":"running","stats":{"percent":"50"}},{"label":"Chain 1","elapsedSeconds":20,"etaSeconds":0,"state":"complete","stats":{"percent":"100"}}]
+  },
+  {
+    "name": "Keras fraction and percent",
+    "producer": "Keras",
+    "version": "3.11.3",
+    "sourceUrl": "https://github.com/keras-team/keras/blob/v3.11.3/keras/src/utils/progbar.py",
+    "kind": "text",
+    "provenance": "Synthetic common fraction/bar format with explicit percent variant",
+    "input": ["32/100 [========>.....................] 32% - loss: 0.25 - accuracy: 0.90"],
+    "expected": [{"label":"","completed":32,"total":100,"state":"running","stats":{"percent":"32","details":"loss: 0.25 - accuracy: 0.90"}}]
+  },
+  {
+    "name": "pip Rich download",
+    "producer": "pip/Rich",
+    "version": "25.2",
+    "sourceUrl": "https://github.com/pypa/pip/blob/25.2/src/pip/_internal/cli/progress_bars.py",
+    "kind": "text",
+    "provenance": "Synthetic percentage download variant; byte units must remain verbatim",
+    "input": ["Download ━━━━━━━━━━ 60% 12.0 MB/s 0:00:02"],
+    "expected": [{"label":"Download","elapsedSeconds":2,"state":"running","stats":{"percent":"60","rate":"12.0 MB/s"}}]
+  },
+  {
+    "name": "unknown text remains text",
+    "producer": "application output",
+    "version": "synthetic v1",
+    "sourceUrl": "https://github.com/justmytwospence/pi-marimo",
+    "kind": "text",
+    "provenance": "Synthetic negative examples, not producer captures",
+    "input": ["Loading...", "accuracy improved to 90% today", "see 2025/10/21", "ratio 1/2 is a constant", "Epoch 1/10", "there are 40 items"],
+    "expected": []
+  }
+]

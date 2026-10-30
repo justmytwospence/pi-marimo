@@ -83,6 +83,7 @@ export function consoleRows(cell: Cell, theme: FrameTheme, max: number): Row[] {
 /** A cell's output: an image or chart when the terminal draws them, a table's grid, else its text. */
 export function outputRows(cell: Cell, theme: FrameTheme, opts: RowOptions, limits: { textLines: number; tableRows: number }): Row[] {
   const out: Row[] = [];
+  if (opts.showOutput === false) return out;
   const pad = opts.pad ?? PAD;
   const prefix = outputPrefix(opts, theme, pad);
   const push = (text: string) => out.push({ text });

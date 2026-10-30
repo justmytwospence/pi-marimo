@@ -72,7 +72,7 @@ export function parseMode(raw: unknown): Mode | undefined {
 
 /** One notebook's subscription, reconnecting until stopped. */
 class Follower {
-  readonly notebook = new NotebookState();
+  readonly notebook: NotebookState;
   connection: Connection = "connecting";
   /** Whether browser edits reach us (false when connected by the browser's own session id). */
   seesBrowserEdits = false;
@@ -85,6 +85,7 @@ class Follower {
   readonly loop: Promise<void>;
 
   constructor(public target: Target, private readonly options: WatcherOptions, private readonly changed: () => void) {
+    this.notebook = new NotebookState(() => this.changed());
     this.loop = this.run();
   }
 
@@ -102,6 +103,7 @@ class Follower {
 
   stop(): void {
     this.stopped = true;
+    this.notebook.dispose();
     this.current?.cancel();
     this.sleep?.cancel();
   }

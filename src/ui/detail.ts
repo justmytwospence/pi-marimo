@@ -7,7 +7,8 @@ import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { editableMarkdown } from "../core/markdown.js";
 import type { Cell, NotebookState } from "../core/notebook.js";
 import { truncate } from "../core/notebook.js";
-import { elapsed, formatDuration } from "../core/render.js";
+import { duration, runTime } from "./time.js";
+import { progressRows } from "./progress.js";
 import type { FrameTheme } from "../frame.ts";
 import { clean, outputRows } from "./outputs.js";
 import { type PaneTheme, cellGlyph, headingText, spinner } from "./outline.js";
@@ -83,7 +84,7 @@ export function detailRows(nb: NotebookState, theme: FrameTheme, now: number, o:
   /** A markdown cell as prose, trailing blank lines dropped. */
   const proseOf = (cell: Cell, w = width): Row[] => {
     const md = editableMarkdown(cell.code);
-    const text = md ?? (cell.output?.kind === "text" ? cell.output.text : undefined);
+    const text = md ?? (o.showOutput !== false && cell.output?.kind === "text" ? cell.output.text : undefined);
     const lines: Row[] = text !== undefined ? (md !== undefined ? (o.markdown ? o.markdown(md, w).map(text => ({ text })) : markdownRows(md, { ...sub, width: w, blockPrefix: cell.id })) : text.split("\n").map(text => ({ text }))) : nb.headings(cell).map((h) => ({ text: headingText(theme, h) }));
     while (lines.length && !lines.at(-1)!.text.trim() && !lines.at(-1)!.blockId) lines.pop();
     return lines.length ? lines : [{ text: dim("(empty markdown)") }];
@@ -124,7 +125,8 @@ export function detailRows(nb: NotebookState, theme: FrameTheme, now: number, o:
 
   const statusOf = (cell: Cell): string => {
     const parts: string[] = [];
-    if (cell.status === "running") parts.push(theme.bold(theme.fg("accent", `${spinner(now)} running${cell.runningSince ? ` ${elapsed(now - cell.runningSince)}` : ""}`)));
+    if (cell.status === "idle" && cell.lastRunMs !== undefined && (o.section || nb.isMarkdown(cell))) parts.push(dim(`${cell.lastRunEndedAt !== undefined ? `ran ${runTime(cell.lastRunEndedAt, now)} · ` : ""}${duration(cell.lastRunMs)}`));
+    if (cell.status === "running") parts.push(theme.bold(theme.fg("accent", `${spinner(now)} running${cell.runningSince !== undefined ? ` ${duration(now - cell.runningSince)}` : ""}`)));
     else if (cell.status === "queued") parts.push(theme.fg("accent", "◌ queued"));
     if (cell.blocked) parts.push(theme.fg("error", "not run: an ancestor failed"));
     if (cell.disabled) parts.push(dim("disabled"));
@@ -132,6 +134,8 @@ export function detailRows(nb: NotebookState, theme: FrameTheme, now: number, o:
     if (nb.edited(cell)) parts.push(theme.fg("warning", "edited, not rerun"));
     const change = nb.agentChanges.get(cell.id);
     if (change && change.kind !== "deleted") parts.push(theme.fg("accent", change.kind === "created" ? "new from the agent" : "changed by the agent"));
+    if (o.diagnostics && o.diagnostics !== "all") parts.push(dim(`diagnostics ${o.diagnostics === "none" ? "hidden" : o.diagnostics}`));
+    if (o.showOutput === false) parts.push(dim("output hidden"));
     return parts.join(dim(" · "));
   };
 
@@ -139,19 +143,32 @@ export function detailRows(nb: NotebookState, theme: FrameTheme, now: number, o:
     nb.lens.selections().filter((s) => s.cells.includes(cell.id)).map((s) => `${theme.fg("warning", s.label)} ${s.note ? truncate(s.note.replace(/\s+/gu, " "), 200) : dim(s.what ?? "(no note)")}`);
 
   /** Error, traceback, what it printed, and the output. */
-  const resultBlock = (cell: Cell, limits: { textLines: number; tableRows: number }, printed: number) => {
+  const resultBlock = (cell: Cell, limits: { textLines: number; tableRows: number }, printed: number, literal = false) => {
     const lines = cell.console ?? [];
-    const stderr = lines.filter((x) => x.stream === "stderr");
-    if (cell.error || stderr.length) {
+    const diagnostics = o.diagnostics ?? "all";
+    const errors = diagnostics === "all" || diagnostics === "errors";
+    const warnings = diagnostics === "all" || diagnostics === "warnings";
+    const diagnosticLines = lines.filter(x => x.severity === "error" ? errors : (x.severity === "warning" || (x.stream === "stderr" && x.severity !== "progress")) && warnings);
+    if ((cell.error && errors) || diagnosticLines.length) {
       const p = part("error", cell);
-      if (cell.error) p.add(`${theme.fg("error", truncate(cell.error, 300))}`);
-      for (const l of stderr) p.add(`${theme.fg("warning", clean(l.text))}`);
+      if (cell.error && errors) p.add(`${theme.fg("error", truncate(cell.error, 300))}`);
+      for (const l of diagnosticLines) p.add(theme.fg(l.severity === "error" ? "error" : "warning", clean(l.text)));
     }
-    const stdout = lines.filter((x) => x.stream === "stdout");
+    rows.push(...progressRows(cell.progress ?? [], width, theme, now));
+    const diagnosticOutput = cell.output?.severity;
+    if (diagnosticOutput) {
+      if (diagnosticOutput === "error" ? errors : warnings) {
+        const p = part("error", cell);
+        for (const r of outputRows(cell, theme, { ...sub, bar: "", showOutput: true }, limits)) rows.push({ ...r, part: p.index });
+      }
+    }
+    if (o.showOutput === false || literal) return;
+    const stdout = lines.filter((x) => x.stream === "stdout" && (!x.severity || x.severity === "output"));
     if (stdout.length) {
       const p = part("printed", cell);
       for (const l of stdout.slice(-printed)) p.add(clean(l.text));
     }
+    if (diagnosticOutput) return;
     const output = cell.output;
     const kind: Part["kind"] = output?.table ? "table" : output?.kind === "image" || output?.kind === "chart" ? "chart" : "output";
     // A part is only taken when the output has rows of its own; it would be the next one.
@@ -180,10 +197,15 @@ export function detailRows(nb: NotebookState, theme: FrameTheme, now: number, o:
       if (nb.isMarkdown(cell)) {
         const p = part("markdown", cell);
         proseOf(cell).forEach(r => rows.push({ ...r, part: p.index }));
+        const status = statusOf(cell);
+        if (status) push(status);
+        resultBlock(cell, { textLines: 12, tableRows: 10 }, 5, true);
         if (o.sectionCodeOpen?.has(cell.id)) codeBlock(cell, true, selected && o.diff);
         continue;
       }
       push(`${selected ? theme.fg("accent", "▌") : " "}${cellGlyph(nb, theme, cell, now)} ${selected ? theme.bold(cellTitle(nb, cell)) : dim(cellTitle(nb, cell))}`);
+      const status = statusOf(cell);
+      if (status) push(status);
       resultBlock(cell, { textLines: 12, tableRows: 10 }, 5);
       if (o.sectionCodeOpen?.has(cell.id)) codeBlock(cell, true, selected && o.diff);
     }
@@ -196,6 +218,9 @@ export function detailRows(nb: NotebookState, theme: FrameTheme, now: number, o:
     const prose = (c: Cell) => {
       const p = part("markdown", c);
       for (const r of proseOf(c)) rows.push({ ...r, part: p.index });
+      const status = statusOf(c);
+      if (status) push(status);
+      resultBlock(c, { textLines: 40, tableRows: 20 }, 20, true);
     };
     prose(cell);
     const cells = nb.ordered();
@@ -214,7 +239,7 @@ export function detailRows(nb: NotebookState, theme: FrameTheme, now: number, o:
 
   const title = cellTitle(nb, cell);
   const where = sectionOf(nb, cell.id).join(" › ");
-  const ran = cell.status === "idle" && cell.lastRunMs !== undefined ? dim(formatDuration(cell.lastRunMs)) : "";
+  const ran = cell.status === "idle" && cell.lastRunMs !== undefined ? dim(`${cell.lastRunEndedAt !== undefined ? `ran ${runTime(cell.lastRunEndedAt, now)} · ` : ""}${duration(cell.lastRunMs)}`) : "";
   push(sides(`${theme.bold(title)}${where ? dim(` · ${where}`) : ""}`, ran, width));
   const status = statusOf(cell);
   if (status) push(status);

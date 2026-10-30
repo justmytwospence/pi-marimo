@@ -1,9 +1,9 @@
-// What the notebook view calls a cell, and the one badge at the end of its outline line. A cell's id
+// What the notebook view calls a cell, and its outline badges. A cell's id
 // is never shown: a cell is its name, what it defines that others use, or what it shows.
 import { markdownText } from "../core/markdown.js";
 import type { Cell, NotebookState } from "../core/notebook.js";
 import { truncate } from "../core/notebook.js";
-import { elapsed } from "../core/render.js";
+import { cellBadges, renderBadge } from "./status.js";
 import type { FrameTheme } from "../frame.ts";
 
 const MAX_TITLE = 40;
@@ -79,15 +79,8 @@ export function outputShape(cell: Cell): string {
   return "";
 }
 
-/** The one badge at the end of a cell's outline line: what needs attention first, else the output's shape. */
+/** Unconstrained badges for callers without an outline width; otherwise the output's shape. */
 export function cellBadge(nb: NotebookState, cell: Cell, now: number, theme: FrameTheme): string {
-  if (cell.status === "running") return theme.fg("accent", cell.runningSince ? elapsed(now - cell.runningSince) : "running");
-  if (cell.status === "queued") return theme.fg("muted", "queued");
-  if (cell.error) return theme.fg("error", /^([A-Za-z_][\w.]*)(?::|$)/u.exec(cell.error)?.[1] ?? "error");
-  if (cell.blocked) return theme.fg("error", "blocked");
-  if (cell.stale) return theme.fg("warning", "stale");
-  if (nb.edited(cell)) return theme.fg("warning", "edited");
-  const change = nb.agentChanges.get(cell.id);
-  if (change && change.kind !== "deleted") return theme.fg("accent", change.kind === "created" ? "new" : "changed");
-  return theme.fg("dim", outputShape(cell));
+  const badges = cellBadges(nb, cell, now);
+  return badges.length ? badges.map((badge) => renderBadge(badge, theme)).join(" ") : theme.fg("dim", outputShape(cell));
 }

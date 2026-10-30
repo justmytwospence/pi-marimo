@@ -4,7 +4,8 @@ import { tableGrid } from "../src/ui/table.js";
 import { codeRows } from "../src/ui/code.js";
 import { markdownRows } from "../src/ui/markdown.js";
 import { NotebookState } from "../src/core/notebook.js";
-import { appendConsole, htmlToText, summarizeOutput } from "../src/core/output.js";
+import { CellConsole } from "../src/core/console.js";
+import { htmlToText, summarizeOutput } from "../src/core/output.js";
 import { snapshot } from "../src/core/render.js";
 import { runCells } from "../src/ui/interrupt.js";
 import { mermaidRows, outputRows } from "../src/ui/outputs.js";
@@ -30,19 +31,21 @@ describe("cell output for the notebook view", () => {
     expect(out?.text).not.toContain("<span");
   });
 
-  test("console lines append per message, a cleared console empties, a rerun starts over", () => {
-    let lines = appendConsole(undefined, [{ channel: "stdout", mimetype: "text/plain", data: "one\ntwo\n" }]);
-    lines = appendConsole(lines, { channel: "stderr", mimetype: "text/plain", data: "warn\n" });
-    expect(lines?.map((l) => `${l.stream}:${l.text}`)).toEqual(["stdout:one", "stdout:two", "stderr:warn"]);
-    expect(appendConsole(lines, [])).toBeUndefined();
-    expect(appendConsole(lines, null)).toBe(lines);
-    expect(appendConsole(undefined, Array.from({ length: 100 }, (_, i) => ({ channel: "stdout", data: `l${i}\n` })))!.length).toBe(40);
+  test("console lines use asynchronous terminal snapshots and explicit clear", async () => {
+    const console = new CellConsole();
+    await console.append([{ channel: "stdout", data: "one\ntwo\n" }]);
+    await console.append({ channel: "stderr", data: "warn\n" });
+    expect(console.snapshot().map(l => `${l.stream}:${l.text}`)).toEqual(["stdout:one", "stdout:two", "stderr:warn"]);
+    await console.append([]);
+    expect(console.snapshot()).toEqual([]);
+    console.dispose();
   });
 
-  test("a cell keeps its output and console, a rerun clears the console, and none of it reaches the agent's snapshot or marks a change", () => {
+  test("a cell keeps its output and console, a rerun clears the console, and none of it reaches the agent's snapshot or marks a change", async () => {
     const nb = new NotebookState();
     nb.apply("kernel-ready", { cell_ids: ["a"], codes: ["print('secret-token'); 1"], names: ["_"] });
     expect(nb.apply("cell-op", { cell_id: "a", console: [{ channel: "stdout", data: "secret-console\n" }], output: { channel: "output", mimetype: "text/plain", data: "secret-output" } })).toBe(false);
+    await nb.settled();
     const cell = nb.cells.get("a")!;
     expect(cell.output?.text).toBe("secret-output");
     expect(cell.console?.[0]?.text).toBe("secret-console");
@@ -128,6 +131,79 @@ describe("structured source output", () => {
   test("malformed props and active content never become diagram sources", () => {
     expect(html('<script><marimo-mermaid data-diagram=\'"bad"\'></marimo-mermaid></script>')?.mermaid).toBeUndefined();
     expect(html('<marimo-mermaid data-diagram="not-json"></marimo-mermaid>')?.mermaid).toBeUndefined();
+  });
+});
+
+describe("core progress and timing state", () => {
+  const notebook = (onOutputChange?: () => void) => {
+    const nb = new NotebookState(onOutputChange);
+    nb.apply("kernel-ready", { cell_ids: ["a"], codes: ["pass"] });
+    return nb;
+  };
+  const status = (nb: NotebookState, status: string, timestamp?: number) => nb.apply("cell-op", { cell_id: "a", status, ...(timestamp !== undefined ? { timestamp } : {}) });
+  test("server replay timestamps supply start/end and milliseconds; cancellation preserves completed run", () => {
+    const nb = notebook(); const cell = nb.cells.get("a")!;
+    status(nb, "running", 100); status(nb, "idle", 102.5);
+    expect(cell).toMatchObject({ lastRunStartedAt: 100_000, lastRunEndedAt: 102_500, lastRunMs: 2500 });
+    status(nb, "queued", 103); status(nb, "idle", 104);
+    expect(cell).toMatchObject({ lastRunStartedAt: 100_000, lastRunEndedAt: 102_500, lastRunMs: 2500 });
+    status(nb, "running", 110); status(nb, "idle", 109);
+    expect(cell.lastRunMs).toBe(0);
+    nb.dispose();
+  });
+  test("missing start/end and idle snapshots never fabricate durations", () => {
+    const nb = notebook(); const cell = nb.cells.get("a")!;
+    status(nb, "idle", 100); expect(cell.lastRunMs).toBeUndefined();
+    status(nb, "running"); status(nb, "idle", 101);
+    expect(cell.lastRunMs).toBeUndefined();
+    expect(cell.lastRunStartedAt).toBeUndefined();
+    status(nb, "running", 102); status(nb, "idle");
+    expect(cell.lastRunMs).toBeUndefined();
+    expect(cell.lastRunEndedAt).toBeUndefined();
+    nb.dispose();
+  });
+  test("HTML progress takes precedence over tables and snapshots replace/reset", async () => {
+    let redraws = 0;
+    const nb = notebook(() => redraws++); const cell = nb.cells.get("a")!;
+    const output = (data: string) => nb.apply("cell-op", { cell_id: "a", output: { mimetype: "text/html", data } });
+    expect(output('<marimo-progress data-title="&quot;first&quot;" data-progress="1" data-total="4"></marimo-progress>')).toBe(false);
+    expect(cell.progress).toHaveLength(1);
+    expect(cell.progress?.[0]?.label).toBe("first");
+    output('<progress value="2" max="10"></progress><progress value="3" max="10"></progress>');
+    expect(cell.progress).toHaveLength(2);
+    output("<p>ordinary</p>"); expect(cell.progress).toEqual([]);
+    output('<progress value="1" max="10"></progress>');
+    status(nb, "running", 1); expect(cell.progress).toEqual([]);
+    expect(nb.apply("cell-op", { cell_id: "a", console: { channel: "stderr", data: "fit: 50%|#####| 5/10 [00:01<00:01, 5.00it/s]" } })).toBe(false);
+    await nb.settled();
+    expect(cell.progress).toHaveLength(1);
+    expect(cell.console?.[0]?.severity).toBe("progress");
+    nb.apply("cell-op", { cell_id: "a", console: [] });
+    expect(cell.console).toBeUndefined(); expect(cell.progress).toEqual([]);
+    expect(redraws).toBeGreaterThan(0);
+    expect(nb.agentChanges.size).toBe(0);
+    nb.dispose();
+  });
+  test("delete, replacement and reset invalidate in-flight console callbacks", async () => {
+    const nb = notebook();
+    nb.apply("cell-op", { cell_id: "a", console: { data: "old".repeat(10000) } });
+    nb.apply("notebook-document-transaction", { transaction: { changes: [{ type: "delete-cell", cellId: "a" }] } });
+    await nb.settled(); expect(nb.cells.has("a")).toBe(false);
+    nb.apply("kernel-ready", { cell_ids: ["a"], codes: ["new"] });
+    expect(nb.cells.get("a")?.console).toBeUndefined();
+    nb.apply("cell-op", { cell_id: "a", console: { data: "secret" } });
+    nb.reset(); await nb.settled(); expect(nb.cells.size).toBe(0);
+  });
+  test("tracebacks and explicit error records differ from ordinary stderr and warnings", async () => {
+    const console = new CellConsole();
+    await console.append({ channel: "stderr", data: "notice" });
+    expect(console.snapshot()[0]?.severity).toBe("stderr");
+    console.clear(); await console.append({ channel: "stderr", data: "UserWarning: caution" });
+    expect(console.snapshot()[0]?.severity).toBe("warning");
+    console.clear(); await console.append({ channel: "stdout", level: "error", data: "bad" });
+    expect(console.snapshot()[0]?.severity).toBe("error");
+    expect(summarizeOutput({ mimetype: "application/vnd.marimo+traceback", data: "<pre>failure</pre>" })).toMatchObject({ severity: "error", text: "failure" });
+    console.dispose();
   });
 });
 
@@ -225,9 +301,12 @@ describe("tables, widgets and tracebacks", () => {
     expect(both.widgets).toHaveLength(1);
   });
 
-  test("a traceback is highlighted HTML on the console: it reads as plain stderr", () => {
-    const lines = appendConsole(undefined, { channel: "stderr", mimetype: "application/vnd.marimo+traceback", data: '<pre><span class="gt">Traceback (most recent call last):</span>\n  File <span class="s">"x.py"</span>\n<span class="ne">ZeroDivisionError</span>: division by zero</pre>' });
-    expect(lines?.map((l) => `${l.stream}:${l.text}`)).toEqual(["stderr:Traceback (most recent call last):", 'stderr:  File "x.py"', "stderr:ZeroDivisionError: division by zero"]);
+  test("a traceback is an error MIME block on stderr", async () => {
+    const console = new CellConsole();
+    await console.append({ channel: "stderr", mimetype: "application/vnd.marimo+traceback", data: '<pre><span class="gt">Traceback (most recent call last):</span>\n  File <span class="s">"x.py"</span>\n<span class="ne">ZeroDivisionError</span>: division by zero</pre>' });
+    expect(console.snapshot().map(l => `${l.stream}:${l.text}`)).toEqual(["stderr:Traceback (most recent call last):", 'stderr:  File "x.py"', "stderr:ZeroDivisionError: division by zero"]);
+    expect(console.snapshot().every(line => line.severity === "error")).toBe(true);
+    console.dispose();
   });
 
   test("a mimebundle (marimo 0.25's matplotlib figures) shows its PNG", () => {

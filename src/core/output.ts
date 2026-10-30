@@ -1,6 +1,7 @@
 // What a cell printed, kept compact for the notebook view (never for the agent's snapshot): the
 // last output as text (HTML stripped, images named), its table's first page and its widgets, and
-// the last console lines.
+// the current terminal console display.
+import { progressFromHtml, type ProgressTask } from "./progress.js";
 import { componentProps, outputElements, parseOutputFragment, textContent } from "./html.js";
 
 export type OutputKind = "text" | "table" | "image" | "chart" | "widgets" | "other";
@@ -63,6 +64,8 @@ export interface Widget {
 export interface CellOutput {
   kind: OutputKind;
   text: string;
+  progress?: ProgressTask[];
+  severity?: "error" | "warning";
   /** Complete sources, in document order; never subject to summary limits. */
   mermaid?: string[];
   codeBlocks?: Array<{ source: string; language?: string }>;
@@ -81,6 +84,8 @@ export interface CellOutput {
 export interface ConsoleLine {
   stream: "stdout" | "stderr";
   text: string;
+  severity?: "output" | "error" | "warning" | "stderr" | "progress";
+  styles?: Array<{ column: number; width: number; bold: boolean; italic: boolean; underline: boolean; fg: number; bg: number; fgMode: number; bgMode: number }>;
 }
 
 const MAX_TEXT = 8_000;
@@ -88,7 +93,6 @@ const MAX_TEXT = 8_000;
 const MAX_IMAGE = 2_000_000;
 /** Largest chart spec kept, in characters (Vega-Lite specs carry their data). */
 const MAX_SPEC = 1_500_000;
-
 const vegaOf = (spec: unknown): string | undefined => {
   const text = typeof spec === "string" ? spec : spec !== null && typeof spec === "object" ? JSON.stringify(spec) : "";
   return text.length > 1 && text.length <= MAX_SPEC && text.trimStart().startsWith("{") ? text : undefined;
@@ -98,7 +102,7 @@ const pngOf = (data: string): CellOutput["image"] | undefined => {
   const b64 = data.replace(/^data:image\/png;base64,/iu, "").replace(/\s+/gu, "");
   return b64.length > 0 && b64.length <= MAX_IMAGE && /^[A-Za-z0-9+/]+=*$/u.test(b64) ? { mime: "image/png", data: b64 } : undefined;
 };
-const MAX_CONSOLE_LINES = 40;
+
 
 const ENTITIES: Record<string, string> = { amp: "&", lt: "<", gt: ">", quot: '"', apos: "'", nbsp: " " };
 
@@ -371,7 +375,8 @@ export function summarizeOutput(raw: unknown): CellOutput | undefined {
   const output = record(raw);
   const mime = typeof output.mimetype === "string" ? output.mimetype : "";
   const data = output.data;
-  if (output.channel === "marimo-error" || mime.includes("marimo+error") || mime.includes("marimo+traceback")) return undefined;
+  if (output.channel === "marimo-error" || mime.includes("marimo+error")) return undefined;
+  if (mime.includes("marimo+traceback") && typeof data === "string") return { kind: "text", text: clip(htmlToText(data)), severity: "error" };
   if (data === null || data === undefined || data === "") return undefined;
   // A mimebundle (matplotlib figures in marimo 0.25): the richest form the view can show.
   if (mime.includes("mimebundle")) {
@@ -403,6 +408,8 @@ export function summarizeOutput(raw: unknown): CellOutput | undefined {
       return { source: textContent(code ?? node), ...(language ? { language } : {}) };
     });
     if (codeBlocks.length) return { kind: "text", text: clip(htmlToText(data)), codeBlocks };
+    const progress = progressFromHtml(data);
+    if (progress.length) return { kind: "text", text: "", progress };
     const widgets = parseWidgets(data);
     const extra = widgets.length ? { widgets } : {};
     const marimo = marimoTable(data);
@@ -429,36 +436,13 @@ export function summarizeOutput(raw: unknown): CellOutput | undefined {
     if (/<(?:img|svg|iframe|canvas|marimo-[a-z-]+)\b/iu.test(data)) return { kind: "chart", text: "[interactive output: o opens the notebook]" };
     return undefined;
   }
-  if (typeof data === "string") return { kind: "text", text: clip(data) };
+  if (typeof data === "string") {
+    const severity = /^(error|critical|fatal)$/iu.test(String(output.level ?? "")) ? "error" : /\b\w*Warning:|\bWARNING\b/u.test(data) || output.level === "warning" ? "warning" : undefined;
+    return { kind: "text", text: clip(data), ...(severity ? { severity } : {}) };
+  }
   try {
     return { kind: "other", text: clip(JSON.stringify(data, null, 1) ?? "") };
   } catch {
     return { kind: "other", text: `[${mime || "output"}]` };
   }
-}
-
-/** The console of a cell-op: marimo sends one message or a list, each with a `channel` and `data`. */
-export function consoleLines(raw: unknown): { reset: boolean; lines: ConsoleLine[] } {
-  const items = Array.isArray(raw) ? raw : raw === null || raw === undefined ? [] : [raw];
-  if (Array.isArray(raw) && !raw.length) return { reset: true, lines: [] };
-  const lines: ConsoleLine[] = [];
-  for (const item of items) {
-    const o = record(item);
-    if (typeof o.data !== "string" || !o.data) continue;
-    // Tracebacks are highlighted HTML on stderr.
-    const traceback = o.mimetype === "application/vnd.marimo+traceback";
-    const text = o.mimetype === "text/html" || traceback ? htmlToText(o.data) : o.data;
-    const stream = o.channel === "stderr" || traceback ? "stderr" : "stdout";
-    for (const line of text.replace(/\r/gu, "\n").split("\n")) lines.push({ stream, text: line });
-  }
-  return { reset: false, lines };
-}
-
-export function appendConsole(existing: ConsoleLine[] | undefined, raw: unknown): ConsoleLine[] | undefined {
-  const { reset, lines } = consoleLines(raw);
-  if (reset) return undefined;
-  if (!lines.length) return existing;
-  // A chunk that ends without a newline continues the previous line.
-  const next = [...(existing ?? []), ...lines].filter((l, i, all) => l.text !== "" || i < all.length - 1);
-  return next.slice(-MAX_CONSOLE_LINES);
 }

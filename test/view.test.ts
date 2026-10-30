@@ -4,6 +4,8 @@ import type { Followed } from "../src/core/watcher.js";
 import { INPUT_CONTEXT } from "../src/activity.js";
 import { NotebookView, notebookLines, detailRows } from "../src/ui/view.js";
 import { SessionPreferences } from "../src/ui/settings.js";
+import { progressRows } from "../src/ui/progress.js";
+import type { ProgressTask } from "../src/core/progress.js";
 import { row as notebookRow, CONTENT_LEFT, bodyWidth } from "../src/ui/notebook-frame.js";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { NotebookSource } from "../src/ui/source.js";
@@ -216,10 +218,11 @@ test("the header is one line: state, the agent, the last run and where the serve
   } finally { v.dispose(); }
 });
 
-test("j/k move the cursor between cells; the detail shows the cell's output, folds its code, and Enter opens it", () => {
+test("j/k move the cursor between cells; the detail shows the cell's output, folds its code, and Enter opens it", async () => {
   const f = nbWith([{ id: "a", code: "print('hi')\nx = 1", name: "first" }, { id: "b", code: "y = 2", name: "second" }]);
   f.notebook.apply("cell-op", { cell_id: "a", status: "running", timestamp: 1 });
   f.notebook.apply("cell-op", { cell_id: "a", console: [{ channel: "stdout", mimetype: "text/plain", data: "hi\n" }], output: { channel: "output", mimetype: "text/html", data: "<span>value &amp; more</span>" } });
+  await f.notebook.settled();
   f.notebook.apply("cell-op", { cell_id: "a", status: "idle", timestamp: 2 });
   const v = make(f, { code: "folded" });
   try {
@@ -253,9 +256,9 @@ test("e and E jump between failed cells; / filters by name, variable or code and
   const v = make(f);
   try {
     v.handleInput("e");
-    expect(screen(v)).toMatch(/▌✗ boom\(\) +E/u);
+    expect(screen(v)).toMatch(/▌✗ boom\(\) +\[E\]/u);
     v.handleInput("E");
-    expect(screen(v)).toMatch(/▌✗ boom\(\) +E/u);
+    expect(screen(v)).toMatch(/▌✗ boom\(\) +\[E\]/u);
     expect(screen(v)).toContain("E: m");
     v.handleInput("/");
     expect(v[INPUT_CONTEXT]()).toBe("filter");
@@ -687,7 +690,7 @@ test("the agent's changes since the last prompt: marked, counted, c jumps to the
     const v = make(f);
     try {
       const text = screen(v);
-      expect(text).toMatch(/  y = x \+ 2 +changed/u);
+      expect(text).toMatch(/  y = x \+ 2 +\[changed\]/u);
       expect(text).toContain("agent: 1 changed · 1 removed");
       expect(text).toMatch(/✗ Removed: z = 3/u);
       v.handleInput("c");
@@ -848,8 +851,9 @@ test("wide, the outline and the detail sit side by side, every line exactly as w
   } finally { v.dispose(); }
 });
 
-test("narrow, a few outline rows around the cursor sit above the detail, and the mouse knows which is which", () => {
+test("narrow, a few outline rows around the cursor sit above the detail, and the mouse knows which is which", async () => {
   const f = notebookWithResults();
+  await f.notebook.settled();
   let closed = false;
   const v = new NotebookView(tui as any, theme2, notebookKey(f), { followed: () => [f], interrupt: async () => {}, openInBrowser: () => {} }, () => { closed = true; });
   const ev = (type: string, y: number, extra = {}) => ({ type, button: type === "wheel" ? "none" : "left", x: 10, y, screenX: 10, screenY: y, width: 80, height: 28, shift: false, alt: false, ctrl: false, ...extra }) as any;
@@ -861,7 +865,7 @@ test("narrow, a few outline rows around the cursor sit above the detail, and the
     const lines = v.render(80);
     const text = lines.join("\n");
     // The outline (with the cursor's neighbours), a rule, then the cell's detail with its traceback.
-    expect(text).toMatch(/daily[\s\S]*▌ {2}✗ model +KeyError[\s\S]*chart[\s\S]*─{20,}[\s\S]*Traceback \(most recent call last\)/u);
+    expect(text).toMatch(/daily[\s\S]*▌ {2}✗ model +\[KeyError\][\s\S]*chart[\s\S]*─{20,}[\s\S]*Traceback \(most recent call last\)/u);
     expect(text).toContain("enter code");
     const rule = lines.findIndex((l, i) => i > 2 && /^ ─{20,} /u.test(l));
     // As many outline rows above the cursor as below it.
@@ -895,13 +899,14 @@ test("narrow, a few outline rows around the cursor sit above the detail, and the
   } finally { v.dispose(); }
 });
 
-test("the detail of a failed cell: its error, the traceback, the code folded to a line count that Enter opens", () => {
+test("the detail of a failed cell: its error, the traceback, the code folded to a line count that Enter opens", async () => {
   const f = notebookWithResults();
+  await f.notebook.settled();
   const v = make(f);
   try {
     v.handleInput("e");
     const text = screen(v);
-    expect(text).toMatch(/▌ {2}✗ model +KeyError/u);
+    expect(text).toMatch(/▌ {2}✗ model +\[KeyError\]/u);
     expect(text).toContain("KeyError: 'revenue'");
     expect(text).toContain("Traceback (most recent call last)");
     expect(text).toContain("│ model = boom(daily)");
@@ -1003,13 +1008,14 @@ test("ctrl+j and ctrl+k move between sections", () => {
   } finally { v.dispose(); }
 });
 
-test("n and p walk a cell's parts and Enter acts on the focused one", () => {
+test("n and p walk a cell's parts and Enter acts on the focused one", async () => {
   const f = nbWith([{ id: "a", code: "x = 1\nprint(x)" }, { id: "b", code: "y = 2" }]);
   const slider = "<marimo-ui-element object-id='a-0' random-id='x'><marimo-slider data-initial-value='1' data-label='&quot;s&quot;' data-start='0' data-stop='2' data-step='1' data-steps='[]'></marimo-slider></marimo-ui-element>";
   f.notebook.apply("cell-op", { cell_id: "a", status: "idle", console: [{ channel: "stdout", mimetype: "text/plain", data: "one\ntwo\n" }], output: { channel: "marimo-error", mimetype: "application/vnd.marimo+error", data: [{ type: "exception", exception_type: "KeyError", msg: "k" }] } });
   f.notebook.apply("cell-op", { cell_id: "a", output: { channel: "output", mimetype: "text/html", data: slider } });
   // The error output was replaced by the widget; set the error again through the cell's own state.
   f.notebook.cells.get("a")!.error = "KeyError: k";
+  await f.notebook.settled();
   const v = make(f, { setWidget: () => {}, code: "folded" });
   try {
     // Focus belongs to the short header, not the content rows.
@@ -1211,14 +1217,14 @@ test("r shows the cell queued at once, then marimo's run: a spinner in the outli
     v.handleInput("r");
     expect(run).toHaveBeenCalledOnce();
     let text = screen(v);
-    expect(text).toMatch(/▌◌ load +queued/u);
+    expect(text).toMatch(/▌◌ load +\[queued\]/u);
     expect(text).toContain("◌ queued");
     expect(text).toContain("◌ 1 queued");
     f.notebook.apply("cell-op", { cell_id: "a", status: "running", timestamp: Date.now() / 1000 });
     text = screen(v);
     expect(text).toMatch(/▌[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] load/u);
     expect(text).toMatch(/[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] running load \d+s/u);
-    expect(text).toMatch(/[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] running \d+s/u);
+    expect(text).toMatch(/[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] running \d+(?: ms|s)/u);
     expect(text).toContain("x interrupt");
   } finally { v.dispose(); }
 });
@@ -1235,5 +1241,91 @@ test("code is open by default; Enter folds a cell's code and opens it again", ()
     v.handleInput("\r");
     expect(screen(v)).toContain("│ y = 2");
     expect(screen(v)).toContain("▾ python");
+  } finally { v.dispose(); }
+});
+
+test("STEP3 progress renders every task, proportional counts, unknown totals and all stats", () => {
+  const tasks: ProgressTask[] = [
+    { id: "a", label: "chain one", completed: 25, total: 100, rate: 2, etaSeconds: 30, state: "running", stats: { Divergences: "3", "Step size": "0.01" } },
+    { id: "b", label: "chain two", state: "running", elapsedSeconds: 12, stats: { custom: "retained" } },
+    { id: "c", label: "percent only", state: "running", stats: { percent: "50" } },
+  ];
+  const warning = vi.fn((_: string, value: string) => value);
+  const rows = progressRows(tasks, 24, { ...theme, fg: warning }, 0);
+  const text = rows.map(r => r.text).join("\n");
+  expect(new Set(rows.map(r => r.progress?.id))).toEqual(new Set(["a", "b", "c"]));
+  for (const value of ["25/100", "25%", "2/s", "ETA 30s", "12s elapsed", "Divergences: 3", "Step size: 0.01", "custom: retained", "50%"]) expect(text.replace(/\s+/gu, " ")).toContain(value);
+  expect(warning).toHaveBeenCalledWith("warning", "Divergences: 3");
+  expect(rows.every(r => visibleWidth(r.text) <= 24)).toBe(true);
+  expect(rows.find(r => r.text.startsWith("["))!.text).toBe(`[${"━".repeat(6)}${"─".repeat(16)}]`);
+  expect(progressRows([{ ...tasks[0]!, completed: 120 }], 80, theme, 0).map(r => r.text).join("\n")).toContain("120/100 · 100%");
+});
+
+test("STEP3 diagnostic modes and output are independent; source and active progress always remain", () => {
+  const f = nbWith([{ id: "a", code: "source_visible = 1" }]);
+  const cell = f.notebook.cells.get("a")!;
+  cell.error = "explicit_failure";
+  cell.console = [
+    { stream: "stdout", severity: "output", text: "printed_result" },
+    { stream: "stderr", severity: "warning", text: "warning_record" },
+    { stream: "stdout", severity: "error", text: "error_record" },
+    { stream: "stderr", severity: "progress", text: "raw_progress_hidden" },
+  ];
+  cell.output = { kind: "text", text: "result_value" };
+  cell.progress = [{ id: "p", label: "active_progress", completed: 1, total: 10, state: "running", stats: {} }];
+  for (const diagnostics of ["all", "errors", "warnings", "none"] as const) for (const showOutput of [true, false]) {
+    const text = detailRows(f.notebook, theme, 0, { cell, width: 80, section: false, diff: false, codeOpen: true, diagnostics, showOutput }).rows.map(r => r.text).join("\n");
+    expect(text.includes("explicit_failure")).toBe(["all", "errors"].includes(diagnostics));
+    expect(text.includes("error_record")).toBe(["all", "errors"].includes(diagnostics));
+    expect(text.includes("warning_record")).toBe(["all", "warnings"].includes(diagnostics));
+    expect(text.includes("printed_result")).toBe(showOutput);
+    expect(text.includes("result_value")).toBe(showOutput);
+    expect(text).not.toContain("raw_progress_hidden");
+    expect(text).toContain("source_visible");
+    expect(text).toContain("active_progress");
+  }
+  cell.code = 'mo.md("literal prose remains")';
+  const text = detailRows(f.notebook, theme, 0, { cell, width: 80, section: true, diff: false, codeOpen: true, diagnostics: "none", showOutput: false }).rows.map(r => r.text).join("\n");
+  expect(text).toContain("literal prose remains");
+  expect(text).toContain("active_progress");
+});
+
+test("STEP3 visibility keys release hidden controls to source and transfer preferences", () => {
+  const f = nbWith([{ id: "a", code: "source_visible = 1" }]);
+  const v = make(f);
+  try {
+    screen(v);
+    (v as any).widget = { cell: "a", index: 0, sub: 0 };
+    (v as any).table = { cell: "a", objectId: "t" };
+    v.handleInput("\\");
+    screen(v);
+    expect((v as any).widget).toBeUndefined();
+    expect((v as any).table).toBeUndefined();
+    expect((v as any).lastParts[(v as any).part]?.kind).toBe("code");
+    v.handleInput("!");
+    expect(v.snapshot().preferences).toMatchObject({ showOutput: false, diagnostics: "errors" });
+    const restored = make(f, { initial: v.snapshot() });
+    try { expect(restored.snapshot().preferences).toMatchObject({ showOutput: false, diagnostics: "errors" }); } finally { restored.dispose(); }
+    v.handleInput("!"); v.handleInput("!");
+    expect(screen(v)).toContain("diagnostics hidden");
+    v.handleInput("!");
+    expect(v.snapshot().preferences?.diagnostics).toBe("all");
+  } finally { v.dispose(); }
+});
+
+test("STEP3 T shows exact local timezone start/end and duration without inventing missing times", () => {
+  const f = nbWith([{ id: "a", code: "x = 1" }]);
+  const v = make(f);
+  try {
+    screen(v); v.handleInput("T");
+    expect(screen(v)).toContain("Start: unknown");
+    v.handleInput("T");
+    Object.assign(f.notebook.cells.get("a")!, { lastRunStartedAt: 1_000, lastRunEndedAt: 2_000, lastRunMs: 1_000 });
+    v.handleInput("T");
+    const text = screen(v);
+    expect(text).toContain("Exact timing");
+    expect(text).toMatch(/GMT[+-]\d\d:\d\d/u);
+    expect(text).toContain("Duration: 1.0s");
+    expect(text).not.toContain("Start: unknown");
   } finally { v.dispose(); }
 });

@@ -4,7 +4,9 @@
 // (variables). Only what an agent needs is kept; outputs are dropped.
 
 import { LensTracker } from "./lens.js";
-import { type CellOutput, type ConsoleLine, appendConsole, summarizeOutput } from "./output.js";
+import { CellConsole } from "./console.js";
+import { progressFromText, type ProgressTask } from "./progress.js";
+import { type CellOutput, type ConsoleLine, summarizeOutput } from "./output.js";
 import { type Heading, headingsFromCode, isMarkdownCell, sameCode } from "./markdown.js";
 
 /** Ids of the function calls pi-marimo makes (table paging and the like); their results are kept for the caller. */
@@ -40,6 +42,9 @@ export interface Cell {
   lastRunCode?: string;
   /** How long the cell's last finished run took (ms), when known. */
   lastRunMs?: number;
+  lastRunStartedAt?: number;
+  lastRunEndedAt?: number;
+  progress?: ProgressTask[];
   /** Who last changed the code, and at which change number. */
   editedBy?: EditSource;
   editSeq: number;
@@ -144,7 +149,23 @@ export class NotebookState {
   private readyAt = 0;
   private headingCache = new Map<string, Heading[]>();
 
+  private consoles = new Map<string, CellConsole>();
+  /** View-only notification: never an agent-visible document change. */
+  constructor(private readonly onOutputChange: () => void = () => {}) {}
+
+  async settled(): Promise<void> { await Promise.all([...this.consoles.values()].map(console => console.settled())); }
+  dispose(): void { this.reset(); }
+
+  private clearConsole(id: string): void {
+    this.consoles.get(id)?.dispose();
+    this.consoles.delete(id);
+    const cell = this.cells.get(id);
+    if (cell) cell.console = undefined;
+  }
+
   reset(): void {
+    for (const console of this.consoles.values()) console.dispose();
+    this.consoles.clear();
     this.order = [];
     this.cells.clear();
     this.defs.clear();
@@ -290,6 +311,7 @@ export class NotebookState {
           const old = this.cells.get(id);
           if (!agent || entry?.kind === "created") this.agentChanges.delete(id);
           else this.agentChanges.set(id, { kind: "deleted", before: entry?.before ?? old?.code ?? "", ...(old ? { name: old.name } : {}), at: now });
+          this.clearConsole(id);
           this.cells.delete(id);
           this.order = this.order.filter((other) => other !== id);
           this.defs.delete(id);
@@ -354,23 +376,32 @@ export class NotebookState {
     if (!id || isInternal(id) || !this.cells.has(id)) return false;
     const cell = this.ensure(id);
     let changed = false;
-    if (typeof data.status === "string" && typeof data.timestamp === "number") {
+    if (typeof data.status === "string" && typeof data.timestamp === "number" && Number.isFinite(data.timestamp)) {
       this.lastActivity = Math.max(this.lastActivity, data.timestamp * 1000);
     }
     if (typeof data.status === "string" && data.status !== cell.status) {
       const was = cell.status;
-      const at = typeof data.timestamp === "number" ? data.timestamp * 1000 : Date.now();
-      if (was === "running" && data.status === "idle" && cell.runningSince !== undefined) cell.lastRunMs = Math.max(0, at - cell.runningSince);
+      const at = typeof data.timestamp === "number" && Number.isFinite(data.timestamp) ? data.timestamp * 1000 : undefined;
+      if (was === "running" && data.status === "idle" && cell.runningSince !== undefined && at !== undefined) {
+        cell.lastRunStartedAt = cell.runningSince;
+        cell.lastRunEndedAt = at;
+        cell.lastRunMs = Math.max(0, at - cell.runningSince);
+      }
       cell.status = data.status;
       if (data.status === "queued") {
         // The previous run's error is about to be replaced.
         cell.error = undefined;
         cell.blocked = undefined;
-        cell.console = undefined;
+        this.clearConsole(id);
+        cell.progress = [];
+        if (cell.output?.progress) cell.output = undefined;
       }
       if (data.status === "running") {
         // The cell makes its widgets anew, with their initial values.
         this.dropUiValues(id);
+        this.clearConsole(id);
+        cell.progress = [];
+        if (cell.output?.progress) cell.output = undefined;
         cell.runningSince = at;
         cell.lastRunCode = cell.code;
         cell.error = undefined;
@@ -386,10 +417,31 @@ export class NotebookState {
       changed = true;
     }
     // Outputs and console lines are for the view: they never mark the state changed.
-    if ("console" in data) cell.console = appendConsole(cell.console, data.console);
+    if ("console" in data) {
+      if (Array.isArray(data.console) && !data.console.length) {
+        this.clearConsole(id);
+        cell.progress = cell.output?.progress ?? [];
+        this.onOutputChange();
+      } else {
+        let console = this.consoles.get(id);
+        if (!console) {
+          const owned = new CellConsole(() => {
+            if (this.consoles.get(id) !== owned) return;
+            cell.console = owned.snapshot();
+            cell.progress = [...(cell.output?.progress ?? []), ...progressFromText(cell.console.map(line => line.text))];
+            this.onOutputChange();
+          });
+          console = owned;
+          this.consoles.set(id, console);
+        }
+        void console.append(data.console);
+      }
+    }
     if (data.output !== null && typeof data.output === "object") {
       const output = record(data.output);
       cell.output = summarizeOutput(output);
+      cell.progress = cell.output?.progress ?? [];
+      this.onOutputChange();
       const { error, blocked } = output.channel === "marimo-error" ? describeError(output) : {};
       if (error !== cell.error || blocked !== cell.blocked) {
         cell.error = error;

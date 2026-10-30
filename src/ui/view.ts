@@ -45,7 +45,8 @@ import type { ScratchEvent, ScratchResult } from "./scratch.js";
 import { columnCard, rowCard, tableLines } from "./table.js";
 import { type TableRpc, type TableSession, parseFilter, tableSession } from "./table-session.js";
 import { variableList, variableRows } from "./variables.js";
-import { SessionPreferences } from "./settings.js";
+import { SessionPreferences, type ViewPreferences } from "./settings.js";
+import { duration } from "./time.js";
 import { type WidgetAction, nextValue, typeable, typedValue, widgetHit, widgetValue } from "./widgets.js";
 
 export { notebookLines, outlineRows } from "./outline.js";
@@ -97,6 +98,8 @@ export interface ViewState {
   diagramSources?: string[];
   sectionCodeOpen?: string[];
   focusedBlock?: string;
+  preferences?: ViewPreferences;
+  timing?: boolean;
 }
 
 export interface ViewActions {
@@ -242,6 +245,8 @@ export class NotebookView implements Component {
   /** A slider being dragged with the mouse. */
   private dragging: { cell: string; index: number } | undefined;
   private help = false;
+  private timing = false;
+  private sourceFocus = false;
   private dock: Dock | undefined;
   private scratch: ScratchState | undefined;
   private lastRows: Row[] = [];
@@ -304,11 +309,15 @@ export class NotebookView implements Component {
       codeOffsets: [...this.codeOffsets].map(([id, state]) => [id, { ...state }]),
       diagramSources: [...this.diagramSources],
       sectionCodeOpen: [...this.sectionCodeOpen],
+      preferences: this.preferences.snapshot(),
+      timing: this.timing,
       ...(this.focusedBlock ? { focusedBlock: this.focusedBlock } : {}),
     };
   }
 
   private restore(s: ViewState): void {
+    if (s.preferences) this.preferences.update(s.preferences);
+    this.timing = s.timing ?? false;
     this.cursor = s.cursor;
     this.follow = s.follow;
     this.scroll = s.scroll;
@@ -927,6 +936,24 @@ export class NotebookView implements Component {
       this.tui.requestRender();
       return;
     }
+    if (!this.typing && (data === "!" || data === "\\")) {
+      const current = this.preferences.snapshot();
+      if (data === "!") {
+        const modes = ["all", "errors", "warnings", "none"] as const;
+        this.preferences.update({ diagnostics: modes[(modes.indexOf(current.diagnostics) + 1) % modes.length]! });
+      } else this.preferences.update({ showOutput: !current.showOutput });
+      // An invisible control must never retain keyboard or mouse ownership.
+      const focused = this.part === undefined ? undefined : this.lastParts[this.part];
+      const hidesOutput = !this.preferences.snapshot().showOutput && (!!this.widget || !!this.table || this.live.inspecting || (focused && ["printed", "output", "table", "chart", "widgets"].includes(focused.kind)));
+      if (hidesOutput || (data === "!" && focused?.kind === "error")) this.focusSource();
+      this.tui.requestRender();
+      return;
+    }
+    if (this.timing) {
+      this.timing = false;
+      this.tui.requestRender();
+      return;
+    }
     if (this.live.inspecting && this.live.key(data)) { this.tui.requestRender(); return; }
     if (this.typing) return this.typeFilter(data);
     const f = this.current();
@@ -968,6 +995,16 @@ export class NotebookView implements Component {
     }
     if (matchesKey(data, "escape") || matchesKey(data, "ctrl+c") || matchesKey(data, "q") || matchesKey(data, "h") || matchesKey(data, "left")) {
       this.leave();
+      return;
+    }
+    if (!this.preferences.snapshot().showOutput && ["t", "w", "i"].includes(data)) {
+      this.focusSource();
+      this.tui.requestRender();
+      return;
+    }
+    if (data === "T") {
+      this.timing = true;
+      this.tui.requestRender();
       return;
     }
     if (data === "#" || matchesKey(data, "f7")) {
@@ -1197,6 +1234,24 @@ export class NotebookView implements Component {
     this.scroll = Math.max(0, by === -Infinity ? 0 : this.scroll + by);
   }
 
+  private focusSource(): void {
+    this.widget = undefined;
+    this.table = undefined;
+    this.dragging = undefined;
+    this.live.leave();
+    const f = this.current();
+    const cell = f && this.cursorCell(f);
+    if (!cell) return;
+    this.follow = false;
+    this.sectionCodeOpen.add(cell.id);
+    // The source part may not exist in the old filtered section render; resolve it after rebuilding.
+    this.focusedBlock = `${cell.id}:source`;
+    this.setCode(cell.id, true);
+    this.sourceFocus = true;
+    this.part = undefined;
+    this.scrollToPart = true;
+  }
+
   // --- drawing --------------------------------------------------------------------------------
 
   /** `✗ fit.py  running Model fit · agent: 1 changed`, and flush right when last it ran and where the server is. */
@@ -1220,7 +1275,9 @@ export class NotebookView implements Component {
     const created = changes.filter((c) => c.kind === "created").length;
     const removed = changes.filter((c) => c.kind === "deleted").length;
     const agent = changes.length ? `${dot}${th.fg("accent", `agent: ${[edited ? `${edited} changed` : "", created ? `${created} new` : "", removed ? `${removed} removed` : ""].filter(Boolean).join(" · ")}`)}` : "";
-    const left = `${busy ? `${th.fg("accent", "●")} ` : errors ? `${th.fg("error", "✗")} ` : ""}${th.bold(file)}  ${state}${working}${agent}`;
+    const prefs = this.preferences.snapshot();
+    const visibility = [prefs.diagnostics !== "all" ? `diagnostics ${prefs.diagnostics === "none" ? "hidden" : prefs.diagnostics}` : "", !prefs.showOutput ? "output hidden" : ""].filter(Boolean).join(" · ");
+    const left = `${visibility ? `${th.fg("dim", visibility)}${dot}` : ""}${busy ? `${th.fg("accent", "●")} ` : errors ? `${th.fg("error", "✗")} ` : ""}${th.bold(file)}  ${state}${working}${agent}`;
     const right = th.fg("dim", [this.actions.lastRun?.(f) ?? "", shortWhere(f.attachment.url) ?? "", servers.length ? `server ${servers.join(", ")}` : ""].filter(Boolean).join(" · "));
     const gap = inner - visibleWidth(left) - visibleWidth(right);
     return visibleWidth(right) && gap >= 2 ? `${left}${" ".repeat(gap)}${right}` : left;
@@ -1310,6 +1367,13 @@ export class NotebookView implements Component {
       this.lastRows = [];
       this.lastOutline = [];
       this.lastDetail = [];
+    } else if (this.timing) {
+      out.push(row(this.header(f, file, inner)), rule);
+      const cell = this.cursorCell(f);
+      const exact = (at: number | undefined) => at === undefined ? "unknown" : new Intl.DateTimeFormat("en-US", { year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit", fractionalSecondDigits: 3, hourCycle: "h23", timeZoneName: "longOffset" }).format(at);
+      const rows = cell ? ["Exact timing · local timezone", cellTitle(f.notebook, cell), `Start: ${exact(cell.status === "running" ? cell.runningSince : cell.lastRunStartedAt)}`, `End: ${cell.status === "running" ? "running" : exact(cell.lastRunEndedAt)}`, `Duration: ${cell.status === "running" && cell.runningSince !== undefined ? `${duration(Date.now() - cell.runningSince)} (running)` : cell.lastRunMs !== undefined ? duration(cell.lastRunMs) : "unknown"}`, "T / Esc closes"] : ["No selected cell"];
+      this.lastRows = rows.map(text => ({ text }));
+      for (let i = 0; i < page; i++) out.push(row(rows[i] ?? ""));
     } else if (this.help) {
       out.push(row(this.header(f, file, inner)), rule);
       const rows = helpLines(th, this.whereText(f)).map((text): Row => ({ text }));
@@ -1427,6 +1491,8 @@ export class NotebookView implements Component {
           cell, width: dw, codeOpen: this.codeShown(cell.id), diff: this.diffs.has(cell.id), section: this.section,
           sectionCodeOpen: this.sectionCodeOpen,
           syntax: this.actions.syntax, theme: this.theme as SyntaxTheme,
+          diagnostics: this.preferences.snapshot().diagnostics,
+          showOutput: this.preferences.snapshot().showOutput,
           lineNumbers: this.preferences.snapshot().lineNumbers,
           tabstop: this.preferences.snapshot().editor.options.tabstop,
           codeOffsets: this.codeOffsets,
@@ -1440,6 +1506,11 @@ export class NotebookView implements Component {
         });
         detail = d.rows;
         this.lastParts = d.parts;
+        if (this.sourceFocus) {
+          const index = d.parts.findIndex(p => p.cell === cell.id && p.kind === "code");
+          if (index >= 0) this.part = index;
+          this.sourceFocus = false;
+        }
         for (const r of detail) if (r.blockId && !this.codeOffsets.has(r.blockId)) this.codeOffsets.set(r.blockId, { offset: 0 });
         if (this.part !== undefined && this.part >= d.parts.length) this.part = d.parts.length ? d.parts.length - 1 : undefined;
         const key = `${cell.id}\0${this.section}`;
@@ -1599,6 +1670,7 @@ export class NotebookView implements Component {
   }
 
   handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
+    if (this.timing) return { handled: true };
     const live = this.live.mouse(event);
     if (live) return live;
     if (this.closed) return undefined;

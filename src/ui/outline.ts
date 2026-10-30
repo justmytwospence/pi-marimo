@@ -1,12 +1,14 @@
 // The outline: the notebook's left pane. The headings, and one short line per code cell: its status,
-// a human title (titles.ts), the Lens marks on it, and one badge at the end. The selected line has an
+// a human title (titles.ts), the Lens marks on it, and whole state chips at the end. The selected line has an
 // accent bar and Pi's selection background. What a cell holds is in the detail pane (detail.ts).
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import type { Cell, NotebookState } from "../core/notebook.js";
 import { truncate } from "../core/notebook.js";
 import type { FrameTheme } from "../frame.ts";
 import { type Row, firstLine, foldedCells, selectableCells } from "./rows.js";
-import { cellBadge, cellTitle } from "./titles.js";
+import { cellTitle, outputShape } from "./titles.js";
+import { cellBadges, fitBadges, spinner } from "./status.js";
+export { SPINNER, spinner } from "./status.js";
 
 /** Pi's theme has `bg`; a plain one (tests, other hosts) may not. */
 export type PaneTheme = FrameTheme & { bg?(color: string, text: string): string };
@@ -23,9 +25,6 @@ export const headingText = (theme: FrameTheme, h: { level: number; text: string 
   h.level === 1 ? theme.bold(theme.fg("accent", h.text)) : h.level === 2 ? theme.bold(h.text) : theme.fg("muted", h.text);
 
 /** The glyph at the start of a code cell's line. */
-/** A spinner frame for `now` (ms): what is running turns. */
-export const SPINNER = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
-export const spinner = (now: number): string => SPINNER[Math.floor(now / 100) % SPINNER.length]!;
 
 export function cellGlyph(nb: NotebookState, theme: FrameTheme, c: Cell, now = Date.now()): string {
   return c.status === "running"
@@ -71,8 +70,16 @@ export function outlineRows(nb: NotebookState, theme: PaneTheme, now: number, o:
   const headingRows = (cell: Cell, here: boolean, withId: boolean) => {
     nb.headings(cell).forEach((h, i) => {
       underHeading = true;
-      const text = `${bar(here && i === 0)} ${"  ".repeat(Math.max(0, h.level - 1))}${headingText(theme, h)}${i === 0 ? foldSummary(cell.id) : ""}`;
-      if (withId && i === 0) cellRows.set(cell.id, rows.length);
+      let text = `${bar(here && i === 0)} ${"  ".repeat(Math.max(0, h.level - 1))}${headingText(theme, h)}${i === 0 ? foldSummary(cell.id) : ""}`;
+      if (withId && i === 0) {
+        const badges = fitBadges(cellBadges(nb, cell, now), Math.max(0, width - Math.min(visibleWidth(text), 12) - 1), theme);
+        if (badges) {
+          const left = truncateToWidth(text, width - visibleWidth(badges) - 1, "…");
+          text = `${left}${" ".repeat(Math.max(1, width - visibleWidth(left) - visibleWidth(badges)))}${badges}`;
+        }
+        if (cell.status === "running") running = rows.length;
+        cellRows.set(cell.id, rows.length);
+      }
       rows.push({ text: finish(text, here && i === 0), ...(withId && i === 0 ? { cell: cell.id } : {}) });
     });
   };
@@ -90,7 +97,12 @@ export function outlineRows(nb: NotebookState, theme: PaneTheme, now: number, o:
     const tags = marked ? ` ${theme.fg("warning", marked.join(" "))}` : "";
     const title = cellTitle(nb, cell);
     const left = `${bar(here)}${underHeading ? "  " : ""}${cellGlyph(nb, theme, cell, now)} ${here ? theme.bold(title) : title}${tags}`;
-    const badge = cellBadge(nb, cell, now, theme);
+    const badges = cellBadges(nb, cell, now);
+    // Reserve a readable title before admitting chips; never let finish chop a chip.
+    const budget = Math.max(0, width - Math.min(visibleWidth(left), 12) - 1);
+    const shape = outputShape(cell);
+    const badge = badges.length ? fitBadges(badges, budget, theme)
+      : visibleWidth(shape) <= budget ? theme.fg("dim", shape) : "";
     const badgeWidth = visibleWidth(badge);
     const cut = truncateToWidth(left, Math.max(1, width - badgeWidth - (badgeWidth ? 1 : 0)), "…");
     const gap = Math.max(badgeWidth ? 1 : 0, width - visibleWidth(cut) - badgeWidth);
