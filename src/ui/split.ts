@@ -45,6 +45,7 @@ function herdrFocus(direction: Direction, env: NodeJS.ProcessEnv = process.env):
 
 /** The split's panel entry: swapping notebooks swaps `view` without remounting. */
 class PanelHost implements Component {
+  constructor(private readonly locked: () => boolean) {}
   view: NotebookView | undefined;
   render(width: number): string[] {
     return this.view?.render(width) ?? [];
@@ -56,7 +57,7 @@ class PanelHost implements Component {
     this.view?.handleInput(data);
   }
   handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
-    return this.view?.handleMouse(event);
+    return this.locked() ? { handled: true } : this.view?.handleMouse(event);
   }
 }
 
@@ -65,11 +66,16 @@ export class NotebookSplit {
   private theme: FrameTheme | undefined;
   private layout: SplitLayout | undefined;
   private view: NotebookView | undefined;
-  private readonly host = new PanelHost();
+  private readonly host = new PanelHost(() => this.prompts > 0 || this.blocked > 0);
+  private lastNotebookFocus = false;
+  private releaseFocus: (() => void) | undefined;
   private mainFocus: Component | null = null;
   private ratio = DEFAULT_SPLIT_RATIO;
   private blocked = 0;
   private prompts = 0;
+  private reservedPrompt = false;
+  private promptKind: string | undefined;
+  private restoreNotebookFocus = false;
   private otherPanel: string | undefined;
   /** The user closed the split since their last message: auto-docking stays away. */
   private suppressed = false;
@@ -79,11 +85,36 @@ export class NotebookSplit {
   private readonly states = new Map<string, ViewState>();
 
   constructor(private readonly pi: ExtensionAPI, private readonly make: MakeDockedView, private readonly options: SplitOptions = {}) {
-    pi.on("ui_prompt_start" as never, (() => { this.prompts += 1; this.render(); }) as never);
-    pi.on("ui_prompt_end" as never, (() => { this.prompts = Math.max(0, this.prompts - 1); this.render(); }) as never);
+    pi.on("ui_prompt_start" as never, ((event: { kind?: string }) => {
+      if (!this.prompts && !this.blocked) this.restoreNotebookFocus = this.lastNotebookFocus;
+      if (this.prompts++ === 0) {
+        this.promptKind = event?.kind;
+        this.reservedPrompt = ["select", "confirm", "input", "editor"].includes(this.promptKind ?? "")
+          || (this.promptKind === "custom" && this.blocked > 0);
+        // Pi has already cleared the view's focused flag. Keep the last split-half
+        // focus independently of dialog focus and editor restoration.
+      }
+      this.render();
+    }) as never);
+    pi.on("ui_prompt_end" as never, (() => {
+      this.prompts = Math.max(0, this.prompts - 1);
+      if (this.prompts === 0) {
+        this.reservedPrompt = false;
+        this.promptKind = undefined;
+        this.restoreFocus();
+      }
+      this.render();
+    }) as never);
     pi.events?.on?.(HERDR_BLOCKED, (data: unknown) => {
       const active = (data as { active?: unknown } | undefined)?.active === true;
+      if (active && !this.prompts && !this.blocked) this.restoreNotebookFocus = this.lastNotebookFocus;
       this.blocked = Math.max(0, this.blocked + (active ? 1 : -1));
+      // A custom question can publish blocked before OR after the queued start.
+      // Latch until prompt_end: blocked clears before that event on completion.
+      // Pi's custom event has no tool identity; identical blocked custom UIs
+      // cannot be distinguished here from ask-user-question.
+      if (active && this.promptKind === "custom") this.reservedPrompt = true;
+      if (!this.blocked && !this.prompts) this.restoreFocus();
       this.render();
     });
     pi.events?.on?.(SIDE_PANEL_CHANNEL, (data: unknown) => {
@@ -104,13 +135,44 @@ export class NotebookSplit {
     return this.view?.notebook;
   }
   get collapsed(): boolean {
-    return this.blocked > 0 || this.prompts > 0;
+    // Native and blocked custom questions retain the notebook. Unknown/custom
+    // fullscreen UIs without a blocked signal still own the whole screen.
+    return this.prompts > 0 ? !this.reservedPrompt : this.blocked > 0;
   }
   get focused(): boolean {
     return !!this.view && this.tui?.getFocusedComponent?.() === this.view;
   }
   get otherPanelOpen(): boolean {
     return !!this.otherPanel;
+  }
+
+  private restoreFocus(): void {
+    if (this.prompts || this.blocked) return;
+    const restore = this.restoreNotebookFocus;
+    this.restoreNotebookFocus = false;
+    // Pi restores its editor first. Do not steal another dialog's focus.
+    if (restore && this.tui?.getFocusedComponent?.() === this.mainFocus) this.focusView();
+  }
+
+  private trackFocus(tui: SplitTui): void {
+    if (this.releaseFocus) return;
+    const original = tui.setFocus;
+    const own = Object.prototype.hasOwnProperty.call(tui, "setFocus");
+    const split = this;
+    const wrapped: SplitTui["setFocus"] = function (this: SplitTui, component) {
+      original.call(this, component);
+      if (split.isOpen && !split.prompts && !split.blocked) {
+        const focused = tui.getFocusedComponent?.();
+        if (focused === split.view) split.lastNotebookFocus = true;
+        else if (focused === split.mainFocus) split.lastNotebookFocus = false;
+      }
+    };
+    tui.setFocus = wrapped;
+    this.releaseFocus = () => {
+      if (tui.setFocus !== wrapped) return;
+      if (own) tui.setFocus = original;
+      else delete (tui as Partial<SplitTui>).setFocus;
+    };
   }
 
   private render(): void {
@@ -154,6 +216,8 @@ export class NotebookSplit {
       this.tui = tui;
       this.layout = new SplitLayout(tui, this.host, {
         ratio: () => this.ratio,
+        prompt: () => this.reservedPrompt,
+        locked: () => this.prompts > 0 || this.blocked > 0,
         setRatio: (_orientation, ratio) => { this.ratio = ratio ?? DEFAULT_SPLIT_RATIO; },
         minColumns: 0,
         collapsed: () => this.collapsed,
@@ -176,6 +240,7 @@ export class NotebookSplit {
     this.view = this.make(tui, theme, key, host, () => this.closeByUser(), o.state ?? this.states.get(key));
     this.host.view = this.view;
     this.view.focused = false;
+    this.trackFocus(tui);
     old?.dispose();
     if (!this.layout!.mount()) {
       this.view.dispose();
@@ -198,7 +263,7 @@ export class NotebookSplit {
   focusView(): void {
     const tui = this.tui;
     const view = this.view;
-    if (!tui || !view || !this.isOpen) return;
+    if (!tui || !view || !this.isOpen || this.prompts > 0 || this.blocked > 0) return;
     const current = tui.getFocusedComponent?.() ?? null;
     if (current && current !== view) this.mainFocus = current;
     tui.setFocus(view as never);
@@ -227,6 +292,10 @@ export class NotebookSplit {
       void previous.requestClose().then(ok => { if (ok && this.view === previous) this.close(true); });
       return;
     }
+    this.releaseFocus?.();
+    this.releaseFocus = undefined;
+    this.lastNotebookFocus = false;
+    this.restoreNotebookFocus = false;
     if (!this.layout || !this.layout.mounted) {
       this.view?.dispose();
       this.host.view = undefined;
@@ -254,7 +323,7 @@ export class NotebookSplit {
    * Sidebar is open. With no active notebook, or Sidebar open, the key is Sidebar's.
    */
   private toggle(): { consume: true } | undefined {
-    if (this.collapsed || !this.ctx) return undefined;
+    if (this.collapsed || this.prompts > 0 || !this.ctx) return undefined;
     if (this.isOpen) {
       this.closeByUser();
       return { consume: true };
@@ -269,7 +338,7 @@ export class NotebookSplit {
   handleKey(data: string): { consume: true } | undefined {
     // With the kitty keyboard protocol a key also arrives as its release (and repeats while held), and
     // listeners see those before Pi filters them: acting on them would undo every toggle at once.
-    if (isKeyRelease(data)) return undefined;
+    if (isKeyRelease(data) || this.prompts > 0 || this.blocked > 0) return undefined;
     const repeat = isKeyRepeat(data);
     if ((this.options.toggleKeys ?? toggleKeys()).some((k) => matchesKey(data, k as never))) return repeat ? (this.isOpen ? { consume: true } : undefined) : this.toggle();
     if (repeat && (matchesKey(data, FOCUS_KEY as never) || (!(this.focused && this.view?.editing) && Object.values(NAV_KEYS).some((k) => matchesKey(data, k as never))))) return this.isOpen ? { consume: true } : undefined;
@@ -313,6 +382,9 @@ export class NotebookSplit {
     this.release = undefined;
     this.blocked = 0;
     this.prompts = 0;
+    this.reservedPrompt = false;
+    this.promptKind = undefined;
+    this.restoreNotebookFocus = false;
     this.otherPanel = undefined;
     this.suppressed = false;
     this.ctx = undefined;

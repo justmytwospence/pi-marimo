@@ -9,11 +9,19 @@ const leaf = (): Component => ({ render: () => [], invalidate() {} });
 function setup(opts: { fullscreen?: boolean; active?: () => string | undefined; busy?: () => boolean } = {}) {
   const main = leaf();
   const editor = leaf();
+  const mouseHandler = vi.fn();
   const tui: any = {
     layoutRoot: main as Component | undefined,
     requestRender() {},
     focused: editor as Component | null,
-    setFocus(c: Component | null) { this.focused = c; },
+    // Faithful to TUI.setFocusInternal: blur the old Focusable before assigning
+    // the new one, including when dialogs take focus before prompt_start.
+    setFocus(c: Component | null) {
+      if (this.focused && "focused" in this.focused) this.focused.focused = false;
+      this.focused = c;
+      if (c && "focused" in c) (c as any).focused = true;
+    },
+    handleMouseEvent: mouseHandler,
     getFocusedComponent() { return this.focused; },
     terminal: { rows: 40, write() {} },
   };
@@ -41,13 +49,13 @@ function setup(opts: { fullscreen?: boolean; active?: () => string | undefined; 
   };
   const views: any[] = [];
   const split = new NotebookSplit(pi, (_t, _th, key) => {
-    const v = { render: () => ["NB"], invalidate() {}, handleInput: vi.fn(), handleMouse: () => undefined, dispose: vi.fn(), snapshot: () => ({ cursor: `at-${key}` }), notebook: key, made: [_t, _th, key] as unknown[] };
+    const v = { render: () => ["NB"], invalidate() {}, handleInput: vi.fn(), handleMouse: vi.fn(() => undefined), dispose: vi.fn(), snapshot: () => ({ cursor: `at-${key}` }), notebook: key, made: [_t, _th, key] as unknown[] };
     views.push(v);
     return v as never;
   }, { active: opts.active, busy: opts.busy, toggleKeys: ["ctrl+'"] });
   split.listen(ctx);
   const fire = (name: string, ...a: unknown[]) => { for (const fn of handlers.get(name) ?? []) fn(...a); };
-  return { split, tui, main, editor, pi, ctx, views, emitted, fire, input: (d: string) => input!(d) };
+  return { split, tui, main, editor, pi, ctx, views, emitted, fire, mouseHandler, input: (d: string) => input!(d) };
 }
 
 describe("NotebookSplit", () => {
@@ -126,13 +134,13 @@ describe("NotebookSplit", () => {
     expect(s.tui.focused).toBe(s.editor);
   });
 
-  it("collapses while a dialog is up", () => {
+  it("collapses for custom/unknown prompts and generic blocked dialogs", () => {
     const s = setup();
     s.split.open(s.ctx, "k", { focus: true });
     const entry = (s.tui.layoutRoot as any).entries[2];
     const v = { width: 200, height: 40 };
     expect(entry.visible(v)).toBe(true);
-    s.fire("ui_prompt_start");
+    s.fire("ui_prompt_start", { kind: "custom" });
     expect(entry.visible(v)).toBe(false);
     s.fire("ui_prompt_end");
     expect(entry.visible(v)).toBe(true);
@@ -140,6 +148,258 @@ describe("NotebookSplit", () => {
     expect(entry.visible(v)).toBe(false);
     s.pi.events.emit("herdr:blocked", { active: false });
     expect(entry.visible(v)).toBe(true);
+  });
+
+  it.each(["select", "confirm", "input", "editor"])("reserves the notebook and temporarily widens chat for native %s, in Pi's event order", async (kind) => {
+    const s = setup();
+    s.split.open(s.ctx, "k", { focus: true });
+    const root = s.tui.layoutRoot as SplitRoot;
+    const entries = (root as any).entries;
+    const viewport = { width: 200, height: 40 };
+    // Start from a user-adjusted ratio that leaves main below its 60-column target.
+    root.resize(viewport);
+    (root as any).dragDivider({ screenX: 40, screenY: 0 }, "end");
+    root.resize(viewport);
+    const original = entries.map((e: any) => e.basis);
+    const prompt = leaf();
+    // InteractiveMode.showTopExtensionDialog: focus and status first. Runner
+    // emits start in a microtask, and emits only for the outermost prompt.
+    s.tui.setFocus(prompt);
+    expect(s.views[0].focused).toBe(false);
+    s.pi.events.emit("herdr:blocked", { active: true });
+    queueMicrotask(() => s.fire("ui_prompt_start", { kind }));
+    await Promise.resolve();
+    root.resize(viewport);
+    expect(entries[2].visible(viewport)).toBe(true);
+    expect(entries[0].basis).toBe(60);
+    expect(entries[2].basis).toBeGreaterThanOrEqual(20);
+    expect(entries.reduce((sum: number, e: any) => sum + e.basis, 0)).toBe(200);
+    expect(s.tui.focused).toBe(prompt);
+    expect(root.halfAt(199, 0)).toBeUndefined();
+    // Even a captured divider gesture from before the prompt cannot persist
+    // the temporary prompt ratio (or otherwise change the saved ratio).
+    (root as any).dragDivider({ screenX: 100, screenY: 0 }, "end");
+    for (const key of ["\x1d", "\x1b[39;5u", "\x1b[39;5:2u", "\x1b[108;8u", "\x1b[108;8:2u"]) expect(s.input(key)).toBeUndefined();
+    s.split.focusView();
+    expect(s.tui.focused).toBe(prompt);
+    expect(s.split.isOpen).toBe(true);
+    // Dialog removal restores editor and status before the queued end event.
+    s.tui.setFocus(s.editor);
+    s.pi.events.emit("herdr:blocked", { active: false });
+    queueMicrotask(() => s.fire("ui_prompt_end", { kind }));
+    await Promise.resolve();
+    root.resize(viewport);
+    expect(entries.map((e: any) => e.basis)).toEqual(original);
+    expect(s.tui.focused).toBe(s.views[0]);
+    expect(s.views[0].dispose).not.toHaveBeenCalled();
+  });
+
+  it.each(["before-start", "after-start"])("retains a blocked custom question (%s), with no invented tool/title metadata", async (order) => {
+    const s = setup();
+    s.split.open(s.ctx, "k", { focus: true });
+    const root = s.tui.layoutRoot as SplitRoot;
+    const entries = (root as any).entries;
+    const viewport = { width: 81, height: 40 };
+    root.resize(viewport);
+    const original = entries.map((e: any) => e.basis);
+    const prompt = leaf();
+    // Runner queues only {type, reason, kind} for custom(). An async custom
+    // factory can mount/publish blocked after the start microtask has run.
+    queueMicrotask(() => s.fire("ui_prompt_start", { type: "ui_prompt_start", reason: "ui_prompt", kind: "custom" }));
+    if (order === "after-start") {
+      await Promise.resolve();
+      expect(s.split.collapsed).toBe(true);
+    }
+    s.pi.events.emit("herdr:blocked", { active: true });
+    s.tui.setFocus(prompt);
+    await Promise.resolve();
+    root.resize(viewport);
+    expect(entries[2].visible(viewport)).toBe(true);
+    expect(entries.map((e: any) => e.basis)).toEqual([60, 1, 20]);
+    expect(s.input("\x1d")).toBeUndefined();
+    expect(root.halfAt(80, 0)).toBeUndefined();
+    s.split.focusView();
+    expect(s.tui.focused).toBe(prompt);
+    s.pi.events.emit("herdr:blocked", { active: false });
+    s.tui.setFocus(s.editor);
+    // Keep the reservation and input lock until the queued end, not just until
+    // blocked clears; then restore the original ratio and notebook focus.
+    expect(s.split.collapsed).toBe(false);
+    expect(s.input("\x1d")).toBeUndefined();
+    queueMicrotask(() => s.fire("ui_prompt_end", { type: "ui_prompt_end", reason: "ui_prompt", kind: "custom" }));
+    await Promise.resolve();
+    root.resize(viewport);
+    expect(entries.map((e: any) => e.basis)).toEqual(original);
+    expect(s.tui.focused).toBe(s.views[0]);
+    // Classification is per prompt, not inherited by the next fullscreen UI.
+    s.fire("ui_prompt_start", { kind: "custom" });
+    expect(s.split.collapsed).toBe(true);
+  });
+
+  it.each([
+    [200, 90, 109], // No blind 70% allocation: the normal main width already exceeds 60.
+    [100, 60, 39],
+    [81, 60, 20],
+    [80, 59, 20], // Reserve 20 even when the 60-column main target is impossible.
+    [61, 40, 20],
+    [22, 1, 20],
+    [21, 1, 19], // Both minima cannot fit, even with just one main column.
+  ])("sizes a question at %i columns as main=%i, notebook=%i", (width, main, notebook) => {
+    const s = setup();
+    s.split.open(s.ctx, "k", { focus: false });
+    const root = s.tui.layoutRoot as SplitRoot;
+    const entries = (root as any).entries;
+    const viewport = { width, height: 40 };
+    root.resize(viewport);
+    const original = entries.map((e: any) => e.basis);
+    s.fire("ui_prompt_start", { kind: "input" });
+    root.resize(viewport);
+    expect(entries.map((e: any) => e.basis)).toEqual([main, 1, notebook]);
+    s.fire("ui_prompt_end", { kind: "input" });
+    root.resize(viewport);
+    expect(entries.map((e: any) => e.basis)).toEqual(original);
+  });
+
+  it("reserves 20 notebook columns even when a saved drag leaves less, without persisting the clamp", () => {
+    const s = setup();
+    s.split.open(s.ctx, "k", { focus: false });
+    const root = s.tui.layoutRoot as SplitRoot;
+    const entries = (root as any).entries;
+    const viewport = { width: 100, height: 40 };
+    root.resize(viewport);
+    (root as any).dragDivider({ screenX: 90, screenY: 0 }, "end");
+    root.resize(viewport);
+    const original = entries.map((e: any) => e.basis);
+    expect(original[2]).toBeLessThan(20);
+    s.fire("ui_prompt_start", { kind: "confirm" });
+    root.resize(viewport);
+    expect(entries.map((e: any) => e.basis)).toEqual([79, 1, 20]);
+    s.fire("ui_prompt_end", { kind: "confirm" });
+    root.resize(viewport);
+    expect(entries.map((e: any) => e.basis)).toEqual(original);
+  });
+
+  it("keeps chat focus after a prompt and does not steal a subsequent dialog's focus", () => {
+    const s = setup();
+    s.split.open(s.ctx, "k", { focus: false });
+    s.tui.setFocus(leaf());
+    s.fire("ui_prompt_start", { kind: "confirm" });
+    s.tui.setFocus(s.editor);
+    s.fire("ui_prompt_end", { kind: "confirm" });
+    expect(s.tui.focused).toBe(s.editor);
+    s.split.focusView();
+    s.tui.setFocus(leaf());
+    s.fire("ui_prompt_start", { kind: "select" });
+    const next = leaf();
+    s.tui.setFocus(next);
+    s.fire("ui_prompt_end", { kind: "select" });
+    expect(s.tui.focused).toBe(next);
+  });
+
+  it("waits for the last prompt and blocked signal before restoring notebook focus", () => {
+    const s = setup();
+    s.split.open(s.ctx, "k", { focus: true });
+    s.tui.setFocus(leaf());
+    s.pi.events.emit("herdr:blocked", { active: true });
+    s.fire("ui_prompt_start", { kind: "input" });
+    s.fire("ui_prompt_start", { kind: "input" });
+    s.tui.setFocus(s.editor);
+    s.fire("ui_prompt_end");
+    expect(s.tui.focused).toBe(s.editor);
+    s.fire("ui_prompt_end");
+    expect(s.tui.focused).toBe(s.editor);
+    s.pi.events.emit("herdr:blocked", { active: false });
+    expect(s.tui.focused).toBe(s.views[0]);
+  });
+
+  it("tracks explicit and external returns to chat rather than stale notebook focus", () => {
+    const s = setup();
+    s.split.open(s.ctx, "k", { focus: true });
+    s.tui.setFocus(s.editor);
+    s.tui.setFocus(leaf());
+    s.fire("ui_prompt_start", { kind: "input" });
+    s.tui.setFocus(s.editor);
+    s.fire("ui_prompt_end");
+    expect(s.tui.focused).toBe(s.editor);
+    s.split.focusView();
+    s.split.focusMain();
+    s.tui.setFocus(leaf());
+    s.fire("ui_prompt_start", { kind: "input" });
+    s.tui.setFocus(s.editor);
+    s.fire("ui_prompt_end");
+    expect(s.tui.focused).toBe(s.editor);
+  });
+
+  it.each(["prompt", "blocked", "both"])("locks notebook mouse dispatch during %s, including widgets, wheel and captured gestures", (kind) => {
+    const s = setup();
+    s.split.open(s.ctx, "k", { focus: true });
+    const root = s.tui.layoutRoot as SplitRoot;
+    const panel = root.panel;
+    root.resize({ width: 100, height: 40 });
+    const rawHandler = s.mouseHandler;
+    s.tui.setFocus(leaf());
+    if (kind !== "blocked") s.fire("ui_prompt_start", { kind: "input" });
+    if (kind !== "prompt") s.pi.events.emit("herdr:blocked", { active: true });
+    root.resize({ width: 100, height: 40 });
+    const event = { x: 0, y: 0, screenX: 99, screenY: 0, width: 20, height: 40, button: "left", modifiers: { shift: false, alt: false, ctrl: false } };
+    for (const type of ["press", "click", "drag", "move", "release", "wheel"] as const) {
+      expect(panel.handleMouse!({ ...event, type, wheelDelta: 1 } as any)).toEqual({ handled: true });
+    }
+    expect(s.views[0].handleMouse).not.toHaveBeenCalled();
+    if (kind !== "blocked") {
+      expect(root.handleMouse({ ...event, x: 99, type: "wheel", wheelDelta: 1 } as any)?.handled).toBe(true);
+      // Raw presses never reach text selection or widget routing either.
+      s.tui.handleMouseEvent({ x: 99, y: 0, button: 0 });
+      expect(rawHandler).not.toHaveBeenCalled();
+      // Main/dialog mouse input is not swallowed.
+      s.tui.handleMouseEvent({ x: 0, y: 0, button: 0 });
+      expect(rawHandler).toHaveBeenCalledOnce();
+      s.tui.renderedOverlayLayouts = [{ col: 90, row: 0, width: 10, height: 10 }];
+      s.tui.handleMouseEvent({ x: 99, y: 0, button: 0 });
+      expect(rawHandler).toHaveBeenCalledTimes(2);
+    }
+    s.tui.setFocus(s.editor);
+    // Exercise both completion orders; restoration waits for both locks.
+    if (kind !== "prompt") s.pi.events.emit("herdr:blocked", { active: false });
+    if (kind === "both") expect(s.tui.focused).toBe(s.editor);
+    if (kind !== "blocked") s.fire("ui_prompt_end");
+    expect(s.tui.focused).toBe(s.views[0]);
+    panel.handleMouse!({ ...event, type: "wheel", wheelDelta: 1 } as any);
+    expect(s.views[0].handleMouse).toHaveBeenCalledOnce();
+  });
+
+  it("closing during a prompt does not resurrect the notebook or steal focus", () => {
+    const s = setup();
+    s.split.open(s.ctx, "k", { focus: true });
+    const prompt = leaf();
+    s.tui.setFocus(prompt);
+    s.fire("ui_prompt_start", { kind: "confirm" });
+    s.split.close(true);
+    expect(s.tui.focused).toBe(prompt);
+    s.tui.setFocus(s.editor);
+    s.fire("ui_prompt_end", { kind: "confirm" });
+    expect(s.split.isOpen).toBe(false);
+    expect(s.tui.focused).toBe(s.editor);
+  });
+
+  it("custom tools retain the full width and restore notebook focus and ratio", () => {
+    const s = setup();
+    s.split.open(s.ctx, "k", { focus: true });
+    const root = s.tui.layoutRoot as SplitRoot;
+    const entries = (root as any).entries;
+    const viewport = { width: 120, height: 40 };
+    root.resize(viewport);
+    const original = entries.map((e: any) => e.basis);
+    s.fire("ui_prompt_start", { kind: "custom" });
+    s.tui.setFocus(leaf()); // custom factories mount asynchronously after start
+    root.resize(viewport);
+    expect(entries[0].basis).toBe(120);
+    expect(entries[2].visible(viewport)).toBe(false);
+    s.tui.setFocus(s.editor);
+    s.fire("ui_prompt_end", { kind: "custom" });
+    root.resize(viewport);
+    expect(entries.map((e: any) => e.basis)).toEqual(original);
+    expect(s.tui.focused).toBe(s.views[0]);
   });
 
   it("ctrl+] and Herdr's prefix+h/l move between the halves", () => {

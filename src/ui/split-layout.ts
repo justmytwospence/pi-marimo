@@ -1,9 +1,9 @@
-// Copied from pi-sidebar/src/layout.ts, verbatim but for this comment and an import; change both. pi-marimo docks the notebook view with it (ui/split.ts); "Sidebar" in the comments below is that panel.
-// and the editor dock); Sidebar re-roots it into a stack of [main, divider, Sidebar], so main reflows
+// Adapted from pi-sidebar/src/layout.ts. pi-marimo adds prompt input locking;
+// "Sidebar" in the comments below is the notebook panel (ui/split.ts).
+// Re-roots Pi's fullscreen layout into [main, divider, notebook], so main reflows
 // into its half instead of being covered. The stack is beside main when both halves keep enough
-// columns, and below otherwise, re-decided on every frame from the viewport. While another
-// extension holds `herdr:blocked` (a dialog waits on the user), Sidebar collapses so the dialog
-// renders full width as herdr-web-ui's phone parser expects.
+// columns, and below otherwise, re-decided on every frame from the viewport. Fullscreen custom
+// UIs collapse the notebook; native and blocked custom questions retain it with input locked.
 //
 // Pi does not publish its layout root; the suite reads it the same way in pi-clear-screen, pi-copy,
 // pi-sticky-last-prompt and plan mode. Anything unexpected leaves Pi's layout untouched.
@@ -37,6 +37,10 @@ export interface SplitSettings {
   sidebarPrimary?(): boolean;
   /** Sidebar hidden but the split kept (a dialog holds `herdr:blocked`). */
   collapsed(): boolean;
+  /** A prompt owns input: keep visible halves, but do not move focus or resize them. */
+  locked?(): boolean;
+  /** A question reserves at least 20 notebook columns and targets 60 main columns. */
+  prompt?(): boolean;
   /** Whether Sidebar has focus: the divider points at the focused half, and the other one is dimmed. */
   focused(): boolean;
   /** A left press in a half without focus: give that half focus (before Pi handles the press). */
@@ -162,6 +166,14 @@ export class SplitRoot extends HStack {
       return;
     }
     const sizes = splitSizes(total, this.settings.ratio(this.orientation));
+    if (this.orientation === "right" && this.settings.prompt?.()) {
+      const available = total - sizes.divider;
+      // Keep the saved ratio when it already gives main enough room, but reserve
+      // 20 notebook columns first. Below 22 total columns even that is impossible.
+      const notebookMin = Math.min(20, Math.max(1, available - 1));
+      sizes.main = Math.max(1, Math.min(Math.max(60, sizes.main), available - notebookMin));
+      sizes.side = Math.max(1, available - sizes.main);
+    }
     this.split = { main: sizes.main, total };
     Object.assign(entries[0]!, { basis: sizes.main, grow: 0, shrink: 0, minSize: 1 });
     Object.assign(entries[1]!, { basis: sizes.divider, grow: 0, shrink: 0, minSize: 1 });
@@ -169,7 +181,7 @@ export class SplitRoot extends HStack {
   }
 
   private dragDivider(event: TuiMouseEvent, phase: "move" | "end" | "reset"): void {
-    if (!this.settings.setRatio || this.split.total < 3) return;
+    if (this.settings.collapsed() || this.settings.locked?.() || !this.settings.setRatio || this.split.total < 3) return;
     if (phase === "reset") this.settings.setRatio(this.orientation, undefined, true);
     else {
       // The split fills the screen from its top-left corner, so screen coordinates are its own.
@@ -179,9 +191,15 @@ export class SplitRoot extends HStack {
     this.requestRender();
   }
 
+  /** Notebook or divider hit, including while input is locked. */
+  notebookAt(x: number, y: number): boolean {
+    const position = this.orientation === "right" ? x : y;
+    return position >= this.split.main && position < this.split.total;
+  }
+
   /** The half at a screen position (the split fills the screen from its top-left), none on the divider. */
   halfAt(x: number, y: number): "main" | "sidebar" | undefined {
-    if (this.settings.collapsed() || this.split.total < 3) return undefined;
+    if (this.settings.collapsed() || this.settings.locked?.() || this.split.total < 3) return undefined;
     const position = this.orientation === "right" ? x : y;
     if (position < this.split.main) return "main";
     if (position > this.split.main) return "sidebar";
@@ -213,13 +231,17 @@ export class SplitRoot extends HStack {
    * (pi-stereo-view consumes the wheel per panel the same way).
    */
   override handleMouse(event: TuiMouseEvent): TuiMouseDispatchResult | undefined {
-    if (event.type !== "wheel" || this.settings.collapsed()) return undefined;
+    if (event.type !== "wheel") return undefined;
     const handled: TuiMouseDispatchResult = {
       handled: true,
       target: { component: this, originX: event.screenX - event.x, originY: event.screenY - event.y, width: event.width, height: event.height },
     };
-    const lines = event.wheelDelta ?? 0;
     const position = this.orientation === "right" ? event.x : event.y;
+    // Consume notebook/divider wheel input before Pi can route leftover lines to
+    // its primary scroll view. PanelHost also guards deepest-first widget dispatch.
+    if (this.settings.locked?.()) return !this.settings.collapsed() && position >= this.split.main ? handled : undefined;
+    if (this.settings.collapsed()) return undefined;
+    const lines = event.wheelDelta ?? 0;
     if (position > this.split.main) {
       if (!this.settings.scrollSidebar) return undefined;
       this.settings.scrollSidebar(lines);
@@ -311,7 +333,13 @@ export class SplitLayout {
     const own = Object.prototype.hasOwnProperty.call(tui, "handleMouseEvent");
     const layout = this;
     const wrapped = function (this: Renderer, raw: Raw) {
-      try { layout.pressFocus(this ?? tui, raw); } catch { /* never block the press */ }
+      const renderer = this ?? tui;
+      const root = layout.mounted ? layout.root : undefined;
+      if (root && layout.settings.locked?.() && !layout.settings.collapsed()) {
+        const overlay = renderer.renderedOverlayLayouts?.some((o) => raw.x >= o.col && raw.x < o.col + o.width && raw.y >= o.row && raw.y < o.row + o.height);
+        if (!overlay && !renderer.mouseCapture && !renderer.mousePressTarget && root.notebookAt(raw.x, raw.y)) return;
+      }
+      try { layout.pressFocus(renderer, raw); } catch { /* never block the press */ }
       return handler.call(this, raw);
     };
     tui.handleMouseEvent = wrapped;
