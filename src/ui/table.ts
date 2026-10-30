@@ -264,6 +264,8 @@ export interface Grid {
   /** Page-local row for each body line; undefined for pinned chrome. */
   rowAt: Array<number | undefined>;
   headerRows: number;
+  /** Rendered column-header line, absent when the viewport cannot fit it. Never a body row. */
+  headerRow?: number;
   footerRows: number;
   layout: TableLayout;
 }
@@ -302,6 +304,7 @@ export function tableGrid(t: TableData, width: number, theme: PaneTheme, maxRows
   const background = (color: string, text: string) => theme.bg ? theme.bg(color, text) : text;
   if (t.label) add(theme.bold(display(t.label)));
   if (t.banner) add(theme.fg("warning", display(t.banner)));
+  const headerRow = lines.length;
   add(background("selectedBg", join((c, w) => {
     const mark = filters.has(c) ? " ƒ" : "";
     const label = align(display(c) + sortMark(view?.sort ?? [], c) + mark, w, justify(t, c));
@@ -369,7 +372,7 @@ export function tableGrid(t: TableData, width: number, theme: PaneTheme, maxRows
   if (view?.error) tokens.push(`error: ${display(view.error)}`);
   if (view?.status) tokens.push(display(view.status));
   for (const line of statusLines(tokens, width)) add(dim(line));
-  return { lines, rowAt, headerRows, footerRows: lines.length - footerStart, layout };
+  return { lines, rowAt, headerRows, headerRow, footerRows: lines.length - footerStart, layout };
 }
 
 /** A page-local body viewport; rowOffset is a logical row, never a wrapped-line offset. */
@@ -394,8 +397,16 @@ export function tableViewport(t: TableData, width: number, height: number, theme
   grid.lines.forEach((line, i) => { const row = grid.rowAt[i]; if (row !== undefined) groups[row]!.push(line); });
   let offset = Math.max(0, Math.min(Math.max(0, count - 1), Math.floor(rowOffset)));
   const activeHeight = groups[active]?.length ?? 1;
-  // Tiny views sacrifice types/summaries/status before hiding the active row.
-  const headerCount = Math.min(grid.headerRows, Math.max(0, height - activeHeight));
+  // Reserve the complete active row first, then the column header ahead of optional chrome.
+  const headerBudget = Math.max(0, height - activeHeight);
+  const headerIndices: number[] = [];
+  if (headerBudget && grid.headerRow !== undefined) headerIndices.push(grid.headerRow);
+  for (let i = 0; i < grid.headerRows && headerIndices.length < headerBudget; i++) {
+    if (i !== grid.headerRow) headerIndices.push(i);
+  }
+  headerIndices.sort((a, b) => a - b);
+  const headerCount = headerIndices.length;
+  const headerRow = grid.headerRow === undefined ? undefined : headerIndices.indexOf(grid.headerRow);
   const footerCount = Math.min(grid.footerRows, Math.max(0, height - headerCount - activeHeight));
   const bodyHeight = Math.max(0, height - headerCount - footerCount);
   if (view.focused) {
@@ -404,7 +415,7 @@ export function tableViewport(t: TableData, width: number, height: number, theme
   }
   // On resize do not leave avoidable blank space below the final page row.
   while (offset > 0 && groups.slice(offset - 1).reduce((n, r) => n + r.length, 0) <= bodyHeight) offset--;
-  const lines = grid.lines.slice(0, headerCount);
+  const lines = headerIndices.map(i => grid.lines[i]!);
   const rowAt: Array<number | undefined> = Array(headerCount).fill(undefined);
   let used = 0;
   for (let row = offset; row < count && used < bodyHeight; row++) {
@@ -428,7 +439,7 @@ export function tableViewport(t: TableData, width: number, height: number, theme
     lines.push(...grid.lines.slice(grid.lines.length - grid.footerRows, grid.lines.length - grid.footerRows + footerCount));
     rowAt.push(...Array<undefined>(footerCount).fill(undefined));
   }
-  return { lines, rowAt, layout: grid.layout, headerRows: headerCount, footerRows: footerCount, rowOffset: offset };
+  return { lines, rowAt, layout: grid.layout, headerRows: headerCount, headerRow: headerRow === -1 ? undefined : headerRow, footerRows: footerCount, rowOffset: offset };
 }
 
 export function tableLines(t: TableData, width: number, theme: PaneTheme, maxRows: number, view?: TableRender): string[] {

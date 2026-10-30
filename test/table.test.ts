@@ -142,6 +142,56 @@ test("viewport pins headers and footer and moves whole wrapped rows to reveal th
   expect(resized.rowAt).toContain(7);
 });
 
+test.each([
+  {},
+  { label: "Table label" },
+  { banner: "Table banner" },
+  { label: "Table label", banner: "Table banner" },
+])("header hit position follows rendered chrome: %j", (chrome) => {
+  const t = data(chrome);
+  const grid = tableGrid(t, 60, theme, 10, view());
+  const expected = Number(Boolean(t.label)) + Number(Boolean(t.banner));
+  expect(grid.headerRow).toBe(expected);
+  expect(plain(grid.lines[grid.headerRow!]!)).toContain("name");
+  expect(grid.rowAt[grid.headerRow!]).toBeUndefined();
+});
+
+test.each([false, true])("short viewports prioritize the actual column header (wrapped=%s)", (wrapped) => {
+  const t = data({ label: "Table label", banner: "Table banner",
+    columns: ["name"], numeric: [false],
+    wrapped: wrapped ? ["name"] : [],
+    records: Array.from({ length: 5 }, () => ({ name: "alpha beta gamma delta" })),
+  });
+  const v = view({ focused: true, cursorRow: 3, cursorCol: 0,
+    columnWidths: new Map([["name", 8]]),
+    summaries: { stats: { name: { unique: 5 } }, bins: {}, counts: {} },
+  });
+  const activeHeight = wrapped ? 3 : 1;
+  for (let height = 0; height <= 12; height++) {
+    const grid = tableViewport(t, 60, height, theme, v, 0);
+    expect(grid.lines).toHaveLength(height);
+    expect(grid.rowAt).toHaveLength(height);
+    if (height <= activeHeight) {
+      expect(grid.headerRow).toBeUndefined();
+      expect(grid.headerRows).toBe(0);
+    } else {
+      expect(grid.headerRow).toBeDefined();
+      expect(grid.headerRow).toBeLessThan(grid.headerRows);
+      expect(plain(grid.lines[grid.headerRow!]!)).toContain("name");
+      expect(grid.rowAt[grid.headerRow!]).toBeUndefined();
+      expect(grid.rowAt.filter(r => r === 3)).toHaveLength(activeHeight);
+    }
+    if (height === activeHeight + 1) {
+      expect(grid.headerRow).toBe(0);
+      expect(grid.headerRows).toBe(1);
+      expect(grid.lines.join(" ")).not.toMatch(/Table label|Table banner|object|unique/u);
+    }
+    if (height > 0 && height <= activeHeight) {
+      expect(grid.rowAt.every(r => r === 3)).toBe(true);
+    }
+  }
+});
+
 test("header, stripe, notebook style, active cell and selection have independent styling", () => {
   const styledTheme = { ...theme, bg: (color: string, text: string) => `\x1b[${color === "selectedBg" ? "44" : "45"}m${text}\x1b[49m` };
   const grid = tableGrid(data({ selection: "multi-cell", cellStyles: { r1: { n: { backgroundColor: "#112233" } } } }), 70, styledTheme, 10,

@@ -1669,8 +1669,12 @@ export class NotebookView implements Component, Focusable {
     const transientRows = messagePreview(transient, inner, Math.max(0, height - CHROME - dock.length));
     this.messageOverflow = !!transient && wrapTextWithAnsi(clean(transient), inner).length > transientRows.length;
     this.lastTransient = transientRows.length;
-    if (this.help && height < CHROME) return this.helpView.render(inner, height, th).map(row);
+    if (this.help && !this.messageView && height < CHROME) return this.helpView.render(inner, height, th).map(row);
     if (height < CHROME || (height === CHROME && dock.length)) {
+      if (this.messageView) {
+        this.lastPage = height;
+        return this.messageView.render(inner, height).map(row);
+      }
       this.lastPage = 0;
       this.lastRows = []; this.lastDetail = []; this.lastOutline = [];
       if (dock.length) return dock;
@@ -1678,7 +1682,7 @@ export class NotebookView implements Component, Focusable {
       if (height > 1) compact.push(row(this.footer(f, inner)));
       return compact.slice(0, height);
     }
-    if (this.help) {
+    if (this.help && !this.messageView) {
       const rows = this.helpView.render(inner, height - 1, th);
       this.lastPage = height - 1;
       this.lastRows = rows.map(text => ({ text }));
@@ -1920,12 +1924,11 @@ export class NotebookView implements Component, Focusable {
               ...(active.data.totalRows !== undefined ? { totalRows: active.data.totalRows } : {}),
             }, s.rowOffset);
             s.rowOffset = grid.rowOffset;
-            const header = Number(!!active.data.label) + Number(!!active.data.banner);
             detail = grid.lines.map((text, index): Row => ({
               text,
               ...(grid.rowAt[index] !== undefined ? { tableRow: grid.rowAt[index] } : {}),
-              ...(index === header ? { tableHeader: true } : {}),
-              ...(grid.rowAt[index] !== undefined || index === header ? { tableColumns: grid.layout.columns } : {}),
+              ...(grid.headerRow === index ? { tableHeader: true } : {}),
+              ...(grid.rowAt[index] !== undefined || grid.headerRow === index ? { tableColumns: grid.layout.columns } : {}),
               tableObjectId: this.table!.objectId,
             }));
           }

@@ -1497,6 +1497,44 @@ test.each([46, 100, 180])("table viewport pins header/status and mouse targets t
   } finally { v.dispose(); clearTableSessions(); }
 });
 
+test("short table viewports never classify body rows as sortable headers", async () => {
+  const { clearTableSessions, tableSession } = await import("../src/ui/table-session.js");
+  clearTableSessions();
+  const f = nbWith([{ id: "a", code: "df" }]);
+  f.notebook.apply("cell-op", { cell_id: "a", output: { channel: "output", mimetype: "text/html", data: tableHtml() } });
+  const cell = f.notebook.cells.get("a")!, data = cell.output!.table!;
+  data.label = "Sales"; data.banner = "attention"; data.wrapped = ["city"];
+  data.records = [{ city: "A very long description ".repeat(8), pop: 1, _marimo_row_id: "0" }];
+  data.rows = [[String(data.records[0]!.city), "1"]]; data.totalRows = 1;
+  const session = tableSession(`${notebookKey(f)}\0${data.objectId}`, cell, data);
+  const call = vi.fn(async () => ({ data: JSON.stringify(data.records), total_rows: 1 }));
+  const tui = { requestRender: vi.fn(), terminal: { rows: 6 } };
+  const v = new NotebookView(tui as any, theme, notebookKey(f), {
+    followed: () => [f], interrupt: async () => {}, openInBrowser: () => {}, table: { call, file: async () => "[]" },
+  }, () => {});
+  const click = (index: number) => {
+    const x = (v as any).panes.detailLeft + (v as any).lastDetail[index].tableColumns[0].start;
+    const y = 2 + (v as any).panes.detailTop + index;
+    v.handleMouse({ type: "click", button: "left", x, y, screenX: x, screenY: y, width: 46, height: tui.terminal.rows, shift: false, alt: false, ctrl: false } as any);
+  };
+  try {
+    v.render(46); v.handleInput("t"); v.render(46);
+    const tinyBody = (v as any).lastDetail.findIndex((r: any) => r.tableRow === 0);
+    expect(tinyBody).toBeGreaterThanOrEqual(0);
+    expect((v as any).lastDetail[tinyBody].tableHeader).toBeUndefined();
+    expect((v as any).lastDetail.some((r: any) => r.tableHeader)).toBe(false);
+    click(tinyBody); expect(call).not.toHaveBeenCalled(); expect(session.sort).toEqual([]);
+    tui.terminal.rows = 9; v.render(46);
+    const body = (v as any).lastDetail.findIndex((r: any) => r.tableRow === 0);
+    const header = (v as any).lastDetail.findIndex((r: any) => r.tableHeader);
+    expect(header).toBeGreaterThanOrEqual(0);
+    expect(header).toBeLessThan(body);
+    click(body); expect(call).not.toHaveBeenCalled();
+    click(header); await editorReady();
+    expect(call).toHaveBeenCalledWith(f, data.objectId, "search", expect.objectContaining({ sort: [{ by: "city", descending: false }] }));
+  } finally { v.dispose(); clearTableSessions(); }
+});
+
 test("table resize, fit, cancel-first column picker and raw value viewer preserve the session", async () => {
   const { clearTableSessions, tableSession } = await import("../src/ui/table-session.js");
   clearTableSessions();
@@ -2179,6 +2217,33 @@ test.each([46, 80, 100, 120, 180])("STEP6 bounded errors disclose a complete cap
     const armed = v.render(width);
     expect(armed.at(-2)).toContain("A again to run all cells");
     expect(footerText(armed)).toBe(before);
+  } finally { v.dispose(); }
+});
+
+test("F8 message viewer takes precedence over help, scrolls, and restores help", () => {
+  const f = nbWith([{ id: "a", code: "x = 1" }]);
+  const tui = { requestRender: vi.fn(), terminal: { rows: 4 } };
+  const v = new NotebookView(tui as any, theme, notebookKey(f), {
+    followed: () => [f], interrupt: async () => {}, openInBrowser: () => {}, run: vi.fn(),
+  }, () => {});
+  try {
+    v.render(12);
+    v.handleInput("A");
+    v.handleInput("?");
+    expect(screen(v, 12)).toContain("Keyboard");
+    v.handleInput("\x1b[19~");
+    expect(v.snapshot().message?.text).toContain("again to run all cells");
+    (v as any).messageView.state.text += "\n" + "extra line\n".repeat(5);
+    expect(screen(v, 12)).not.toContain("Keyboard shortcuts");
+    expect(screen(v, 12)).toContain("again");
+    v.handleInput("j");
+    expect(v.snapshot().message?.scroll).toBeGreaterThan(0);
+    tui.terminal.rows = 2;
+    expect(screen(v, 12)).not.toContain("Keyboard shortcuts");
+    v.handleInput("\x1b");
+    tui.terminal.rows = 5;
+    expect(screen(v, 12)).toContain("Keyboard");
+    expect(v.snapshot().help).toBeDefined();
   } finally { v.dispose(); }
 });
 
