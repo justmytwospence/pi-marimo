@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, expect, test } from "vitest";
 import { EditCellService } from "../src/core/edit-cell.js";
+import { PackageClient } from "../src/core/packages.js";
 import { HeadlessSessions } from "../src/core/headless.js";
 import { nodeIo } from "../src/core/node-io.js";
 import { MarimoWatcher } from "../src/core/watcher.js";
@@ -24,6 +25,36 @@ const live = (() => {
     return false;
   }
 })();
+
+test.skipIf(!live)("package-list-read-only in a disposable fixture session", async () => {
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), "pi-marimo-package-list-")));
+  const file = join(dir, "packages.py");
+  writeFileSync(file, NOTEBOOK);
+  const server = await servers.start({ command: ["marimo"], file, cwd: dir, timeoutMs: 60_000 });
+  const sessionId = await headless.attach(server.url, file);
+  const watcher = new MarimoWatcher({ io: nodeIo(), cwd: dir, pollMs: 300, onChange: () => undefined });
+  watcher.start();
+  let client: PackageClient | undefined;
+  try {
+    const followed = await until(() => watcher.followed().find(f => f.attachment.path === file && f.connection === "connected" && f.notebook.ready));
+    client = new PackageClient({
+      target: followed.attachment, filename: file, notebook: followed.notebook,
+      isCurrent: () => watcher.followed().some(f => f.notebook === followed.notebook && f.attachment.sessionId === sessionId),
+      isConnected: () => followed.connection === "connected", executeOnce: runScratch, reconcile: () => undefined,
+      timeoutMs: 30_000,
+    });
+    // Deliberately no install/upgrade/remove here, even on disposable notebooks:
+    // the Python environment itself can be shared with the developer's server.
+    const snapshot = await client.list();
+    expect(snapshot.fingerprint.filename).toBe(file);
+    expect(snapshot.fingerprint.pid).toBeGreaterThan(0);
+    expect(snapshot.fingerprint.executable.startsWith("/")).toBe(true);
+    expect(snapshot.packages).toEqual(expect.arrayContaining([expect.objectContaining({ name: "marimo", version: expect.any(String) })]));
+  } finally {
+    client?.dispose();
+    await watcher.stop();
+  }
+}, 120_000);
 
 const NOTEBOOK = `import marimo
 

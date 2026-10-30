@@ -31,6 +31,7 @@ import { basename } from "./core/io.js";
 import { nodeIo } from "./core/node-io.js";
 import { HeadlessSessions } from "./core/headless.js";
 import { EditCellService, pythonJson, type EditorSession, type SaveReceipt, type ScratchExecute } from "./core/edit-cell.js";
+import { PackageClient } from "./core/packages.js";
 import { InlineEditorManager } from "./ui/inline-editor.js";
 import { pairTargets, sameServer } from "./core/touch.js";
 import { MarimoWatcher, type Mode, type Waiting, parseMode } from "./core/watcher.js";
@@ -338,14 +339,20 @@ export default function piMarimo(pi: ExtensionAPI): void {
   // attachment: inline drafts are keyed by its original notebook/session identity.
   const editors = new InlineEditorManager();
   const editServices = new Map<NotebookState, { service: EditCellService; isCurrent: () => boolean; target: EditorSession }>();
+  const packageClients = new Map<NotebookState, { client: PackageClient; target: EditorSession; isCurrent: () => boolean }>();
   const reconciliations = new Set<AbortController>();
   const disposeEditServices = (): void => {
     for (const { service } of editServices.values()) service.dispose();
     editServices.clear();
+    for (const { client } of packageClients.values()) client.dispose();
+    packageClients.clear();
     for (const controller of reconciliations) controller.abort();
     reconciliations.clear();
   };
   const pruneEditServices = (): void => {
+    for (const [notebook, entry] of packageClients) {
+      if (!entry.isCurrent()) { entry.client.dispose(); packageClients.delete(notebook); }
+    }
     for (const [notebook, entry] of editServices) {
       if (!entry.isCurrent()) { entry.service.dispose(); editServices.delete(notebook); }
     }
@@ -417,7 +424,28 @@ export default function piMarimo(pi: ExtensionAPI): void {
     editServices.set(notebook, { service, isCurrent, target });
     return service;
   };
+  const packageClient = async (f: Followed): Promise<PackageClient> => {
+    const notebook = f.notebook;
+    const { url, path, sessionId } = f.attachment;
+    const anchors = [...notebook.cells.values()];
+    const owner = watcher;
+    const target = await resolveEditorTarget(f);
+    const isCurrent = () => watcher === owner && headless.has(url, path) && (anchors.length === 0 || anchors.some(cell => notebook.cells.get(cell.id) === cell)) &&
+      (watcher?.followed().some(o => o.notebook === notebook && o.connection === "connected" && notebook.ready && o.attachment.url === url && o.attachment.path === path && o.attachment.sessionId === sessionId) ?? false);
+    if (!isCurrent()) throw new Error("Notebook session changed; refresh packages");
+    pruneEditServices();
+    const previous = packageClients.get(notebook);
+    if (previous?.target.sessionId === target.sessionId) return previous.client;
+    previous?.client.dispose();
+    const client = new PackageClient({ target, filename: path, notebook, isCurrent,
+      isConnected: () => f.connection === "connected", executeOnce, token: process.env.MARIMO_TOKEN,
+      reconcile: () => { schedule(); },
+    });
+    packageClients.set(notebook, { client, target, isCurrent });
+    return client;
+  };
   const viewActions: ViewActions = {
+    packages: packageClient,
     editors,
     saveCell: async (f: Followed, cellId: string, code: string, expectedCode: string): Promise<SaveReceipt> => (await editorService(f)).saveCell(cellId, code, expectedCode),
     runSavedCell: async (f: Followed, cellId: string, canonicalCode: string): Promise<void> => (await editorService(f)).runSavedCell(cellId, canonicalCode),

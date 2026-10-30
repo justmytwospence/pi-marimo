@@ -81,6 +81,33 @@ test("inline services acquire a writable target first, never replay a failed mut
   }
 });
 
+test("package clients are lazy, writable-session-bound, reused and disposed", async () => {
+  const { PackageClient } = await import("../src/core/packages.js");
+  const x = setup();
+  const attach = vi.spyOn(HeadlessSessions.prototype, "attach").mockResolvedValue("package-write-session");
+  const has = vi.spyOn(HeadlessSessions.prototype, "has").mockReturnValue(true);
+  const dispose = vi.spyOn(PackageClient.prototype, "dispose");
+  let view: any;
+  try {
+    await x.fire("session_start"); await until(() => server.feeds.length > 0);
+    server.feeds.at(-1)!(untilRunning + rest);
+    const section = x.of("activity:section")[0]?.section;
+    await section.open(section.entries(Date.now())[0].key, x.ui);
+    view = x.customs.at(-1).view;
+    expect(attach).not.toHaveBeenCalled();
+    const f = view.actions.followed()[0];
+    const client = await view.actions.packages(f);
+    expect(client).toBeInstanceOf(PackageClient);
+    expect(client.options.target.sessionId).toBe("package-write-session");
+    expect(client.options.filename).toBe("/w/nb.py");
+    expect(client.options.executeOnce).toBeTypeOf("function");
+    expect(await view.actions.packages(f)).toBe(client);
+    f.connection = "disconnected";
+    await expect(view.actions.packages(f)).rejects.toThrow("session changed");
+    await x.fire("session_shutdown"); expect(dispose).toHaveBeenCalled();
+  } finally { view?.dispose(); await x.fire("session_shutdown"); attach.mockRestore(); has.mockRestore(); dispose.mockRestore(); }
+});
+
 test("native inline confirmations default to cancel, fit phone labels, and copy via OSC52", async () => {
   const x = setup();
   const writes: string[] = [];

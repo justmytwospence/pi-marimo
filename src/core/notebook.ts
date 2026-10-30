@@ -4,6 +4,7 @@
 // (variables). Only what an agent needs is kept; outputs are dropped.
 
 import { LensTracker } from "./lens.js";
+import { EnvironmentState } from "./packages.js";
 import { CellConsole } from "./console.js";
 import { progressFromText, type ProgressTask } from "./progress.js";
 import { type CellOutput, type ConsoleLine, summarizeOutput } from "./output.js";
@@ -126,6 +127,8 @@ export class NotebookState {
   usedBy = new Map<string, string[]>();
   /** Variable values and types (`variable-values`), for the view only. */
   values = new Map<string, VariableValue>();
+  /** Package events are view-only and never enter agent snapshots. */
+  environment = new EnvironmentState();
   /** Widget values that differ from their elements' initial ones (kernel-ready's `ui_values`, and the ones set from Pi). */
   uiValues = new Map<string, unknown>();
   /** Code-mode (marimo-pair) changes since the user's last prompt, by cell id. Kept across reconnects, so a browser reload does not erase what the user is reviewing. */
@@ -175,6 +178,7 @@ export class NotebookState {
     this.declaredBy.clear();
     this.usedBy.clear();
     this.values.clear();
+    this.environment.reset();
     this.uiValues.clear();
     this.ready = false;
     this.lastActivity = 0;
@@ -224,6 +228,12 @@ export class NotebookState {
         return this.removeUi(data);
       case "model-lifecycle":
         return this.lens.apply(data);
+      case "missing-package-alert":
+      case "environment-state":
+      case "environment-operation":
+        this.environment.apply(op, data);
+        this.onOutputChange();
+        return false;
       case "function-call-result":
         return this.functionResult(data);
       default:

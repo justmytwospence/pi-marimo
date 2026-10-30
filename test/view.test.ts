@@ -12,6 +12,7 @@ import { NotebookSource } from "../src/ui/source.js";
 import { notebookKey } from "../src/ui/identity.js";
 import { InlineEditorManager } from "../src/ui/inline-editor.js";
 import type { NeovimOpenOptions, NeovimSession } from "../src/core/neovim.js";
+import type { PackageClient, PackageConfirmation } from "../src/core/packages.js";
 
 function fakeEditors() {
   let options: NeovimOpenOptions;
@@ -803,24 +804,87 @@ function dataflow(): Followed {
   return f;
 }
 
-test("v lists the variables; Enter goes to the cell that defines one, > to the first that uses it", () => {
+test("v lists variables; Enter previews repr, Escape returns to list and d jumps to definition", () => {
   const f = dataflow();
   const v = make(f);
   try {
     v.handleInput("v");
     const pane = screen(v);
-    expect(pane).toMatch(/● x\s+int\s+1\s+← load · 2 uses/u);
-    expect(pane).toMatch(/ y\s+.*← y · 1 use/u);
+    expect(pane).toMatch(/● x\s+int\s+1\s+← load\s+· 2 uses/u);
+    expect(pane).toMatch(/ y\s+.*← y\s+· 1 uses/u);
     v.handleInput("j");
     v.handleInput("\r");
+    expect(screen(v)).toContain("marimo value preview");
+    v.handleInput("\x1b");
+    expect(v.snapshot().mode).toBe("variables");
+    v.handleInput("d");
     expect(screen(v)).toMatch(/▌  y/u);
-    v.handleInput("v");
-    v.handleInput("g");
-    v.handleInput(">");
-    expect(screen(v)).toMatch(/▌  y/u);
-    expect(screen(v)).toContain("uses x · used by z");
-    expect(screen(v)).not.toContain("= x (int)");
-    expect(screen(v)).not.toContain("<");
+    expect(v.snapshot().mode).toBe("cells");
+  } finally { v.dispose(); }
+});
+
+test("variable repr detail scrolls to complete tail and survives dock transfer", () => {
+  const f = dataflow();
+  f.notebook.apply("variable-values", { variables: [{ name: "x", datatype: "str", value: Array.from({ length: 100 }, (_, i) => `value ${i}`).join("\n") + "\nLAST VALUE" }] });
+  const v = make(f);
+  let moved: NotebookView | undefined;
+  try {
+    v.handleInput("v"); screen(v); v.handleInput("\r"); v.handleInput("G");
+    expect(screen(v)).toContain("LAST VALUE");
+    moved = make(f, { initial: v.snapshot() });
+    expect(screen(moved)).toContain("LAST VALUE");
+    moved.handleInput("\x1b"); expect(moved.snapshot().varDetail).toBe(false);
+    moved.handleInput("\x1b"); expect(moved.snapshot().mode).toBe("cells");
+  } finally { v.dispose(); moved?.dispose(); }
+});
+
+test("variable use selector lists all sites, copies supplied values, and sorting retains selection", async () => {
+  const f = dataflow();
+  f.notebook.apply("variable-values", { variables: [{ name: "x", datatype: "int", value: "one  two\n  three" }] });
+  const copy = vi.fn();
+  const confirm = vi.fn(async (_question: string, choices: readonly string[]) => choices[2]);
+  const v = make(f, { copy, confirm });
+  try {
+    v.handleInput("v"); screen(v);
+    v.handleInput("Y"); expect(copy).toHaveBeenCalledWith("one  two\n  three");
+    v.handleInput("s"); expect(v.snapshot().varCursor).toBe("x");
+    v.handleInput(">"); await editorReady();
+    expect(confirm.mock.calls[0]?.[1]).toEqual(["Cancel", "1. y", "2. z"]);
+    expect(v.snapshot().mode).toBe("cells"); expect(v.snapshot().cursor).toBe("c");
+  } finally { v.dispose(); }
+});
+
+test("packages open/list/Enter never mutate; tree failure leaves list/actions independent", async () => {
+  const f = dataflow();
+  const snapshot = { fingerprint: { filename: "/w/nb.py", executable: "/env/python", pid: 42, manager: "uv", version: "0.25.0", capabilities: {} }, packages: [{ name: "numpy", version: "1" }] };
+  const reconcile = vi.fn(async () => snapshot), dependencyTree = vi.fn(async () => { throw new Error("unsupported"); }), mutate = vi.fn();
+  const client = { reconcile, dependencyTree, mutate } as unknown as PackageClient;
+  const v = make(f, { packages: async () => client });
+  try {
+    v.handleInput("P"); await editorReady(); await editorReady();
+    expect(screen(v)).toContain("numpy 1"); expect(mutate).not.toHaveBeenCalled();
+    v.handleInput("\r"); await editorReady(); await editorReady();
+    expect(screen(v)).toContain("Dependency tree unavailable"); expect(mutate).not.toHaveBeenCalled();
+    v.handleInput("\x1b"); expect(screen(v)).toContain("numpy 1");
+    v.handleInput("r"); await editorReady(); expect(mutate).not.toHaveBeenCalled();
+  } finally { v.dispose(); }
+});
+
+test("package mutation uses native cancel-first confirmation naming fingerprint and shared risk", async () => {
+  const f = dataflow();
+  const fingerprint = { filename: "/w/nb.py", executable: "/env/python", pid: 42, manager: "uv", version: "0.25.0", capabilities: {} };
+  const question: PackageConfirmation = { action: "remove", spec: "numpy", fingerprint, warning: "Environment shared with server and other notebooks", defaultChoice: "cancel" };
+  const mutate = vi.fn(async (_action, _spec, confirm) => ({ status: await confirm(question) ? "succeeded" : "cancelled" }));
+  const client = { reconcile: async () => ({ fingerprint, packages: [{ name: "numpy", version: "1" }] }), mutate } as unknown as PackageClient;
+  const confirm = vi.fn(async () => "Cancel");
+  const v = make(f, { packages: async () => client, confirm });
+  try {
+    v.handleInput("P"); await editorReady(); await editorReady(); screen(v);
+    v.handleInput("x"); await editorReady(); await editorReady();
+    expect(mutate).toHaveBeenCalledExactlyOnceWith("remove", "numpy", expect.any(Function));
+    expect(confirm).toHaveBeenCalledWith(expect.stringContaining("/env/python"), ["Cancel", "Confirm"]);
+    const text = confirm.mock.calls[0] as unknown as [string];
+    expect(text[0]).toContain("/w/nb.py"); expect(text[0]).toContain("pid 42"); expect(text[0]).toContain("shared");
   } finally { v.dispose(); }
 });
 

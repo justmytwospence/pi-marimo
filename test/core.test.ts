@@ -376,6 +376,64 @@ describe("the kernel hold after a turn", async () => {
   });
 });
 
+describe("package environment events (view-only)", () => {
+  const operation = (extra: Record<string, unknown> = {}) => ({ operation_id: "op", source: "kernel", action: "install", status: { kind: "running" }, packages: { example: "running" }, logs: { example: "first\n" }, log_mode: "append", ...extra });
+
+  test("snake_case identity, tagged statuses, package replacement and append/replace logs", () => {
+    const nb = new NotebookState();
+    expect(nb.apply("missing-package-alert", { packages: ["example"], isolated: true })).toBe(false);
+    nb.apply("missing-package-alert", { packages: ["ruff"], source: "server", isolated: false });
+    expect(nb.environment.missing.get("kernel")).toEqual({ packages: ["example"], isolated: true });
+    expect(nb.environment.missing.get("server")?.packages).toEqual(["ruff"]);
+    expect(nb.apply("environment-operation", operation())).toBe(false);
+    nb.apply("environment-operation", operation({ packages: { other: "queued" }, logs: { example: "second\n" } }));
+    expect(nb.environment.operations.get("kernel:op")).toMatchObject({ packages: { other: "queued" }, logs: { example: "first\nsecond\n" }, status: { kind: "running" } });
+    nb.apply("environment-operation", operation({ status: { kind: "restart-required", reason: "Restart" }, logs: { example: "replacement" }, log_mode: "replace" }));
+    expect(nb.environment.operations.get("kernel:op")?.logs.example).toBe("replacement");
+    expect(nb.environment.activeMutation).toBe(false);
+    expect(nb.environment.restartRequired.get("kernel")).toBe(true);
+    nb.apply("environment-operation", operation({ source: "server", status: { kind: "failed", error: "No tooling" } }));
+    expect(nb.environment.operations.size).toBe(2);
+    expect(nb.environment.operations.get("server:op")?.status.error).toBe("No tooling");
+  });
+
+  test("reconnect snapshots replace only their source, including logs and restart state", () => {
+    const nb = new NotebookState();
+    nb.apply("environment-operation", operation());
+    nb.apply("environment-operation", operation({ source: "server" }));
+    nb.apply("environment-state", { source: "kernel", state: { restart_required: true, operations: [operation({ operation_id: "snapshot", logs: { example: "replayed" }, status: { kind: "cancelled" } })] } });
+    expect([...nb.environment.operations.keys()]).toEqual(["server:op", "kernel:snapshot"]);
+    nb.apply("environment-state", { source: "kernel", state: { restart_required: false, operations: [] } });
+    expect(nb.environment.restartRequired.get("kernel")).toBe(false);
+    expect([...nb.environment.operations.keys()]).toEqual(["server:op"]);
+    nb.apply("kernel-ready", { cell_ids: [], codes: [] });
+    expect(nb.environment.operations.size).toBe(0);
+    expect(nb.environment.missing.size).toBe(0);
+  });
+
+  test("logs have an explicit drop notice and UTF-8 byte bound; 20 completed plus all active retained", () => {
+    const nb = new NotebookState();
+    nb.apply("environment-operation", operation({ logs: { example: "☃".repeat(200_000), other: "tail" } }));
+    const op = nb.environment.operations.get("kernel:op")!;
+    expect(op.droppedHistory).toBe(true);
+    const text = nb.environment.logText(op);
+    expect(text).toMatch(/^\[Earlier package operation logs dropped\]/);
+    expect(text).not.toContain("\ufffd");
+    expect(Buffer.byteLength(text)).toBeLessThanOrEqual(256 * 1024);
+    expect(text.endsWith("tail")).toBe(true);
+    for (let i = 0; i < 25; i++) nb.apply("environment-operation", operation({ operation_id: `done-${i}`, status: { kind: "succeeded" } }));
+    for (let i = 0; i < 30; i++) nb.apply("environment-operation", operation({ operation_id: `active-${i}` }));
+    expect([...nb.environment.operations.values()].filter(o => o.status.kind !== "running")).toHaveLength(20);
+    expect([...nb.environment.operations.values()].filter(o => o.status.kind === "running")).toHaveLength(31);
+    expect(nb.environment.operations.has("kernel:done-0")).toBe(false);
+    expect(nb.environment.operations.has("kernel:done-24")).toBe(true);
+    // The oldest-created active operation has only just completed.
+    nb.apply("environment-operation", operation({ status: { kind: "failed", error: "late finish" } }));
+    expect(nb.environment.operations.has("kernel:op")).toBe(true);
+    expect([...nb.environment.operations.values()].filter(o => o.status.kind !== "running")).toHaveLength(20);
+  });
+});
+
 describe("what the view shows beyond the agent's snapshot", () => {
   const ready = (nb: NotebookState, extra: Record<string, unknown> = {}) =>
     nb.apply("kernel-ready", { cell_ids: ["a", "b", "c"], codes: ["x = 1", "y = x + 1", "z = y * x"], names: ["load", "_", "_"], ...extra });
