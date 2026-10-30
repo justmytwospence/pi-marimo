@@ -192,13 +192,16 @@ describe("structured source output", () => {
     }
     for (const [index, part] of result.parts.entries()) {
       expect(result.rows[part.row]?.part).toBe(index);
-      expect(result.rows[part.row]?.text).toBe("─".repeat(120));
+      expect(result.rows[part.row]?.text).toBe("");
+      expect(result.rows.some(row => row.part === index && row.text.trim())).toBe(true);
       const focused = detailRows(nb, theme, 0, { cell, width: 120, codeOpen: false, diff: false, section: false, imageRows: 0, partFocus: index });
       expect(focused.parts).toEqual(result.parts);
-      expect(focused.rows[part.row]?.text).toBe("━".repeat(120));
+      expect(focused.rows[part.row]?.text).toBe("▸");
       expect(focused.rows.filter(row => row.part === index).length).toBeGreaterThan(1);
     }
     expect(result.rows.some(row => /^(?:error|printed|output|table|chart|widgets|code|markdown)$/u.test(row.text))).toBe(false);
+    expect(result.rows.some(row => /^[─━]+$/u.test(stripTerminalSequences(row.text)))).toBe(false);
+    expect(result.parts.every(part => part.output !== output)).toBe(true);
     const chart = output.blocks![7]!.output;
     expect(result.rows.some(row => row.output === chart)).toBe(true);
     expect(result.parts.some(part => part.kind === "chart" && part.output === chart)).toBe(true);

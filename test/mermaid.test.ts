@@ -4,6 +4,14 @@ import type { CdpClient } from "../src/core/cdp.js";
 import { componentProps, outputElements, parseOutputFragment, textContent } from "../src/core/html.js";
 import { MermaidRenderer, mermaidBundlePath, type MermaidState } from "../src/core/mermaid.js";
 import { mermaidRows } from "../src/ui/outputs.js";
+import { foregroundAnsi, getTerminalColorMode, parseColor, stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
+import { CellConsole } from "../src/core/console.js";
+import { SyntaxHighlighter, type SyntaxTheme } from "../src/ui/syntax.js";
+import { NotebookState } from "../src/core/notebook.js";
+import type { Followed } from "../src/core/watcher.js";
+import { NotebookView } from "../src/ui/view.js";
+import { notebookKey } from "../src/ui/identity.js";
+import type { Row } from "../src/ui/rows.js";
 
 vi.mock("@earendil-works/pi-tui", async importOriginal => ({
   ...await importOriginal<typeof import("@earendil-works/pi-tui")>(),
@@ -40,6 +48,86 @@ describe("inert fragments", () => {
     expect(textContent(parseOutputFragment('<script>bad</script><style>bad</style><p>safe</p>'))).toBe("safe");
     expect(textContent(nodes.find(n => n.tagName === "pre")!)).toBe("<x>\t\n");
     expect(componentProps(parseOutputFragment("x"))).toEqual({});
+  });
+});
+
+describe("Mermaid source panels", () => {
+  const source = "graph TD\n\tA-->B\n\n";
+  const theme: SyntaxTheme = {
+    fg: (_: string, text: string) => text, bold: (text: string) => text,
+    bg: (_: string, text: string) => `\x1b[48;2;12;34;56m${text}\x1b[49m`,
+    colors: { text: parseColor("#dddddd"), syntaxKeyword: parseColor("#ff3333"), syntaxFunction: parseColor("#cc33cc"), syntaxType: parseColor("#33cccc") },
+  };
+  async function inspect(rows: Row[], width: number, blockId: string) {
+    const panel = rows.filter(row => row.code);
+    expect(panel.map(row => row.sourceLine)).toEqual([undefined, undefined, 0, 1, 2, 3, undefined]);
+    expect(panel.every(row => row.blockId === blockId)).toBe(true);
+    expect(panel.filter(row => row.sourceLine !== undefined).map(row => stripTerminalSequences(row.text).trimEnd())).toEqual(["  graph TD", "      A-->B", "", ""]);
+    for (const row of panel) {
+      const terminal = new CellConsole();
+      try {
+        await terminal.append({ data: row.text, channel: "stdout", mimetype: "text/plain" });
+        const spans = terminal.snapshot()[0]!.styles!;
+        expect(visibleWidth(row.text)).toBe(width);
+        expect(spans.reduce((sum, span) => sum + span.width, 0)).toBe(width);
+        expect(spans.every(span => !span.bgDefault && span.bg === 0x0c2238)).toBe(true);
+        for (const [token, color] of [["graph", "#ff3333"], ["TD", "#cc33cc"], ["A", "#33cccc"], ["-->", "#ff3333"], ["B", "#33cccc"]] as const) {
+          const column = stripTerminalSequences(row.text).indexOf(token);
+          if (column < 0) continue;
+          const reference = new CellConsole();
+          try {
+            await reference.append({ data: foregroundAnsi(parseColor(color), getTerminalColorMode()) + "x", channel: "stdout", mimetype: "text/plain" });
+            const expected = reference.snapshot()[0]!.styles![0]!;
+            for (let i = column; i < column + token.length; i++) {
+              expect(spans.find(span => span.column <= i && span.column + span.width > i)).toMatchObject({ fg: expected.fg, fgMode: expected.fgMode, fgDefault: false });
+            }
+          } finally { reference.dispose(); }
+        }
+      } finally { terminal.dispose(); }
+    }
+  }
+  test.each(["failed", "rendering", "ready"] as const)("highlights complete source panels for %s diagrams", async status => {
+    const syntax = new SyntaxHighlighter();
+    const renderer = new MermaidRenderer(mock().host);
+    vi.spyOn(renderer, "request").mockReturnValue(status === "failed" ? { status, reason: "browser missing" } : status === "ready" ? { status, png: "image" } : { status });
+    try {
+      const onReady = vi.fn();
+      const options = { blockId: "diagram", width: 40, renderer, syntax, theme, onReady, showSource: true };
+      mermaidRows(source, theme, options);
+      await vi.waitFor(() => expect(onReady).toHaveBeenCalled());
+      const rows = mermaidRows(source, theme, options);
+      await inspect(rows, 40, "diagram");
+      if (status === "ready") expect(rows[0]!.image).toBeDefined();
+      else expect(rows[0]!.text).toContain(status === "failed" ? "browser missing" : "rendering…");
+    } finally { syntax.dispose(); renderer.dispose(); }
+  });
+  test("the notebook source toggle uses a highlighted rectangular panel without requesting an image", async () => {
+    const syntax = new SyntaxHighlighter();
+    const notebook = new NotebookState();
+    // The extra newline belongs to the fence delimiter, not to the source payload.
+    notebook.apply("kernel-ready", { cell_ids: ["m"], codes: [`mo.md(r\"\"\"# Diagram\n\n\`\`\`mermaid\n${source}\n\`\`\`\"\"\")`], names: ["_"] });
+    const followed: Followed = { attachment: { path: "/fixture/diagram.py", url: "http://fixture.invalid", sessionId: "s" }, notebook, connection: "connected", current: true, touchedAt: 0 };
+    const tui = { requestRender: vi.fn(), terminal: { rows: 40 } };
+    const renderer = new MermaidRenderer(mock().host);
+    const request = vi.spyOn(renderer, "request").mockReturnValue({ status: "failed", reason: "browser missing" });
+    const view = new NotebookView(tui as any, theme, notebookKey(followed), { followed: () => [followed], interrupt: async () => {}, openInBrowser: () => {}, syntax, diagrams: renderer }, () => {});
+    try {
+      view.render(100);
+      const detail = () => (view as any).lastDetail as Row[];
+      const id = detail().find(row => row.code)!.blockId!;
+      expect(request).toHaveBeenCalledWith(source, expect.anything(), expect.anything(), expect.any(Function));
+      request.mockClear();
+      (view as any).focusedBlock = id;
+      view.handleInput("s");
+      view.render(100);
+      await vi.waitFor(() => expect(syntax.request(source, "mermaid", theme).join("")).toContain("\x1b["));
+      view.render(100);
+      expect(view.snapshot().diagramSources).toEqual([id]);
+      expect(detail().some(row => row.text.includes("Mermaid:"))).toBe(false);
+      const panel = detail().filter(row => row.code);
+      await inspect(panel, visibleWidth(panel[0]!.text), id);
+      expect(request).not.toHaveBeenCalled();
+    } finally { view.dispose(); syntax.dispose(); renderer.dispose(); }
   });
 });
 

@@ -51,23 +51,20 @@ function followed(url = "http://fixture.invalid", sessionId = "s"): Followed {
 }
 function busy(f: Followed) { f.notebook.apply("cell-op", { cell_id: "cell-0", status: "running" }); }
 
-test("^U/^D scroll the detail by half a page and the page keys by a whole one; j/k move the cursor", () => {
+test("page keys scroll the detail by a whole page; j/k move the cursor", () => {
   const f = nbWith([{ id: "a", code: "x = 1", name: "long" }, { id: "b", code: "y = 2", name: "next" }]);
   f.notebook.apply("cell-op", { cell_id: "a", status: "idle", output: { channel: "output", mimetype: "text/plain", data: Array.from({ length: 40 }, (_, i) => `line ${i}`).join("\n") } });
   const view = new NotebookView(tui as any, theme, notebookKey(f), { followed: () => [f], interrupt: async () => {}, openInBrowser: () => {} }, () => {});
   try {
-    expect(view.render(100).join("\n")).toContain("│ line 0");
-    view.handleInput("\x04");
-    let text = view.render(100).join("\n");
-    expect(text).not.toContain("│ line 0");
-    expect(text).toContain("│ line 9");
-    expect(text).toMatch(/▌  long/u);
+    expect(view.render(100).join("\n")).toContain("line 0");
     view.handleInput("\x1b[6~");
-    expect(view.render(100).join("\n")).toContain("│   x = 1");
-    view.handleInput("\x15");
+    let text = view.render(100).join("\n");
+    expect(text).not.toContain("line 0");
+    expect(text).toContain("line 24");
+    expect(text).toMatch(/▌  long/u);
     view.handleInput("\x1b[5~");
     text = view.render(100).join("\n");
-    expect(text).toContain("│ line 0");
+    expect(text).toContain("line 0");
     view.handleInput("j");
     expect(view.render(100).join("\n")).toMatch(/▌  next/u);
     expect(view[INPUT_CONTEXT]()).toBe("viewer");
@@ -388,26 +385,26 @@ test("j/k move the cursor between cells; the detail shows the cell's output, fol
   try {
     const first = screen(v);
     expect(first).toMatch(/▌  first/u);
-    expect(first).toContain("│ hi");
-    expect(first).toContain("│ value & more");
+    expect((v as any).lastDetail.map((row: { text: string }) => plain(row.text).trim())).toContain("hi");
+    expect(first).toContain("value & more");
     // Folded: a short preview retains both source lines.
-    expect(first).toContain("│   ▸ python");
-    expect(first).toContain("│   print('hi')");
-    expect(first).toContain("│   x = 1");
+    expect(first).toContain("  ▸ python");
+    expect(first).toContain("  print('hi')");
+    expect(first).toContain("  x = 1");
     expect((v as any).lastParts.some((part: any) => part.kind === "code")).toBe(true);
-    expect(v.render(100).slice(3, -3).join("\n")).not.toMatch(/│ code\s/u);
+    expect(v.render(100).slice(2, -1).join("\n")).not.toMatch(/code\s/u);
     v.handleInput("j");
     expect(screen(v)).toMatch(/▌  second/u);
-    expect(screen(v)).not.toContain("│ value & more");
+    expect(screen(v)).not.toContain("value & more");
     v.handleInput("k");
     v.handleInput("B");
     const open = screen(v);
     expect(open).toMatch(/▌  first/u);
-    expect(open).toContain("│   x = 1");
-    expect(open).toContain("│   ▾ python");
+    expect(open).toContain("  x = 1");
+    expect(open).toContain("  ▾ python");
     v.handleInput("B");
-    expect(screen(v)).toContain("│   x = 1");
-    expect(screen(v)).toContain("│   ▸ python");
+    expect(screen(v)).toContain("  x = 1");
+    expect(screen(v)).toContain("  ▸ python");
   } finally { v.dispose(); }
 });
 
@@ -694,10 +691,10 @@ test("O stacks the cell's whole section in the detail, the markdown as prose; O 
   try {
     v.handleInput("j");
     expect(screen(v)).not.toContain("Some prose here.");
-    expect(screen(v)).toContain("│ forty-two");
+    expect(screen(v)).toContain("forty-two");
     v.handleInput("O");
     expect(screen(v)).toContain("Some prose here.");
-    expect(screen(v)).toContain("│ forty-two");
+    expect(screen(v)).toContain("forty-two");
     expect(screen(v)).toContain("Section view: the whole section.");
     expect(screen(v)).toMatch(/▌  x = 1/u);
     v.handleInput("O");
@@ -715,8 +712,8 @@ test("a table output is a grid in the detail, and its shape is the outline's bad
   const v = make(f);
   try {
     expect(screen(v)).toMatch(/▌  table +1×2/u);
-    expect(screen(v)).toMatch(/city\s*┃\s*pop/u);
-    expect(screen(v)).toMatch(/Oslo\s*┃\s*709,000/u);
+    expect(screen(v)).toMatch(/city\s{2,}pop/u);
+    expect(screen(v)).toMatch(/Oslo\s{2,}709,000/u);
     expect(screen(v)).toContain("rows 1–1 of 1");
   } finally { v.dispose(); }
 });
@@ -773,15 +770,15 @@ test("the mouse: the wheel scrolls, a click selects, and a double click edits in
   try {
     v.render(100);
     expect(v.handleMouse(ev("wheel", 10, { wheelDelta: 3 }))).toEqual({ handled: true });
-    expect(v.render(100)[3]).toContain("cell-3");
+    expect(v.render(100)[2]).toContain("cell-3");
     expect(v.handleMouse(ev("press", 7))).toEqual({ handled: true, render: false });
-    v.handleMouse(ev("click", 7));
+    v.handleMouse(ev("click", 6));
     expect(screen(v)).toMatch(/▌  cell-7/u);
-    expect(screen(v)).toContain("│   x = 1");
+    expect(screen(v)).toContain("  x = 1");
     // Outside the rows, and moves, are left alone before the editor owns input.
     expect(v.handleMouse(ev("click", 1))).toBeUndefined();
     expect(v.handleMouse(ev("move", 7, { button: "none" }))).toBeUndefined();
-    v.handleMouse(ev("click", 7, { clickCount: 2 }));
+    v.handleMouse(ev("click", 6, { clickCount: 2 }));
     await editorReady();
     expect(v[INPUT_CONTEXT]()).toBe("editor");
     expect(fake.editors.state?.cellId).toBe("cell-7");
@@ -988,9 +985,9 @@ test("w drives a cell's widgets: h/l change a slider, space a checkbox, Enter ty
   const v = make(f, { setWidget });
   try {
     expect(screen(v)).toMatch(/◆ n {2}━+●─+ {2}3 {2}0–10/u);
-    expect(screen(v)).toContain("w widgets");
+    expect(footerText(v.render(100))).toContain("w controls");
     v.handleInput("w");
-    expect(screen(v)).toContain("? help · enter type value");
+    expect(footerText(v.render(100))).toBe("Tab next · ←/→ adjust · Enter value · Esc done");
     v.handleInput("l");
     expect(setWidget).toHaveBeenLastCalledWith(f, expect.objectContaining({ id: "a" }), expect.objectContaining({ objectId: "a-0" }), 4);
     expect(screen(v)).toMatch(/▸ n {2}━+●─+ {2}4 {2}0–10/u);
@@ -1005,8 +1002,58 @@ test("w drives a cell's widgets: h/l change a slider, space a checkbox, Enter ty
     expect(setWidget).toHaveBeenLastCalledWith(f, expect.anything(), expect.objectContaining({ objectId: "a-2" }), "hi!");
     expect(v[INPUT_CONTEXT]()).toBe("viewer");
     v.handleInput("\x1b");
-    expect(screen(v)).not.toContain("? help · enter type value");
+    expect(footerText(v.render(100))).not.toContain("Tab next");
   } finally { v.dispose(); }
+});
+
+test.each(["\r", "\n"])("Enter %j and Tab traverse controls across folded cells, disabled controls and notebook ends", enter => {
+  const f = nbWith([{ id: "a", code: "first" }, { id: "h", code: 'mo.md("# Controls")' }, { id: "b", code: "second" }, { id: "c", code: "third" }]);
+  const checkbox = (id: string, disabled = false) => `<marimo-ui-element object-id='${id}'><marimo-checkbox data-label='&quot;${id}&quot;' data-initial-value='false' data-disabled='${disabled}'></marimo-checkbox></marimo-ui-element>`;
+  for (const id of ["a", "b", "c"]) f.notebook.apply("cell-op", { cell_id: id, output: { channel: "output", mimetype: "text/html", data: checkbox(id, id === "b") } });
+  const setWidget = vi.fn();
+  const v = make(f, { setWidget });
+  const focus = (cell: string) => { screen(v); expect(v.snapshot().widget).toMatchObject({ cell, index: 0 }); };
+  try {
+    screen(v); v.handleInput("j"); v.handleInput("z"); // fold the destination section
+    v.handleInput("k"); v.handleInput(enter);
+    focus("a");
+    v.handleInput("\t"); focus("b");
+    expect(v.snapshot().cursor).toBe("b");
+    expect(screen(v)).toContain("▸ b");
+    v.handleInput(" "); expect(setWidget).not.toHaveBeenCalled();
+    v.handleInput("j"); focus("c");
+    v.handleInput("\t"); focus("a");
+    v.handleInput("\x1b[Z"); focus("c");
+    v.handleInput("k"); focus("b");
+    v.handleInput("k"); focus("a");
+    v.handleInput(" ");
+    expect(setWidget).toHaveBeenCalledExactlyOnceWith(f, expect.objectContaining({ id: "a" }), expect.objectContaining({ objectId: "a" }), true);
+    f.notebook.apply("cell-op", { cell_id: "a", output: { channel: "output", mimetype: "text/plain", data: "removed" } });
+    screen(v); expect(v.snapshot().widget).toBeUndefined();
+    v.handleInput("j"); v.handleInput("j"); v.handleInput("w"); focus("b");
+    f.connection = "disconnected";
+    screen(v); expect(v.snapshot().widget).toBeUndefined();
+    v.handleInput(" "); expect(setWidget).toHaveBeenCalledTimes(1);
+  } finally { v.dispose(); }
+});
+
+test("b still edits a control cell, and Enter edits an explicitly focused source part", async () => {
+  const f = nbWith([{ id: "a", code: "controls = make_controls()" }]);
+  f.notebook.apply("cell-op", { cell_id: "a", output: { channel: "output", mimetype: "text/html", data: widgetHtml } });
+  const fake = fakeEditors();
+  const v = make(f, { editors: fake.editors, setWidget: vi.fn() });
+  try {
+    screen(v); v.handleInput("b"); await editorReady();
+    expect(fake.editors.state).toMatchObject({ cellId: "a", kind: "python" });
+    expect(v.snapshot().widget).toBeUndefined();
+    await fake.editors.close(); screen(v);
+    const parts = (v as any).lastParts;
+    (v as any).partCell = "a"; (v as any).part = parts.findIndex((p: any) => p.kind === "code");
+    expect((v as any).part).toBeGreaterThanOrEqual(0);
+    v.handleInput("\r"); await editorReady();
+    expect(fake.editors.state).toMatchObject({ cellId: "a", kind: "python" });
+    expect(v.snapshot().widget).toBeUndefined();
+  } finally { v.dispose(); fake.editors.dispose(); }
 });
 
 test("a asks the agent about the cell from a prompt docked in the view", () => {
@@ -1107,7 +1154,9 @@ test("wide, the outline and the detail sit side by side, every line exactly as w
       const text = lines.join("\n");
       // The title is where its markdown cell is, after the imports cell, and the cells are titled by what they are.
       expect(text).toMatch(/imports[\s\S]*Coffee sales[\s\S]*daily[\s\S]*model[\s\S]*chart/u);
-      expect(text).toMatch(/▌ ?  imports.* │ imports/u);
+      expect(text).toMatch(/▌ ?  imports\s{3,}imports/u);
+      expect(text).not.toContain(" │ ");
+      expect(lines.some(line => /^\s*[─━]{10,}\s*$/u.test(plain(line)))).toBe(false);
       for (const id of ["Zx1a", "Hd2b", "Ld3c", "Bm4d", "Ch5e"]) expect(text).not.toContain(id);
     }
     v.handleInput("j");
@@ -1133,13 +1182,14 @@ test("narrow, a few outline rows around the cursor sit above the detail, and the
     v.handleInput("j");
     const lines = v.render(80);
     const text = lines.join("\n");
-    // The outline (with the cursor's neighbours), a rule, then the cell's detail with its traceback.
-    expect(text).toMatch(/daily[\s\S]*▌ {2}✗ model +\[KeyError\][\s\S]*chart[\s\S]*─{20,}[\s\S]*Traceback \(most recent call last\)/u);
+    // A single blank gap separates the outline from the detail, not a decorative rule.
+    expect(text).toMatch(/daily[\s\S]*▌ {2}✗ model +\[KeyError\][\s\S]*chart[\s\S]*Traceback \(most recent call last\)/u);
     expect(text).toContain("enter edit");
-    const rule = lines.findIndex((l, i) => i > 2 && /^ ─{20,} /u.test(l));
+    const rule = 2 + (v as any).panes.detailTop - 1;
+    expect(plain(lines[rule]!).trim()).toBe("");
     // As many outline rows above the cursor as below it.
     const cursorRow = lines.findIndex((l) => l.includes("▌  ✗ model"));
-    expect(cursorRow - 3).toBe(rule - 1 - cursorRow);
+    expect(cursorRow - 2).toBe(rule - 1 - cursorRow);
     expect(rule).toBeGreaterThan(3);
     expect(rule).toBeLessThan(12);
     // B opens the code for reading in place.
@@ -1175,9 +1225,9 @@ test("the detail of a failed cell shows its error, traceback and source", async 
     expect(text).toMatch(/▌ {2}✗ model +\[KeyError\]/u);
     expect(text).toContain("KeyError: 'revenue'");
     expect(text).toContain("Traceback (most recent call last)");
-    expect(text).toContain("│   model = boom(daily)");
+    expect(text).toContain("  model = boom(daily)");
     expect((v as any).lastParts.map((part: any) => part.kind)).toEqual(["error", "code"]);
-    expect((v as any).lastDetail.filter((r: any) => /^─+$/u.test(plain(r.text)))).toHaveLength(2);
+    expect((v as any).lastDetail.filter((r: any) => /^[─━]+$/u.test(plain(r.text)))).toHaveLength(0);
   } finally { v.dispose(); }
 });
 
@@ -1257,20 +1307,74 @@ test("a view started from a state shows the same cell and code", () => {
   try {
     const text = screen(v);
     expect(text).toContain("▌  cell-10");
-    expect(text).toContain("│   x = 10");
+    expect(text).toContain("  x = 10");
   } finally { v.dispose(); }
 });
 
 // --- parts, tables, markdown editing, code blocks ---
 
-test("ctrl+j and ctrl+k move between sections", () => {
+test.each([false, true])("detail finalization drops mixed-output wrappers and remaps anchors (section=%s)", section => {
+  const f = nbWith([{ id: "a", code: "mo.md(dynamic)" }]);
+  const cell = f.notebook.cells.get("a")!;
+  vi.spyOn(f.notebook, "isMarkdown").mockReturnValue(true);
+  const first = { kind: "text" as const, text: "first" };
+  const second = { kind: "widgets" as const, text: "", widgets: [] as NonNullable<typeof cell.output>["widgets"] };
+  cell.output = { kind: "text", text: "", blocks: [{ id: "one", output: first }, { id: "two", output: second }] };
+  // An ordered widget leaf retains its flat cell index, even after its wrapper disappears.
+  const widget = { objectId: "control", kind: "checkbox", tag: "marimo-checkbox", label: "control", options: [], value: false } as any;
+  second.widgets!.push(widget);
+  cell.output.widgets = [widget];
+  const render = (partFocus?: number) => detailRows(f.notebook, theme, 0, { cell, width: 80, section, codeOpen: true, diff: false, partFocus });
+  const d = render();
+  expect(d.parts.map(p => p.kind)).toEqual(section ? ["output", "widgets"] : ["output", "widgets", "code"]);
+  expect(d.parts[0]!.output).toBe(first);
+  expect(d.parts[1]!.output).toBe(second);
+  expect(d.parts[1]!.widgetIndices).toEqual([0]);
+  d.parts.forEach((p, index) => {
+    expect(d.rows[p.row]!.part).toBe(index);
+    expect(d.rows.some(r => r.part === index && r.text.trim())).toBe(true);
+  });
+  const widgetRow = d.widgetRows.get("a\0" + 0)!;
+  expect(d.rows[widgetRow]!.widget).toEqual({ cell: "a", index: 0 });
+  expect(d.rows.every(r => !/^[─━]+$/.test(plain(r.text)))).toBe(true);
+  if (section) expect(d.focusRow).toBe(d.parts[0]!.row);
+  const focused = render(1);
+  expect(plain(focused.rows[focused.parts[1]!.row]!.text)).toBe("▸");
+});
+
+test("structural gaps compact without consuming source padding, blank lines or editor rows", () => {
+  const f = nbWith([{ id: "a", code: "x = 1\n\n" }]);
+  const cell = f.notebook.cells.get("a")!;
+  const options = { cell, width: 80, section: false, codeOpen: true, diff: false };
+  const d = detailRows(f.notebook, theme, 0, options);
+  const p = d.parts.find(p => p.kind === "code")!;
+  expect(d.rows[p.row]!.text).toBe("");
+  expect(d.rows[p.row - 1]!.text.trim()).not.toBe("");
+  expect(d.rows.filter(r => r.sourceLine !== undefined).map(r => r.sourceLine)).toEqual([0, 1, 2]);
+  const source = d.rows.filter(r => r.blockId === "a:source");
+  expect(source[1]!.text.trim()).toBe("");
+  expect(source.at(-1)!.text.trim()).toBe("");
+  const edited = detailRows(f.notebook, theme, 0, { ...options, inlineEditor: { cellId: "a", kind: "python", rows: () => [{ text: "", editorRow: 0 }, { text: "", editorRow: 1 }] } });
+  expect(edited.rows.filter(r => r.editorRow !== undefined).map(r => r.editorRow)).toEqual([0, 1]);
+  cell.output = { kind: "chart", text: "", mermaid: ["graph TD; A-->B"] };
+  const image = detailRows(f.notebook, theme, 0, { ...options, diagramRows: () => [
+    { text: "picture", image: { index: 0, height: 3, alt: "diagram" } },
+    { text: "", image: { index: 1, height: 3, alt: "diagram" } },
+    { text: "", image: { index: 2, height: 3, alt: "diagram" } },
+  ] });
+  expect(image.rows.filter(r => r.image).map(r => r.image!.index)).toEqual([0, 1, 2]);
+});
+
+test("ctrl+d and ctrl+u move between sections; ctrl+k no longer navigates", () => {
   const f = nbWith([{ id: "h1", code: 'mo.md("# One")' }, { id: "a", code: "a = 1" }, { id: "h2", code: 'mo.md("# Two")' }, { id: "c", code: "c = 3" }]);
   const v = make(f);
   try {
     expect(screen(v)).toMatch(/▌ One/u);
-    v.handleInput("\n");
-    expect(screen(v)).toMatch(/▌ Two/u);
     v.handleInput("\x0b");
+    expect(screen(v)).toMatch(/▌ One/u);
+    v.handleInput("\x04");
+    expect(screen(v)).toMatch(/▌ Two/u);
+    v.handleInput("\x15");
     expect(screen(v)).toMatch(/▌ One/u);
   } finally { v.dispose(); }
 });
@@ -1291,11 +1395,10 @@ test("n and p walk a cell's parts and B opens the code for reading", async () =>
     expect((v as any).lastDetail.some((r: any) => /^(code|printed|output|chart|table|widgets|markdown)$/.test(plain(r.text).trim()))).toBe(false);
     v.handleInput("n");
     expect(focused()).toBe("error");
-    expect(screen(v)).toContain("│ KeyError: k");
+    expect(screen(v)).toContain("KeyError: k");
     v.handleInput("n");
     expect(focused()).toBe("printed");
-    expect(screen(v)).toContain("│ one");
-    expect(screen(v)).toContain("│ two");
+    expect((v as any).lastDetail.map((row: { text: string }) => plain(row.text).trim())).toEqual(expect.arrayContaining(["one", "two"]));
     v.handleInput("n");
     expect(focused()).toBe("widgets");
     expect(screen(v)).toMatch(/◆ s/u);
@@ -1332,14 +1435,129 @@ test.each([46, 80, 100, 120, 180])("table focus uses the rendered column width (
       data.selection = selection;
       const lines = v.render(width);
       const detailWidth = width - (v as any).panes.detailLeft - CONTENT_LEFT;
-      expect(ensure).toHaveBeenLastCalledWith(detailWidth - (selection === "multi" || selection === "single" ? 5 : 0));
+      expect(ensure).toHaveBeenLastCalledWith(detailWidth - 1);
       expect(lines.every(line => visibleWidth(line) === width)).toBe(true);
       const row = (v as any).lastDetail.findIndex((r: any) => r.tableRow === 0);
-      const y = 3 + (v as any).panes.detailTop + row - (v as any).detailScroll;
+      const y = 2 + (v as any).panes.detailTop + row - (v as any).detailScroll;
       session.row = 1;
       v.handleMouse({ type: "click", button: "left", x: (v as any).panes.detailLeft, y, screenX: 0, screenY: y, width, height: 28, shift: false, alt: false, ctrl: false } as any);
       expect(session.row).toBe(0);
     }
+  } finally { v.dispose(); clearTableSessions(); }
+});
+
+test.each([46, 100, 180])("table viewport pins header/status and mouse targets the same column as keyboard (%i columns)", async width => {
+  const { clearTableSessions, tableSession } = await import("../src/ui/table-session.js");
+  clearTableSessions();
+  const f = nbWith([{ id: "a", code: "df" }]);
+  f.notebook.apply("cell-op", { cell_id: "a", output: { channel: "output", mimetype: "text/html", data: tableHtml() } });
+  const cell = f.notebook.cells.get("a")!, data = cell.output!.table!;
+  data.records = Array.from({ length: 40 }, (_, i) => ({ city: `City ${i}`, pop: i, _marimo_row_id: String(i) }));
+  data.rows = data.records.map(r => [String(r.city), String(r.pop)]);
+  data.pageSize = 40; data.totalRows = 40;
+  const session = tableSession(`${notebookKey(f)}\0${data.objectId}`, cell, data);
+  const setTableSelection = vi.fn();
+  const call = vi.fn(async () => ({ data: JSON.stringify(data.records), total_rows: 40 }));
+  const v = make(f, { table: { call, file: async () => "[]" }, setTableSelection });
+  const click = (index: number, column: string, shift = false) => {
+    const row = (v as any).lastDetail[index];
+    const bounds = row.tableColumns.find((c: any) => c.column === column);
+    expect(bounds).toBeDefined();
+    const x = (v as any).panes.detailLeft + bounds.start;
+    const y = 2 + (v as any).panes.detailTop + index;
+    v.handleMouse({ type: "click", button: "left", x, y, screenX: x, screenY: y, width, height: 28, shift, alt: false, ctrl: false } as any);
+  };
+  try {
+    v.render(width); (v as any).detailScroll = 2;
+    v.handleInput("t"); v.render(width);
+    const header = (v as any).lastDetail.findIndex((r: any) => r.tableHeader);
+    const status = (v as any).lastDetail.length - 1;
+    for (let i = 0; i < 30; i++) v.handleInput("j");
+    v.render(width);
+    expect(session.row).toBe(30); expect(session.rowOffset).toBeGreaterThan(0);
+    expect((v as any).lastDetail[header].tableHeader).toBe(true);
+    expect(plain((v as any).lastDetail[status].text)).toContain("selected");
+    expect((v as any).lastDetail.some((r: any) => r.tableRow === 30)).toBe(true);
+    expect((v as any).detailScroll).toBe(0);
+    const index = (v as any).lastDetail.findIndex((r: any) => r.tableRow === 30);
+    click(index, "pop"); expect(session.col).toBe(1); expect(session.row).toBe(30);
+    v.handleInput("h"); expect(session.col).toBe(0);
+    v.handleInput("l"); expect(session.col).toBe(1);
+    const y = 2 + (v as any).panes.detailTop + index;
+    v.handleMouse({ type: "wheel", button: "none", x: (v as any).panes.detailLeft, y, screenX: 0, screenY: y, width, height: 28, shift: false, alt: false, ctrl: false, wheelDelta: 2 } as any);
+    v.render(width); expect(session.row).toBe(32);
+    expect((v as any).lastDetail[header].tableHeader).toBe(true);
+    expect(setTableSelection).not.toHaveBeenCalled(); expect(call).not.toHaveBeenCalled();
+    click(header, "city"); await editorReady();
+    expect(call).toHaveBeenLastCalledWith(f, "t-0", "search", expect.objectContaining({ sort: [{ by: "city", descending: false }] }));
+    v.render(width); click(header, "pop", true); await editorReady();
+    expect(call).toHaveBeenLastCalledWith(f, "t-0", "search", expect.objectContaining({ sort: [{ by: "city", descending: false }, { by: "pop", descending: false }] }));
+    expect(setTableSelection).not.toHaveBeenCalled();
+    v.handleInput("\x1b"); expect((v as any).detailScroll).toBe(2);
+  } finally { v.dispose(); clearTableSessions(); }
+});
+
+test("table resize, fit, cancel-first column picker and raw value viewer preserve the session", async () => {
+  const { clearTableSessions, tableSession } = await import("../src/ui/table-session.js");
+  clearTableSessions();
+  const f = nbWith([{ id: "a", code: "df" }]);
+  f.notebook.apply("cell-op", { cell_id: "a", output: { channel: "output", mimetype: "text/html", data: tableHtml() } });
+  const cell = f.notebook.cells.get("a")!, data = cell.output!.table!;
+  const raw = "first line\n" + "long value ".repeat(20) + "RAW_END";
+  data.records![0]!.city = raw;
+  const session = tableSession(`${notebookKey(f)}\0${data.objectId}`, cell, data);
+  const confirm = vi.fn(async (_title: string, choices: string[]) => choices[2]);
+  const call = vi.fn(async () => ({})), copy = vi.fn(), saveTable = vi.fn(async () => "file.csv");
+  const v = make(f, { table: { call, file: async () => "[]" }, confirm, copy, saveTable });
+  try {
+    v.render(100); v.handleInput("t"); v.render(100);
+    v.handleInput("H"); const narrow = session.columnWidths.get("city")!;
+    v.handleInput("L"); expect(session.columnWidths.get("city")).toBe(narrow + 2);
+    v.handleInput("="); expect(session.columnWidths.get("city")).toBeGreaterThan(narrow);
+    v.handleInput("v"); expect(v.snapshot().message?.text).toBe(raw);
+    v.handleInput("G"); expect(screen(v)).toContain("RAW_END");
+    v.handleInput("\x1b"); expect(v.snapshot().message).toBeUndefined();
+    expect(v.snapshot().table).toMatchObject({ cell: "a", objectId: "t-0" });
+    expect(session.col).toBe(0); expect(session.row).toBe(0);
+    v.handleInput("\x07"); await editorReady();
+    expect(confirm).toHaveBeenCalledWith("Choose table column", ["Cancel", "1. city", "2. pop"]);
+    expect(session.col).toBe(1);
+    confirm.mockResolvedValueOnce(undefined);
+    v.handleInput("\x07"); await editorReady();
+    expect(confirm).toHaveBeenCalledTimes(2); expect(session.col).toBe(1);
+    expect(call).not.toHaveBeenCalled(); expect(copy).not.toHaveBeenCalled(); expect(saveTable).not.toHaveBeenCalled();
+  } finally { v.dispose(); clearTableSessions(); }
+});
+
+test("active tables sanitize producer bytes without merging identically displayed columns", async () => {
+  const { clearTableSessions, tableSession } = await import("../src/ui/table-session.js");
+  clearTableSessions();
+  const f = nbWith([{ id: "a", code: "df" }]);
+  f.notebook.apply("cell-op", { cell_id: "a", output: { channel: "output", mimetype: "text/html", data: tableHtml() } });
+  const cell = f.notebook.cells.get("a")!, data = cell.output!.table!;
+  const first = "city\x1b[31m";
+  const second = "city\x1b[32m";
+  const payload = "value\x1b]52;c;Y29weQ==\x07";
+  data.columns = [first, second];
+  data.records = [{ [first]: payload, [second]: "other", _marimo_row_id: "0" }];
+  data.rows = [[payload, "other"]];
+  data.numeric = [false, false];
+  const session = tableSession(`${notebookKey(f)}\0${data.objectId}`, cell, data);
+  const confirm = vi.fn(async (_title: string, choices: string[]) => choices[2]);
+  const call = vi.fn(async () => ({ data: JSON.stringify(data.records), total_rows: 1 }));
+  const v = make(f, { table: { call, file: async () => "[]" }, confirm });
+  try {
+    v.render(100); v.handleInput("t");
+    const rendered = screen(v);
+    expect(rendered).not.toContain("\x1b]52;");
+    expect(rendered).not.toContain("\x1b[31m");
+    expect(rendered).not.toContain("\x1b[32m");
+    expect(session.cellValue()).toBe(payload);
+    v.handleInput("\x07"); await editorReady();
+    expect(confirm).toHaveBeenCalledWith("Choose table column", ["Cancel", "1. city", "2. city"]);
+    expect(session.columnName()).toBe(second);
+    v.handleInput("s"); await editorReady();
+    expect(call).toHaveBeenCalledWith(f, data.objectId, "search", expect.objectContaining({ sort: [{ by: second, descending: false }] }));
   } finally { v.dispose(); clearTableSessions(); }
 });
 
@@ -1465,7 +1683,7 @@ test("Enter edits native Markdown text and saves its exact body with the origina
   const saveCell = vi.fn(async (_f: Followed, _id: string, code: string, _expected: string) => ({ canonicalCode: code, requestId: "save-1" }));
   const v = make(f, { editors: fake.editors, saveCell });
   try {
-    expect(screen(v)).not.toContain("│ mo.md");
+    expect(screen(v)).not.toContain("mo.md");
     v.handleInput("\r");
     await editorReady();
     expect(v[INPUT_CONTEXT]()).toBe("editor");
@@ -1487,7 +1705,7 @@ test("code has a full-width continuous background block when the theme has one",
     v.handleInput("B");
     const text = screen(v);
     expect(text).toContain("<toolPendingBg>");
-    expect(text).not.toContain("│ y = 2");
+    expect(text).not.toContain("│");
     const source = (v as any).lastDetail.filter((row: any) => row.sourceLine !== undefined);
     expect(source).toHaveLength(3);
     const background = (row: { text: string }) => row.text.replace(/<\/?toolPendingBg>/gu, "");
@@ -1535,19 +1753,19 @@ test.each([46, 80, 100, 120, 180])("the mouse drives widgets: a press on a slide
   } finally { v.dispose(); }
 });
 
-test("ctrl+j and ctrl+k move through a filter's matches, while typing it and after", () => {
+test("ctrl+d and ctrl+u move through a filter's matches without leaving input", () => {
   const f = nbWith([{ id: "h", code: 'mo.md("# H")' }, { id: "a", code: "xa = 1", name: "load_a" }, { id: "b", code: "y = 2" }, { id: "c", code: "xc = 3", name: "load_c" }]);
   const v = make(f);
   try {
     v.handleInput("/");
     for (const ch of "load") v.handleInput(ch);
     expect(screen(v)).toMatch(/▌  load_a/u);
-    v.handleInput("\n");
+    v.handleInput("\x04");
     expect(v[INPUT_CONTEXT]()).toBe("filter");
     expect(screen(v)).toMatch(/▌  load_c/u);
-    v.handleInput("\x0b");
+    v.handleInput("\x15");
     expect(screen(v)).toMatch(/▌  load_a/u);
-    v.handleInput("\n");
+    v.handleInput("\x04");
     v.handleInput("\r");
     // Found: every cell shows again, the cursor on the match.
     expect(screen(v)).toMatch(/▌ +  load_c/u);
@@ -1596,13 +1814,13 @@ test("code is open by default; B folds a cell's code and opens it again", () => 
   const f = nbWith([{ id: "a", code: "x = 1\ny = 2" }]);
   const v = make(f);
   try {
-    expect(screen(v)).toContain("│   y = 2");
+    expect(screen(v)).toContain("  y = 2");
     v.handleInput("B");
     expect(screen(v)).toContain("▸ python");
-    expect(screen(v)).toContain("│   x = 1");
-    expect(screen(v)).toContain("│   y = 2");
+    expect(screen(v)).toContain("  x = 1");
+    expect(screen(v)).toContain("  y = 2");
     v.handleInput("B");
-    expect(screen(v)).toContain("│   y = 2");
+    expect(screen(v)).toContain("  y = 2");
     expect(screen(v)).toContain("▾ python");
   } finally { v.dispose(); }
 });
@@ -1737,19 +1955,19 @@ test.each([46, 80, 100, 120, 180].flatMap(width => ["t", "w"].map(key => ({ widt
       const lines = v.render(width);
       expect(lines).toHaveLength(12);
       expect(lines.every(line => visibleWidth(line) === width)).toBe(true);
-      expect(footerText(lines)).toBe(`? help · enter ${key === "t" ? "row detail" : "type value"}`);
+      expect(footerText(lines)).toBe(key === "t" ? "? help · enter row detail" : width === 46 ? "Tab next · ←/→ adjust · Enter value" : "Tab next · ←/→ adjust · Enter value · Esc done");
       v.handleInput("?");
       const help = v.render(width);
       expect(help).toHaveLength(12);
       expect(help.every(line => visibleWidth(line) === width)).toBe(true);
       expect(help.join("\n")).toContain("Keyboard shortcuts");
       expect(help.join("\n").match(/Keyboard shortcuts/gu)).toHaveLength(1);
-      expect(footerText(help)).toBe("");
+      expect(footerText(help)).toContain("Tab categories · / search · Esc back");
     } finally { v.dispose(); }
   },
 );
 const shortTui = () => ({ requestRender: vi.fn(), terminal: { rows: 12 } });
-const footerText = (lines: string[]) => plain(lines.at(-2)!).trim();
+const footerText = (lines: string[]) => plain(lines.at(-1)!).trim();
 const helpMouse = (type: string, extra = {}) => ({
   type, button: type === "wheel" ? "none" : "left", x: 6, y: 5,
   screenX: 6, screenY: 5, width: 80, height: 12,
@@ -1950,15 +2168,16 @@ test.each([46, 80, 100, 120, 180])("STEP6 bounded errors disclose a complete cap
     expect(lines.length).toBe(12);
     expect(lines.every(line => visibleWidth(line) === width)).toBe(true);
     expect(footerText(lines)).toBe(before);
-    const messageRows = lines.slice(0, -3).map(line => plain(line).trim());
-    if (width < 100) expect(messageRows.join(" ")).toContain("F8 more");
+    const messageRows = lines.slice(0, -1).map(line => plain(line).trim());
+    if (width === 46) expect(messageRows.join(" ")).toContain("F8 more");
+    else expect(messageRows.join(" ")).toContain("FINAL_ERROR_TOKEN");
     v.handleInput("\x1b[19~"); v.render(width); v.handleInput("G");
     expect(v.render(width).join("\n")).toContain("FINAL_ERROR_TOKEN");
     v.handleInput("\x1b");
     expect(footerText(lines)).not.toContain("kernel");
     v.handleInput("A");
     const armed = v.render(width);
-    expect(armed.at(-4)).toContain("A again to run all cells");
+    expect(armed.at(-2)).toContain("A again to run all cells");
     expect(footerText(armed)).toBe(before);
   } finally { v.dispose(); }
 });
@@ -1972,7 +2191,7 @@ test("help retains the underlying mode and filter without repeating their header
     const moved = make(f, { initial: { ...v.snapshot(), typing: false } });
     try {
       moved.handleInput("?");
-      expect(plain(moved.render(120)[1]!).trim()).toBe("");
+      expect(plain(moved.render(120)[1]!).trim()).toBe("Keyboard shortcuts");
       expect(moved.snapshot().filter).toBe("load");
     } finally { moved.dispose(); }
     v.handleInput("\x1b"); v.handleInput("v");
@@ -2041,9 +2260,9 @@ test.each([0, 1, 3, 5, 6, 7, 10, 12, 20])("STEP6 many-screen transient is bounde
     (v as any).note = note;
     const lines = v.render(46);
     expect(lines.length).toBeLessThanOrEqual(height);
-    expect((v as any).lastTransient).toBe(Math.min(3, Math.max(0, height - 10)));
+    expect((v as any).lastTransient).toBe(Math.min(3, Math.max(0, height - 7)));
     if (height >= 10) expect((v as any).lastPage).toBeGreaterThanOrEqual(4);
-    if (height >= 2 && height <= 10) expect(lines.join("\n")).toContain("F8 message");
+    if (height >= 2 && height <= 7) expect(lines.join("\n")).toContain("F8 message");
     terminal.terminal.rows = 12;
     v.render(46); v.handleInput("\x1b[19~");
     (v as any).note = "new asynchronous notice";

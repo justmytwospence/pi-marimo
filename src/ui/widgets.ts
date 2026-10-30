@@ -124,6 +124,7 @@ function stepped(v: number, step: number, k: number, lo: number | undefined, hi:
 
 /** What a key does to a widget: its next value and sub-position, and whether marimo should hear of it; undefined when the key does nothing. */
 export function nextValue(w: Widget, value: unknown, action: WidgetAction, sub: number): { value: unknown; sub: number; send: boolean } | undefined {
+  if (w.disabled) return undefined;
   const k = by(action);
   switch (w.kind) {
     case "slider": {
@@ -202,6 +203,7 @@ export type WidgetHit =
   | { type: true };
 
 export function widgetHit(w: Widget, value: unknown, col: number): WidgetHit | undefined {
+  if (w.disabled) return undefined;
   const label = w.label && w.kind !== "button" ? visibleWidth(w.label) + 2 : 0;
   const c = col - label;
   if (c < 0) return undefined;
@@ -256,11 +258,24 @@ export function widgetHit(w: Widget, value: unknown, col: number): WidgetHit | u
 
 /** The widgets whose value is typed (Enter opens a prompt for it). */
 export function typeable(w: Widget): boolean {
-  return w.kind === "text" || w.kind === "text-area" || w.kind === "date" || w.kind === "number";
+  return w.kind === "text" || w.kind === "text-area" || w.kind === "date" || w.kind === "number" || w.kind === "slider" || w.kind === "range-slider";
 }
 
 /** A typed value for a widget, or what is wrong with it. */
 export function typedValue(w: Widget, text: string): { value: unknown } | { error: string } {
+  if (w.disabled) return { error: "This widget is disabled." };
+  if (w.kind === "slider" || w.kind === "range-slider") {
+    const start = w.start ?? 0;
+    const stop = w.stop ?? 1;
+    const parts = text.split(",").map((part) => part.trim());
+    const values = parts.map(Number);
+    const pair = w.kind === "range-slider";
+    if (parts.length !== (pair ? 2 : 1) || parts.some((part) => !part) || values.some((n) => !Number.isFinite(n) || n < start || n > stop) || (pair && values[0]! > values[1]!)) {
+      return { error: pair ? `Enter lower, upper between ${fmt(start)} and ${fmt(stop)}, in order.` : `Enter a number between ${fmt(start)} and ${fmt(stop)}.` };
+    }
+    const snapped = values.map((n) => w.steps.length ? w.steps[nearest(w.steps, n)]! : valueAt(w, position(w, n)));
+    return { value: pair ? snapped : snapped[0] };
+  }
   if (w.kind === "number") {
     const n = Number(text.trim());
     const bounded = w.start !== undefined && w.stop !== undefined;

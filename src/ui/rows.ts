@@ -28,10 +28,14 @@ export interface Row {
   /** A source panel row, which a click opens or folds. */
   code?: boolean;
   widget?: { cell: string; index: number };
-  /** A part separator or content row in the detail (its index in the parts list). */
+  /** A part's blank focus anchor or owned content row (index in the finalized parts list).
+   * Adjacent structural gaps share an anchor; source padding, images and editor rows stay intact. */
   part?: number;
   /** A body row of a table grid: its index within the page. */
   tableRow?: number;
+  /** Header or body hit bounds in terminal columns relative to the detail pane. */
+  tableColumns?: Array<{ column: string; start: number; end: number }>;
+  tableHeader?: boolean;
   tableObjectId?: string;
   output?: CellOutput;
   /** A line of the variables pane. */

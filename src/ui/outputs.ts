@@ -22,13 +22,6 @@ const outputPrefix = (opts: RowOptions, theme: FrameTheme, pad: string, tone: "a
   `${pad}${opts.bar === "" ? "" : `${opts.bar ?? theme.fg(tone, "▍")} `}`;
 /** The columns a picture may take: the pane's width less the visible output prefix. */
 const imageCols = (opts: RowOptions, prefix: string): number => Math.max(10, (opts.width ?? 80) - visibleWidth(prefix));
-// Table records, dtypes, summaries and status labels also cross the producer boundary.
-function displayText<T>(value: T): T {
-  if (typeof value === "string") return clean(value) as T;
-  if (Array.isArray(value)) return value.map(displayText) as T;
-  if (value && typeof value === "object" && Object.getPrototypeOf(value) === Object.prototype) return Object.fromEntries(Object.entries(value).map(([key, item]) => [clean(key), displayText(item)])) as T;
-  return value;
-}
 const images = new WeakMap<CellOutput, { key: string; img: Image }>();
 const diagramImages = new WeakMap<object, CellOutput>();
 
@@ -184,11 +177,11 @@ export function outputRows(cell: Cell, theme: FrameTheme, opts: RowOptions, limi
     const card = opts.tableCard?.(cell, output);
     if (card) return card.map(text => ({ text: `${prefix}${text}` }));
     const driven = opts.table?.(cell, output) ?? { data: output.table };
-    const data = displayText(driven.data);
+    const data = driven.data;
     const have = data.records?.length ? data.records.length : data.rows.length;
     if (!have && (data.dataRef || data.lazy)) push(`${prefix}${theme.fg("dim", "loading table…")}`);
     else {
-      const grid = tableGrid(data, (opts.width ?? 80) - visibleWidth(prefix), theme, Math.min(limits.tableRows, Math.max(1, have)), displayText(driven.render));
+      const grid = tableGrid(data, (opts.width ?? 80) - visibleWidth(prefix), theme, Math.min(limits.tableRows, Math.max(1, have)), driven.render);
       grid.lines.forEach((line, i) => out.push({ text: `${prefix}${line}`, ...(grid.rowAt[i] !== undefined ? { tableRow: grid.rowAt[i]! } : {}) }));
     }
   } else if (output && !(output.kind === "widgets" && !output.text)) {

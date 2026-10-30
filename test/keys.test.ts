@@ -67,7 +67,9 @@ test("encoded printable bindings preserve uppercase and shifted punctuation", ()
 
 test("modified printables never collide with plain or uppercase bindings", () => {
   for (const event of [1, 2]) {
-    expect(commandFor("notebook", `\x1b[106;5:${event}u`)?.id).toBe("section-next");
+    expect(commandFor("notebook", `\x1b[100;5:${event}u`)?.id).toBe("section-next");
+    expect(commandFor("notebook", `\x1b[117;5:${event}u`)?.id).toBe("section-previous");
+    expect(commandFor("notebook", `\x1b[106;5:${event}u`)).toBeUndefined();
     expect(commandFor("notebook", `\x1b[99;5:${event}u`)?.id).toBe("leave");
     for (const modifier of [3, 4, 6, 7, 8, 9]) {
       for (const code of ["106", "98:66", "47:63", "35"]) {
@@ -116,7 +118,7 @@ for (const width of [46, 80, 100, 120, 180]) describe(`width ${width}`, () => {
 });
 
 test.each([
-  ["ctrl+j", "Ctrl+J"], ["shift+tab", "Shift+Tab"], ["enter", "Enter"],
+  ["ctrl+d", "Ctrl+D"], ["ctrl+u", "Ctrl+U"], ["shift+tab", "Shift+Tab"], ["enter", "Enter"],
   ["escape", "Esc"], ["up", "↑"], ["f8", "F8"], [":MarimoRun", ":MarimoRun"],
 ])("help formats %s as %s without changing registry bindings", (key, expected) => {
   expect(formatHelpKey(key)).toBe(expected);
@@ -143,5 +145,8 @@ test("footer drops lowest priority first and never splits a token", () => {
 test("editor ordinary keys are not host commands", () => {
   for (const key of ["?", "#", "\r", "q", "!", "\\", "H", "L", "\x1b", "b", "P", "r"]) expect(commandFor("editor", key)).toBeUndefined();
   expect(commandFor("notebook", "\r")?.id).toBe("activate");
+  expect(commandFor("notebook", "\n")?.id).not.toBe("section-next");
+  expect(commandFor("notebook", "\x04")?.id).toBe("section-next");
+  expect(commandFor("notebook", "\x15")?.id).toBe("section-previous");
   expect(commandFor("notebook", "B")?.id).toBe("fold-code");
 });

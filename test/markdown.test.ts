@@ -4,8 +4,65 @@ import { extractCodeBlocks, markdownRows } from "../src/ui/markdown.js";
 import { SyntaxHighlighter, type SyntaxTheme } from "../src/ui/syntax.js";
 import { liveGeometry } from "../src/ui/live-charts.js";
 import type { RowOptions } from "../src/ui/rows.js";
+import { editableMarkdown } from "../src/core/markdown.js";
+import { NotebookState } from "../src/core/notebook.js";
+import { detailRows } from "../src/ui/detail.js";
+import { CellConsole } from "../src/core/console.js";
 const plain = (s: string, options = {}) => markdownRows(s, options).map(row => stripTerminalSequences(row.text));
 describe("source mapped markdown", () => {
+  it("retains exact fence source, spans and local line metadata including blank lines", () => {
+    const source = "Before\n\n~~~py extra\n\t界é\n\n  tail\n~~~\n\n```js\nx\n```";
+    const { blocks } = extractCodeBlocks(source);
+    expect(blocks.map(({ id, map, source, content, language, prefix }) => ({ id, map, source, content, language, prefix }))).toEqual([
+      { id: "markdown:2", map: [2, 7], source: "~~~py extra\n\t界é\n\n  tail\n~~~", content: "\t界é\n\n  tail\n", language: "py", prefix: "" },
+      { id: "markdown:8", map: [8, 11], source: "```js\nx\n```", content: "x\n", language: "js", prefix: "" },
+    ]);
+    const rows = markdownRows(source, { width: 32, blockPrefix: "demo" });
+    expect(rows.filter(row => row.code).map(({ blockId, sourceLine }) => [blockId, sourceLine])).toEqual([
+      ...[undefined, undefined, 0, 1, 2, undefined].map(line => ["demo:markdown:2", line]),
+      ...[undefined, undefined, 0, undefined].map(line => ["demo:markdown:8", line]),
+    ]);
+  });
+  it("routes literal multiline demo prose through editable Markdown, not the HTML fallback", () => {
+    const markdown = "# Diagrams\n\n```mermaid\ngraph TD\n  A-->B\n```\n\nAfter the diagram.";
+    const literal = `mo.md(r\"\"\"${markdown}\"\"\")`;
+    expect(editableMarkdown(literal)).toBe(markdown);
+    const escaped = `mo.md(\"\"\"${markdown.replaceAll("\n", "\\n")}\"\"\")`;
+    expect(editableMarkdown(escaped)).toBeUndefined();
+    const theme = { fg: (_: string, text: string) => text, bold: (text: string) => text };
+    const render = (code: string) => {
+      const nb = new NotebookState();
+      nb.apply("kernel-ready", { cell_ids: ["demo"], codes: [code], names: ["_"] });
+      const cell = nb.cells.get("demo")!;
+      cell.output = { kind: "text", text: "HTML fallback sentinel" };
+      const diagramRows = vi.fn((source: string, options: RowOptions & { blockId: string }) => [{ text: source, blockId: options.blockId }]);
+      const result = detailRows(nb, theme, 0, { cell, width: 80, codeOpen: false, diff: false, section: false, diagramRows });
+      return { result, diagramRows };
+    };
+    const { result, diagramRows } = render(literal);
+    expect(diagramRows).toHaveBeenCalledExactlyOnceWith("graph TD\n  A-->B", expect.objectContaining({ blockId: "demo:markdown:2" }));
+    expect(result.rows.map(row => row.text).join("\n")).toContain("After the diagram.");
+    expect(result.rows.map(row => row.text).join("\n")).not.toContain("HTML fallback sentinel");
+    const fallback = render(escaped);
+    expect(fallback.diagramRows).not.toHaveBeenCalled();
+    expect(fallback.result.rows.map(row => row.text).join("\n")).toContain("HTML fallback sentinel");
+  });
+  it("paints every fence panel cell, including blank lines and padding", async () => {
+    const theme = { fg: (_: string, text: string) => `\x1b[37m${text}\x1b[39m`, bold: (text: string) => text, bg: (_: string, text: string) => `\x1b[48;2;12;34;56m${text}\x1b[49m` };
+    const rows = markdownRows("```py\n\t界é\n\n```", { width: 32, theme });
+    const panel = rows.filter(row => row.code);
+    expect(panel.map(row => row.sourceLine)).toEqual([undefined, undefined, 0, 1, undefined]);
+    for (const row of panel) {
+      const terminal = new CellConsole();
+      try {
+        await terminal.append({ data: row.text, channel: "stdout", mimetype: "text/plain" });
+        const styles = terminal.snapshot()[0]!.styles!;
+        expect(visibleWidth(row.text)).toBe(32);
+        expect(styles.reduce((sum, span) => sum + span.width, 0)).toBe(32);
+        expect(styles.every(span => !span.bgDefault && span.bg === 0x0c2238)).toBe(true);
+      } finally { terminal.dispose(); }
+    }
+  });
   it.each([46, 80, 120, 180])("uses the full prose width at %i", width => {
     const lines = plain(Array(100).fill("word").join(" "), { width });
     expect(lines.every(line => visibleWidth(line) <= width)).toBe(true);

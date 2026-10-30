@@ -4,11 +4,30 @@ import { bundledLanguages, bundledLanguagesInfo, createHighlighter, type Bundled
 import type { FrameTheme } from "../frame.js";
 
 export type SyntaxTheme = FrameTheme & { colors?: Readonly<Record<string, Color>>; appearance?: "dark" | "light" };
-const scopes: Record<string, string[]> = {
-  syntaxKeyword: ["keyword", "storage"], syntaxString: ["string"], syntaxNumber: ["constant.numeric", "constant.language"],
-  syntaxComment: ["comment"], syntaxFunction: ["entity.name.function", "support.function"], syntaxType: ["entity.name.type", "support.type"],
-  syntaxOperator: ["keyword.operator"], syntaxPunctuation: ["punctuation"],
-};
+/** Specific punctuation only: a blanket rule overrides strings, comments and markup. */
+function syntaxRules(colors: Readonly<Record<string, Color>>) {
+  const rule = (scope: string[], keys: string[], fontStyle?: string) => {
+    const color = keys.map(key => colors[key]).find(color => color !== undefined);
+    return { scope, settings: { ...(color !== undefined ? { foreground: colorToHex(color) } : {}), ...(fontStyle !== undefined ? { fontStyle } : {}) } };
+  };
+  return [
+    rule(["keyword", "storage"], ["syntaxKeyword"]),
+    rule(["string"], ["syntaxString"]),
+    rule(["constant.numeric", "constant.language", "constant.character"], ["syntaxNumber"]),
+    rule(["comment"], ["syntaxComment"]),
+    rule(["entity.name.function", "support.function", "meta.function-call.generic.python", "punctuation.definition.decorator.python"], ["syntaxFunction"]),
+    rule(["entity.name.type", "support.type", "variable", "variable.parameter", "meta.attribute.python"], ["syntaxType"]),
+    rule(["keyword.operator"], ["syntaxOperator"]),
+    rule(["punctuation.separator", "punctuation.section", "punctuation.definition.arguments", "punctuation.definition.parameters", "punctuation.definition.list", "punctuation.definition.dict"], ["syntaxPunctuation"]),
+    rule(["punctuation.definition.string", "storage.type.string.python"], ["syntaxString"]),
+    rule(["punctuation.section.interpolation", "punctuation.definition.interpolation", "constant.character.format.placeholder"], ["syntaxOperator", "syntaxNumber", "accent", "text"]),
+    rule(["markup.heading", "entity.name.section"], ["mdHeading", "syntaxFunction", "accent", "text"], "bold"),
+    rule(["markup.bold"], [], "bold"),
+    rule(["markup.italic"], [], "italic"),
+    rule(["markup.inline.raw"], ["syntaxString", "accent", "text"]),
+    rule(["markup.underline.link"], ["mdLink", "syntaxString", "accent", "text"], "underline"),
+  ];
+}
 
 /** One runtime owns this lazy service; render never waits on a grammar or WASM. */
 export class SyntaxHighlighter {
@@ -29,8 +48,8 @@ export class SyntaxHighlighter {
     const lang = (bundledLanguagesInfo.find(info => info.id === name || info.aliases?.includes(name))?.id ?? name) as BundledLanguage;
     if (!(lang in bundledLanguages) || this.diagnosed.has(lang)) return plain;
     const colors = theme.colors;
-    const palette = Object.entries(scopes).filter(([key]) => colors[key]).map(([key, scope]) => ({ scope, settings: { foreground: colorToHex(colors[key]!) } }));
-    if (!palette.length) return plain;
+    const palette = syntaxRules(colors);
+    if (!palette.some(rule => rule.settings.foreground !== undefined)) return plain;
     const themeName = `pi-${this.generation}-${createHash("sha256").update(JSON.stringify([palette, colors.text, colors.toolPendingBg, theme.appearance])).digest("hex")}`;
     const mode = getTerminalColorMode();
     const key = JSON.stringify([createHash("sha256").update(code).digest("hex"), lang, themeName, mode]);

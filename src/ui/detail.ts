@@ -71,22 +71,68 @@ export function detailRows(nb: NotebookState, theme: FrameTheme, now: number, o:
   // A chart takes the pane's width, and as much of its height as fits under the title (a section shares it).
   const page = o.imageRows ?? 14;
   const sub: RowOptions = { ...o, pad: "", width, imageRows: Math.max(2, o.section ? Math.min(page - 4, Math.floor(page * 0.6)) : page - 4) };
-  const push = (text: string) => rows.push({ text });
+  // Only blanks created here are structural: never compact producer, source or editor rows.
+  const structural = new Set<Row>();
+  const push = (text: string) => {
+    const row = { text };
+    if (!text) structural.add(row);
+    rows.push(row);
+  };
   const dim = (text: string) => theme.fg("dim", text);
   const parts: Part[] = [];
 
   /**
-   * A focusable piece keeps its separator row and ownership without a textual caption.
+   * A focusable piece keeps a blank anchor and ownership without a textual caption.
    * Its content shares the pane's full body width, without a per-row gutter.
    */
   const part = (kind: Part["kind"], cell: Cell) => {
     const index = parts.length;
-    const focused = o.partFocus === index;
     parts.push({ kind, cell: cell.id, row: rows.length });
-    const separator = focused ? theme.fg("accent", "━".repeat(width)) : dim("─".repeat(width));
-    rows.push({ text: separator, part: index });
+    const anchor = { text: "", part: index };
+    structural.add(anchor);
+    rows.push(anchor);
     const add = (text: string, extra: Partial<Row> = {}) => rows.push({ text, part: index, ...extra });
-    return { index, focused, add };
+    return { index, add };
+  };
+
+  /** Drop empty wrappers, compact only structural whitespace, and remap row indices. */
+  const finalize = (focusRow?: number) => {
+    const owned = new Set(rows.filter(r => !structural.has(r)).map(r => r.part));
+    const partMap = new Map<number, number>();
+    const keptParts = parts.filter((_, index) => {
+      if (!owned.has(index)) return false;
+      partMap.set(index, partMap.size);
+      return true;
+    });
+    const kept: Row[] = [];
+    for (const r of rows) {
+      if (r.part !== undefined && !partMap.has(r.part)) continue;
+      if (structural.has(r)) {
+        if (!kept.length) continue;
+        // The later anchor owns a shared gap: clicks target the following part.
+        if (structural.has(kept.at(-1)!)) kept.pop();
+      }
+      kept.push(r);
+    }
+    for (const r of kept) if (r.part !== undefined) r.part = partMap.get(r.part)!;
+    keptParts.forEach((p, index) => {
+      p.row = kept.findIndex(r => r.part === index);
+      const anchor = kept[p.row];
+      if (anchor && structural.has(anchor) && o.partFocus === index) anchor.text = theme.fg("accent", "▸");
+    });
+    // Removed rows point to the next surviving row, or the last row at the end.
+    const positions = new Map(kept.map((r, index) => [r, index]));
+    const rowMap = new Map<number, number>();
+    let next = Math.max(0, kept.length - 1);
+    for (let index = rows.length - 1; index >= 0; index--) {
+      next = positions.get(rows[index]!) ?? next;
+      rowMap.set(index, next);
+    }
+    widgetRows.clear();
+    kept.forEach((r, index) => {
+      if (r.widget) widgetRows.set(`${r.widget.cell}\0${r.widget.index}`, index);
+    });
+    return { rows: kept, widgetRows, parts: keptParts, ...(focusRow !== undefined ? { focusRow: rowMap.get(focusRow) ?? 0 } : {}) };
   };
 
   const leafParts = new Map<object, number>();
@@ -120,7 +166,7 @@ export function detailRows(nb: NotebookState, theme: FrameTheme, now: number, o:
   };
 
   const orderedWidgets = (cell: Cell, indices: number[]): Row[] => indices.map(index => {
-    const w = cell.output!.widgets![index]!;
+    const w = (cell.output?.blocks?.length ? cell.output.blocks.flatMap(block => block.output.widgets ?? []) : cell.output?.widgets ?? [])[index]!;
     const focused = o.widgetFocus?.cell === cell.id && o.widgetFocus.index === index;
     const safe = { ...w, label: oneLine(w.label), tag: oneLine(w.tag), options: w.options.map(oneLine) };
     const value = widgetValue(nb, w);
@@ -247,7 +293,7 @@ export function detailRows(nb: NotebookState, theme: FrameTheme, now: number, o:
       resultBlock(cell, { textLines: 12, tableRows: 10 }, 5);
       if (o.sectionCodeOpen?.has(cell.id) || (o.inlineEditor?.cellId === cell.id && o.inlineEditor.kind === "python")) codeBlock(cell, true, selected && o.diff);
     }
-    return { rows, widgetRows, parts, ...(focusRow !== undefined ? { focusRow } : {}) };
+    return finalize(focusRow);
   }
 
   const cell = o.cell;
@@ -272,7 +318,7 @@ export function detailRows(nb: NotebookState, theme: FrameTheme, now: number, o:
       push("");
       codeBlock(cell, o.codeOpen, false);
     }
-    return { rows, widgetRows, parts };
+    return finalize();
   }
 
   const title = oneLine(cellTitle(nb, cell));
@@ -296,5 +342,5 @@ export function detailRows(nb: NotebookState, theme: FrameTheme, now: number, o:
     push("");
     push(dim(flow.join(" · ")));
   }
-  return { rows, widgetRows, parts };
+  return finalize();
 }

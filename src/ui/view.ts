@@ -21,8 +21,8 @@ import { kernelStateParts, lensParts } from "../bg.js";
 import { INPUT_CONTEXT } from "../activity.js";
 import { interruptKey, notebookKey, notebookPath } from "./identity.js";
 import type { FrameTheme } from "../frame.ts";
-import { banner, bottom, row as frameRow, rule as frameRule, CONTENT_LEFT, bodyWidth } from "./notebook-frame.js";
-import { type CodeBlockState, codeRows, scrollCode } from "./code.js";
+import { banner, row as frameRow, CONTENT_LEFT, bodyWidth } from "./notebook-frame.js";
+import { type CodeBlockState, codePanelRows, scrollCode } from "./code.js";
 import type { SyntaxHighlighter, SyntaxTheme } from "./syntax.js";
 import type { MermaidRenderer } from "../core/mermaid.js";
 import { mermaidRows } from "./outputs.js";
@@ -37,7 +37,7 @@ import { type PaneTheme, outlineRows, spinner } from "./outline.js";
 import { MAX_WIDGETS, type Row, type RowOptions, firstLine, foldedCells, selectableCells } from "./rows.js";
 import { cellTitle } from "./titles.js";
 import type { ScratchEvent, ScratchResult } from "./scratch.js";
-import { columnCard, rowCard, tableLines } from "./table.js";
+import { columnCard, rowCard, tableLines, tableViewport, orderedColumns } from "./table.js";
 import { type TableRpc, type TableSession, parseFilter, tableSession } from "./table-session.js";
 import { variableList, variableRows, variableDetailRows, type VariableSort } from "./variables.js";
 import { PackagePane, type PackagePaneState } from "./packages.js";
@@ -50,11 +50,11 @@ export { notebookLines, outlineRows } from "./outline.js";
 export { detailRows } from "./detail.js";
 export { selectableCells, type Row, type RowOptions } from "./rows.js";
 
-/** Banner, header, rule, rule above the hints, the hints, bottom border. */
-const CHROME = 6;
+/** Banner, header, footer. */
+const CHROME = 3;
 const TICK_MS = 100;
-/** The row the panes start at: banner, header, rule. */
-const ROWS_TOP = 3;
+/** The row the panes start at: banner, header. */
+const ROWS_TOP = 2;
 /** From this many columns the outline and the detail sit side by side; narrower, one at a time. */
 const SPLIT_MIN = 100;
 /** The outline's width in the split: a third of the view, within limits. */
@@ -214,7 +214,7 @@ export class NotebookView implements Component, Focusable {
   private readonly renderReady = () => { if (!this.closed) this.tui.requestRender(); };
   private readonly renderDiagram = (source: string, options: RowOptions & { blockId: string }): Row[] => {
     this.diagramBlocks.add(options.blockId);
-    if (this.diagramSources.has(options.blockId)) return codeRows(source, { ...options, language: "mermaid" });
+    if (this.diagramSources.has(options.blockId)) return codePanelRows(source, { ...options, theme: this.theme as SyntaxTheme, syntax: this.actions.syntax, onReady: this.renderReady, language: "mermaid" });
     return mermaidRows(source, this.theme, {
       ...options, bar: "", renderer: this.actions.diagrams,
       appearance: (this.theme as SyntaxTheme).appearance ?? "dark",
@@ -223,6 +223,8 @@ export class NotebookView implements Component, Focusable {
   private diagramRows = this.renderDiagram;
   /** The detail's scroll, in its own rows. */
   private detailScroll = 0;
+  private tableReturnScroll: number | undefined;
+  private tableCardScroll = 0;
   /** Which cell (and view) the detail last drew, so a new one starts at its top. */
   private detailKey = "";
   private lastOutline: Row[] = [];
@@ -538,8 +540,8 @@ export class NotebookView implements Component, Focusable {
 
   private typeFilter(data: string): void {
     const vars = this.mode === "variables";
-    // ctrl+j/ctrl+k (and the arrows) move through the matches while typing.
-    const by = matchesKey(data, "ctrl+j") || matchesKey(data, "down") ? 1 : matchesKey(data, "ctrl+k") || matchesKey(data, "up") ? -1 : 0;
+    // Search navigation does not steal variable-pane control keys.
+    const by = matchesKey(data, "down") || (!vars && matchesKey(data, "ctrl+d")) ? 1 : matchesKey(data, "up") || (!vars && matchesKey(data, "ctrl+u")) ? -1 : 0;
     if (by) {
       const f = this.current();
       if (vars) {
@@ -772,11 +774,16 @@ export class NotebookView implements Component, Focusable {
     this.note = undefined;
     const command = commandFor("table", data)?.id;
     if (command === "table-close") {
-      if (s.card) s.closeCard();
-      else this.table = undefined;
+      if (s.card) { s.closeCard(); this.tableCardScroll = 0; }
+      else { this.table = undefined; this.detailScroll = this.tableReturnScroll ?? this.detailScroll; this.tableReturnScroll = undefined; }
       return;
     }
     if (command === "help") { this.openHelp(); return; }
+    if (s.card && (command === "table-down" || command === "table-up" || command === "table-next" || command === "table-previous" || command === "table-first" || command === "table-last")) {
+      const delta = command === "table-down" ? 1 : command === "table-up" ? -1 : command === "table-next" ? this.viewport() : command === "table-previous" ? -this.viewport() : 0;
+      this.tableCardScroll = command === "table-first" ? 0 : command === "table-last" ? Number.MAX_SAFE_INTEGER : Math.max(0, this.tableCardScroll + delta);
+      return;
+    }
     if (command === "table-down") s.move(f, rpc, 1, 0);
     else if (command === "table-up") s.move(f, rpc, -1, 0);
     else if (command === "table-left") s.move(f, rpc, 0, -1);
@@ -805,7 +812,7 @@ export class NotebookView implements Component, Focusable {
       const kind = t.data.fieldTypes?.[column]?.kind ?? "string";
       this.openDock({
         kind: "table",
-        title: `Filter ${column} (${kind}): > 5 · 1..10 · in a, b · null · !null · ~regex · text`,
+        title: `Filter ${oneLine(column)} (${oneLine(kind)}): > 5 · 1..10 · in a, b · null · !null · ~regex · text`,
         hint: "enter filter · esc cancel",
         submit: (text) => {
           const parsed = parseFilter(column, kind, text);
@@ -836,6 +843,17 @@ export class NotebookView implements Component, Focusable {
           (e: unknown) => { if (!this.closed) { this.note = `Could not save: ${message(e)}`; this.tui.requestRender(); } },
         );
       }
+    } else if (command === "table-shrink") s.resizeColumn(s.columnName(), -2);
+    else if (command === "table-grow") s.resizeColumn(s.columnName(), 2);
+    else if (command === "table-fit") s.fitColumn(s.columnName());
+    else if (command === "table-value") this.messageView = new MessageView({ text: s.fullCellValue(), scroll: 0 });
+    else if (command === "table-pick") {
+      const names = orderedColumns(t.data);
+      const choices = ["Cancel", ...names.map((name, i) => `${i + 1}. ${oneLine(name)}`)];
+      void this.confirm("Choose table column", choices).then(choice => {
+        const index = choices.indexOf(choice ?? "") - 1;
+        if (index >= 0 && this.table?.objectId === objectId) { s.col = index; s.ensureVisible(Math.max(1, this.panes.lw)); this.renderReady(); }
+      }).catch(e => { this.note = message(e); this.renderReady(); });
     } else if (command === "table-refresh") void s.refresh(f, rpc);
   }
 
@@ -846,6 +864,8 @@ export class NotebookView implements Component, Focusable {
     const objectId = focused?.kind === "table" ? focused.tableObjectId ?? focused.output?.table?.objectId : target?.output?.table?.objectId;
     if (!target || !objectId) { this.note = "This cell shows no table marimo can page."; return; }
     if (!this.actions.table || f.connection !== "connected") { this.note = "This cell shows no table marimo can page: the table needs a connected notebook."; return; }
+    if (!this.table) this.tableReturnScroll = this.detailScroll;
+    this.tableCardScroll = 0;
     this.table = { cell: target.id, objectId };
     this.cursor = target.id;
     this.follow = false;
@@ -854,11 +874,16 @@ export class NotebookView implements Component, Focusable {
 
   // --- keys -----------------------------------------------------------------------------------
 
+  /** Flatten widget leaves in output order; the indices match the rows' kernel widget indices. */
+  private cellWidgets(cell: Cell): Widget[] {
+    return cell.output?.blocks?.length ? cell.output.blocks.flatMap(block => block.output.widgets ?? []).slice(0, MAX_WIDGETS) : cell.output?.widgets?.slice(0, MAX_WIDGETS) ?? [];
+  }
+
   /** The widgets of the driven cell, or undefined (and widget mode ends) when they are gone. */
   private drivenWidgets(f: Followed | undefined): { cell: Cell; widgets: Widget[] } | undefined {
     const w = this.widget;
     const cell = w && f ? f.notebook.cells.get(w.cell) : undefined;
-    const widgets = cell?.output?.widgets?.slice(0, MAX_WIDGETS) ?? [];
+    const widgets = cell ? this.cellWidgets(cell) : [];
     if (!f || !cell || !widgets.length || f.connection !== "connected") {
       this.widget = undefined;
       return undefined;
@@ -874,18 +899,20 @@ export class NotebookView implements Component, Focusable {
     const focus = this.widget!;
     const w = driven.widgets[focus.index]!;
     if (command === "widget-close") { this.widget = undefined; return; }
-    if (command === "widget-previous") {
-      focus.index = (focus.index - 1 + driven.widgets.length) % driven.widgets.length;
-      focus.sub = 0;
-      this.reveal = true;
+    if (command === "widget-previous" || command === "widget-next") {
+      const controls = f.notebook.ordered().flatMap(cell => this.cellWidgets(cell).map((_, index) => ({ cell, index })));
+      const at = controls.findIndex(item => item.cell.id === focus.cell && item.index === focus.index);
+      const by = command === "widget-next" ? 1 : -1;
+      const next = controls[((at + by) % controls.length + controls.length) % controls.length];
+      if (next) {
+        this.goTo(f, next.cell.id);
+        this.widget = { cell: next.cell.id, index: next.index, sub: 0 };
+        this.part = undefined;
+        this.reveal = true;
+      }
       return;
     }
-    if (command === "widget-next") {
-      focus.index = (focus.index + 1) % driven.widgets.length;
-      focus.sub = 0;
-      this.reveal = true;
-      return;
-    }
+    if (command === "widget-browser") { this.actions.openInBrowser(f); return; }
     const act = (action: WidgetAction) => {
       if (w.disabled) { this.note = "This widget is disabled."; return; }
       const next = nextValue(w, widgetValue(f.notebook, w), action, focus.sub);
@@ -1063,6 +1090,16 @@ export class NotebookView implements Component, Focusable {
     this.reveal = true;
     const p = this.part !== undefined ? this.lastParts[this.part] : undefined;
     const target = p ? f.notebook.cells.get(p.cell) : undefined;
+    if (!p) {
+      const interactive = this.lastParts.find(part => part.cell === c.id && (part.kind === "table" || part.kind === "widgets"));
+      if (interactive?.kind === "table") { this.enterTable(f, c); return; }
+      if (interactive?.kind === "widgets" && interactive.widgetIndices?.length) {
+        if (!this.actions.setWidget) this.note = "Widgets cannot be driven here.";
+        else if (f.connection !== "connected") this.note = "The notebook is not connected.";
+        else this.widget = { cell: c.id, index: interactive.widgetIndices[0]!, sub: 0 };
+        return;
+      }
+    }
     if (p && target) {
       switch (p.kind) {
         case "table": this.enterTable(f, target); break;
@@ -1097,14 +1134,14 @@ export class NotebookView implements Component, Focusable {
     if (this.codeShown(id) !== open) this.toggleCode(id);
   }
 
-  /** The pane under a column and a page row (from the first row under the header); the rule between stacked panes is neither. */
+  /** The pane under a column and a page row (from the first row under the header); the stacked gap is neither. */
   private paneAt(x: number, line: number): "outline" | "detail" | undefined {
     const { shows, detailLeft, outlineHeight } = this.panes;
     if (shows === "both") return x >= detailLeft ? "detail" : "outline";
     return line < outlineHeight ? "outline" : line >= this.panes.detailTop ? "detail" : undefined;
   }
 
-  /** ^D, PgDn and the like: the detail scrolls (the outline follows the cursor). */
+  /** PgDn and the like: the detail scrolls (the outline follows the cursor). */
   private scrollBy(by: number): void {
     if (this.mode === "cells") this.detailScroll = Math.max(0, this.detailScroll + by);
     else if (this.mode === "packages") this.packagePane.state.scroll = Math.max(0, this.packagePane.state.scroll + by);
@@ -1440,7 +1477,7 @@ export class NotebookView implements Component, Focusable {
       else this.goTo(f, pick);
     } else if (f && command.id === "widget") {
       const c = this.cursorCell(f);
-      const widgets = c?.output?.widgets?.slice(0, MAX_WIDGETS) ?? [];
+      const widgets = c ? this.cellWidgets(c) : [];
       if (!c || !widgets.length) this.note = "This cell shows no widgets.";
       else if (!this.actions.setWidget) this.note = "Widgets cannot be driven here.";
       else if (f.connection !== "connected") this.note = "The notebook is not connected.";
@@ -1471,8 +1508,6 @@ export class NotebookView implements Component, Focusable {
       this.reveal = true;
     } else if (f && command.id === "down") this.step(f, 1);
     else if (f && command.id === "up") this.step(f, -1);
-    else if (command.id === "half-up") this.scrollBy(-Math.max(1, Math.floor(page / 2)));
-    else if (command.id === "half-down") this.scrollBy(Math.max(1, Math.floor(page / 2)));
     else if (command.id === "page-up") this.scrollBy(-page);
     else if (command.id === "page-down") this.scrollBy(page);
     else if (command.id === "first") {
@@ -1593,7 +1628,6 @@ export class NotebookView implements Component, Focusable {
     const spare = budget - decoration - Math.min(input.length, room);
     if (dock.kind === "scratch" && this.scratch && spare > 0) out.unshift(...this.scratchLines(bodyWidth(width)).slice(-spare));
     const framed = out.map(line => frameRow(line, width, th));
-    if (decoration >= 3) framed.unshift(frameRule(width, th));
     return framed;
   }
 
@@ -1619,7 +1653,6 @@ export class NotebookView implements Component, Focusable {
     const th = this.theme;
     const inner = bodyWidth(width);
     const row = (s: string) => frameRow(s, width, th);
-    const rule = frameRule(width, th);
     const fit = (text: string, w: number) => truncateToWidth(text, Math.max(1, w), "…", true);
     this.syncConfirmation();
     const f = this.current();
@@ -1645,40 +1678,43 @@ export class NotebookView implements Component, Focusable {
       if (height > 1) compact.push(row(this.footer(f, inner)));
       return compact.slice(0, height);
     }
+    if (this.help) {
+      const rows = this.helpView.render(inner, height - 1, th);
+      this.lastPage = height - 1;
+      this.lastRows = rows.map(text => ({ text }));
+      this.lastOutline = [];
+      this.lastDetail = [];
+      return [...out, ...rows.map(row)];
+    }
     const page = this.viewport();
     this.lastPage = page;
     if (this.messageView) {
-      out.push(row(`${file} · message`), rule);
+      out.push(row(`${file} · message`));
       const rows = this.messageView.render(inner, page);
       for (let i = 0; i < page; i++) out.push(row(rows[i] ?? ""));
-    } else if (this.help) {
-      out.push(row(""), rule);
-      const rows = this.helpView.render(inner, page, th).map((text): Row => ({ text }));
-      this.lastRows = rows;
-      for (let i = 0; i < page; i++) out.push(row(rows[i]?.text ?? ""));
     } else if (!f) {
-      out.push(row(`${th.bold(file)}  ${th.fg("dim", "No longer followed.")}`), rule);
+      out.push(row(`${th.bold(file)}  ${th.fg("dim", "No longer followed.")}`));
       const recovery = this.editors.active ? this.editors.render(inner, page) : [];
       for (let i = 0; i < page; i++) out.push(row(recovery[i] ?? ""));
       this.lastRows = [];
       this.lastOutline = [];
       this.lastDetail = [];
     } else if (this.timing) {
-      out.push(row(this.header(f, file, inner)), rule);
+      out.push(row(this.header(f, file, inner)));
       const cell = this.cursorCell(f);
       const exact = (at: number | undefined) => at === undefined ? "unknown" : new Intl.DateTimeFormat("en-US", { year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit", fractionalSecondDigits: 3, hourCycle: "h23", timeZoneName: "longOffset" }).format(at);
       const rows = cell ? ["Exact timing · local timezone", cellTitle(f.notebook, cell), `Start: ${exact(cell.status === "running" ? cell.runningSince : cell.lastRunStartedAt)}`, `End: ${cell.status === "running" ? "running" : exact(cell.lastRunEndedAt)}`, `Duration: ${cell.status === "running" && cell.runningSince !== undefined ? `${duration(Date.now() - cell.runningSince)} (running)` : cell.lastRunMs !== undefined ? duration(cell.lastRunMs) : "unknown"}`, "T / Esc closes"] : ["No selected cell"];
       this.lastRows = rows.map(text => ({ text }));
       for (let i = 0; i < page; i++) out.push(row(rows[i] ?? ""));
     } else if (this.mode === "packages") {
-      out.push(row(this.header(f, file, inner)), rule);
+      out.push(row(this.header(f, file, inner)));
       if (this.packageOwner !== f.notebook) this.openPackages(f);
       const rows = this.packagePane.rows(f.notebook.environment, inner);
       this.packagePane.state.scroll = Math.min(this.packagePane.state.scroll, Math.max(0, rows.length - page));
       this.lastRows = rows;
       for (let i = 0; i < page; i++) out.push(row(rows[this.packagePane.state.scroll + i]?.text ?? ""));
     } else if (this.mode === "variables") {
-      out.push(row(this.header(f, file, inner)), rule);
+      out.push(row(this.header(f, file, inner)));
       const nb = f.notebook;
       const list = variableList(nb, this.varFilter, this.varSort);
       if (!this.varCursor || !list.some((v) => v.name === this.varCursor)) this.varCursor = list[0]?.name;
@@ -1704,7 +1740,7 @@ export class NotebookView implements Component, Focusable {
         for (let i = 0; i < page; i++) out.push(row(built.rows[this.scroll + i]?.text ?? ""));
       }
     } else {
-      out.push(row(this.header(f, file, inner)), rule);
+      out.push(row(this.header(f, file, inner)));
       const nb = f.notebook;
       const cells = this.cells(f);
       const running = nb.running();
@@ -1765,9 +1801,6 @@ export class NotebookView implements Component, Focusable {
           const s = t.session;
           if (c.id === cell.id && s.needsFetch() && this.actions.table) void s.refresh(f, this.actions.table);
           const focused = this.table?.cell === c.id && this.table.objectId === t.data.objectId;
-          // Match tableGrid's selection marker, not the removed detail gutter.
-          const rowSelect = t.data.selection === "single" || t.data.selection === "multi";
-          if (focused) s.ensureVisible(dw - (rowSelect ? 5 : 0));
           const picked = s.selection(nb);
           const cells = new Set<string>();
           const rows = new Set<string>();
@@ -1858,6 +1891,47 @@ export class NotebookView implements Component, Focusable {
         detail = this.editors.render(dw, Math.max(1, dh)).map((text, editorRow) => ({ text, editorRow }));
         this.detailScroll = 0;
       }
+      if (cell && this.table?.cell === cell.id) {
+        const active = this.tableFor(f, cell, this.table.objectId);
+        if (active) {
+          const s = active.session;
+          const picked = s.selection(nb);
+          const selected = new Set<string>();
+          const selectedCells = new Set<string>();
+          for (const v of picked) {
+            if (typeof v === "object" && v !== null) selectedCells.add(`${String((v as { rowId?: unknown }).rowId)}\0${String((v as { columnName?: unknown }).columnName)}`);
+            else selected.add(String(v));
+          }
+          if (s.card) {
+            const lines = s.card.kind === "row"
+              ? rowCard(active.data, s.card.index, dw, th as PaneTheme, s.page * s.pageSize + s.card.index)
+              : columnCard(active.data, s.card.column, s.summaries, s.card.top, dw, th as PaneTheme);
+            this.tableCardScroll = Math.min(this.tableCardScroll, Math.max(0, lines.length - dh));
+            detail = lines.slice(this.tableCardScroll, this.tableCardScroll + dh).map(text => ({ text }));
+          } else {
+            s.ensureVisible(Math.max(1, dw - 1));
+            const grid = tableViewport(active.data, dw, dh, th as PaneTheme, {
+              focused: true, cursorRow: s.row, cursorCol: s.col, colOffset: s.colOffset,
+              columnWidths: s.columnWidths, selected, selectedCells, selectedCount: picked.length,
+              sort: s.sort, query: s.query, filterColumns: s.filters.map(filter => filter.column_id),
+              loading: s.loading, ...(s.error ? { error: s.error } : {}),
+              ...(s.summariesOn && s.summaries ? { summaries: s.summaries } : {}),
+              rowIdOf: i => s.rowId(i), firstRow: s.page * s.pageSize,
+              ...(active.data.totalRows !== undefined ? { totalRows: active.data.totalRows } : {}),
+            }, s.rowOffset);
+            s.rowOffset = grid.rowOffset;
+            const header = Number(!!active.data.label) + Number(!!active.data.banner);
+            detail = grid.lines.map((text, index): Row => ({
+              text,
+              ...(grid.rowAt[index] !== undefined ? { tableRow: grid.rowAt[index] } : {}),
+              ...(index === header ? { tableHeader: true } : {}),
+              ...(grid.rowAt[index] !== undefined || index === header ? { tableColumns: grid.layout.columns } : {}),
+              tableObjectId: this.table!.objectId,
+            }));
+          }
+          this.detailScroll = 0;
+        }
+      }
       this.lastDetail = detail;
       // An image draws only when its whole block is on screen; otherwise a note stands in for it.
       const visible = (i: number): boolean => {
@@ -1873,20 +1947,18 @@ export class NotebookView implements Component, Focusable {
       };
       for (let i = 0; i < page; i++) {
         const left = i < oh ? built.rows[this.scroll + i]?.text ?? (this.filter && !cells.length && i === 0 ? th.fg("dim", `No cell matches "${this.filter}".`) : "") : "";
-        if (!split && oh > 0 && i === oh) { out.push(row(th.fg("dim", "─".repeat(inner)))); continue; }
+        if (!split && oh > 0 && i === oh) { out.push(row("")); continue; }
         if (!split && i < oh) { out.push(row(left)); continue; }
         const di = this.detailScroll + i - detailTop;
         const r = detail[di];
         if (r?.image?.live && r.image.index === 0 && visible(di)) this.live.rects.push({ top: out.length, left: this.panes.detailLeft, geometry: r.image.live.geometry, output: r.image.live.output });
-        out.push(row(split ? `${fit(left, lw)}${th.fg("dim", " │ ")}${fit(detailText(di), dw)}` : detailText(di)));
+        out.push(row(split ? `${fit(left, lw)}${" ".repeat(SEPARATOR_WIDTH)}${fit(detailText(di), dw)}` : detailText(di)));
       }
       this.live.endFrame();
     }
     out.push(...dock);
     out.push(...transientRows.map(text => row(th.fg("warning", text))));
-    out.push(rule);
     out.push(row(this.footer(f, inner)));
-    out.push(bottom(width, th));
     // The images this frame draws stay when the painter wipes the transcript's from under the view.
     const ids = new Set<number>();
     for (const line of out) if (line.includes("\x1b_G")) for (const m of line.matchAll(/\x1b_G([^;\x1b]*)/gu)) {
@@ -1935,12 +2007,20 @@ export class NotebookView implements Component, Focusable {
     if (this.help) return ""; // Help owns its single navigation footer.
     const focused = this.part === undefined ? undefined : this.lastParts[this.part];
     const cell = f ? this.cursorCell(f) : undefined;
-    const contextual = focused?.kind ?? (cell?.output?.widgets?.length ? "widgets" : cell?.output?.table ? "table" : this.live.rects.length ? "chart" : undefined);
+    const contextual = focused?.kind ?? (cell && this.cellWidgets(cell).length ? "widgets" : cell?.output?.table ? "table" : this.live.rects.length ? "chart" : undefined);
     const busy = !!f && (!!f.notebook.running() || f.notebook.queued() > 0);
     const primary = mode === "editor" ? "editor-f2" : mode === "table" ? "table-row" : mode === "widget" ? "widget-type" : mode === "chart" ? "chart-drag" : mode === "variables" ? "var-detail" : mode === "packages" ? "pkg-detail" : contextual === "table" ? "table" : contextual === "widgets" ? "widget" : contextual === "chart" ? "chart" : this.actions.run && cell && f && !f.notebook.isMarkdown(cell) ? busy ? "interrupt" : "run" : "activate";
     const cells = f ? this.cells(f) : [];
     const at = cells.findIndex(cell => cell.id === this.cursor);
     const position = mode === "notebook" && at >= 0 ? `${at + 1}/${cells.length}` : undefined;
+    if (mode === "widget" && f) {
+      const w = this.drivenWidgets(f)?.widgets[this.widget?.index ?? 0];
+      const action = w?.kind === "range-slider" ? "Space handle" : w?.kind === "button" ? "Space press" : w?.kind === "checkbox" || w?.kind === "switch" ? "Space toggle" : "Enter value";
+      const tokens = ["Tab next", "←/→ adjust", action, "Esc done"];
+      const kept: string[] = [];
+      for (const token of tokens) if (visibleWidth([...kept, token].join(" · ")) <= inner) kept.push(token);
+      return this.theme.fg("dim", kept.join(" · "));
+    }
     return this.theme.fg("dim", footerTokens(inner, primary, position, mode === "editor"));
   }
 
@@ -1972,7 +2052,7 @@ export class NotebookView implements Component, Focusable {
     const r = this.lastDetail[this.detailScroll + line - this.panes.detailTop];
     if (!r?.widget) return undefined;
     const cell = f.notebook.cells.get(r.widget.cell);
-    const w = cell?.output?.widgets?.[r.widget.index];
+    const w = cell && this.cellWidgets(cell)[r.widget.index];
     return cell && w ? { f, cell, w, index: r.widget.index, col: event.x - this.panes.detailLeft - WIDGET_TEXT } : undefined;
   }
 
@@ -2026,7 +2106,7 @@ export class NotebookView implements Component, Focusable {
       const at = this.widgetAt({ ...event, y: Math.max(ROWS_TOP, event.y) });
       const f = this.current();
       const cell = f?.notebook.cells.get(this.dragging.cell);
-      const w = cell?.output?.widgets?.[this.dragging.index];
+      const w = cell && this.cellWidgets(cell)[this.dragging.index];
       if (f && cell && w) this.clickWidget({ f, cell, w, index: this.dragging.index, col: at?.cell.id === cell.id && at.index === this.dragging.index ? at.col : event.x - this.panes.detailLeft - WIDGET_TEXT }, true);
       if (event.type === "release") this.dragging = undefined;
       this.tui.requestRender();
@@ -2045,7 +2125,12 @@ export class NotebookView implements Component, Focusable {
         this.tui.requestRender();
         return { handled: true };
       }
-      if (pane === "detail") this.detailScroll = Math.max(0, this.detailScroll + by);
+      if (pane === "detail" && this.table && f) {
+        const cell = f.notebook.cells.get(this.table.cell);
+        const s = cell && this.tableFor(f, cell)?.session;
+        if (s?.card) this.tableCardScroll = Math.max(0, this.tableCardScroll + by);
+        else if (s && by) { s.row = Math.max(0, Math.min((s.data().records?.length ?? s.data().rows.length) - 1, s.row + by)); s.rowOffset = Math.max(0, s.rowOffset + by); }
+      } else if (pane === "detail") this.detailScroll = Math.max(0, this.detailScroll + by);
       // The stacked outline is centred on the cursor: the wheel moves the cursor.
       else if (pane === "outline" && this.panes.shows === "stacked") { if (f && by) this.step(f, by > 0 ? 1 : -1); }
       else this.move(by);
@@ -2079,13 +2164,15 @@ export class NotebookView implements Component, Focusable {
     } else if (this.paneAt(event.x, line) === "detail") {
       const r = this.lastDetail[this.detailScroll + line - this.panes.detailTop];
       this.focusedBlock = r?.blockId;
-      if (this.table && r?.tableRow !== undefined) {
-        const cellId = r.part === undefined ? this.table.cell : this.lastParts[r.part]?.cell ?? this.table.cell;
-        const t = f.notebook.cells.get(cellId);
-        if (r.tableObjectId) this.table = { cell: cellId, objectId: r.tableObjectId };
-        this.part = r.part;
-        const tf = t ? this.tableFor(f, t, r.output ?? r.tableObjectId) : undefined;
-        if (tf) { tf.session.row = r.tableRow; tf.session.card = undefined; }
+      if (this.table && (r?.tableRow !== undefined || r?.tableHeader)) {
+        const t = f.notebook.cells.get(this.table.cell);
+        const tf = t ? this.tableFor(f, t, this.table.objectId) : undefined;
+        const column = r?.tableColumns?.find(bounds => event.x - this.panes.detailLeft >= bounds.start && event.x - this.panes.detailLeft < bounds.end)?.column;
+        if (tf) {
+          if (column) tf.session.col = Math.max(0, orderedColumns(tf.data).indexOf(column));
+          if (r?.tableHeader && column && this.actions.table) tf.session.toggleSort(f, this.actions.table, column, event.shift);
+          else if (r?.tableRow !== undefined) { tf.session.row = r.tableRow; tf.session.card = undefined; }
+        }
       } else if (r?.part !== undefined && !r.widget && !r.code) {
         this.part = r.part;
         if (twice) this.activate(f);

@@ -1,7 +1,7 @@
 import { afterEach, expect, test, vi } from "vitest";
 import type { Widget } from "../src/core/output.js";
 import { NotebookState } from "../src/core/notebook.js";
-import { WidgetSender, nextValue, typedValue, widgetHit, widgetLine, widgetValue } from "../src/ui/widgets.js";
+import { WidgetSender, nextValue, typeable, typedValue, widgetHit, widgetLine, widgetValue } from "../src/ui/widgets.js";
 
 const theme = { fg: (_: string, text: string) => text, bold: (text: string) => text };
 const w = (over: Partial<Widget>): Widget => ({ objectId: "a-0", kind: "slider", tag: "marimo-slider", label: "n", initial: 3, options: [], steps: [], disabled: false, ...over });
@@ -38,6 +38,60 @@ test("typed values are checked", () => {
   expect(typedValue(w({ kind: "number" }), " 4.5 ")).toEqual({ value: 4.5 });
   expect(typedValue(w({ kind: "date" }), "2024-1-2")).toEqual({ error: "Enter a date as YYYY-MM-DD." });
   expect(typedValue(w({ kind: "text" }), "hi there")).toEqual({ value: "hi there" });
+});
+
+test("sliders and ranges accept bounded finite typed values and snap to their steps", () => {
+  const slider = w({ start: -1, stop: 1, step: 0.1 });
+  const range = w({ kind: "range-slider", start: -1, stop: 1, step: 0.1 });
+  expect(typeable(slider)).toBe(true);
+  expect(typeable(range)).toBe(true);
+  expect(typeable(w({ kind: "checkbox" }))).toBe(false);
+  expect(typedValue(slider, " 0.34 ")).toEqual({ value: 0.3 });
+  expect(typedValue(slider, "-1")).toEqual({ value: -1 });
+  expect(typedValue(slider, "1")).toEqual({ value: 1 });
+  expect(typedValue(range, " -0.34, 0.76 ")).toEqual({ value: [-0.3, 0.8] });
+  expect(typedValue(range, "0.3, 0.3")).toEqual({ value: [0.3, 0.3] });
+  expect(typedValue(range, "-1, 1")).toEqual({ value: [-1, 1] });
+  for (const text of ["", " ", "NaN", "Infinity", "-Infinity", "1e309", "1.01", "-1.01", "0, 1", "abc"]) {
+    expect(typedValue(slider, text)).toHaveProperty("error");
+  }
+  for (const text of ["", "0", ",", "0,", ", 1", "0, 1, 1", "NaN, 1", "0, Infinity", "-1.01, 0", "0, 1.01", "0.5, 0.4"]) {
+    expect(typedValue(range, text)).toHaveProperty("error");
+  }
+  const discrete = w({ start: 0, stop: 100, steps: [1, 5, 10, 50] });
+  expect(typedValue(discrete, "8")).toEqual({ value: 10 });
+  expect(typedValue(discrete, "3")).toEqual({ value: 1 }); // Ties use the existing nearest-step helper.
+  expect(typedValue(discrete, "100")).toEqual({ value: 50 });
+  expect(typedValue(w({ ...discrete, kind: "range-slider" }), "4, 41")).toEqual({ value: [5, 50] });
+  expect(typedValue(w({ start: 0, stop: 10 }), "3.6")).toEqual({ value: 4 });
+  expect(typedValue(w({ start: 0, stop: 1 }), "0.456")).toEqual({ value: 0.46 });
+  expect(typedValue(w({ start: 2, stop: 2 }), "2")).toEqual({ value: 2 });
+  expect(typedValue(w({ start: 0.05, stop: 1, step: 0.1 }), "0.26")).toEqual({ value: 0.25 });
+  expect(typedValue(w({ kind: "text-area" }), "first\nsecond\n")).toEqual({ value: "first\nsecond\n" });
+});
+
+test("disabled widgets cannot be changed by typing, keys or mouse", () => {
+  for (const kind of ["slider", "range-slider", "number", "checkbox", "switch", "button", "text", "multiselect"] as const) {
+    const widget = w({ kind, disabled: true, start: 0, stop: 10, options: ["a", "b"] });
+    expect(typeable(widget)).toBe(typeable({ ...widget, disabled: false }));
+    expect(typedValue(widget, "4")).toEqual({ error: "This widget is disabled." });
+    expect(nextValue(widget, 3, "inc", 0)).toBeUndefined();
+    expect(nextValue(widget, 3, "toggle", 0)).toBeUndefined();
+    expect(widgetHit(widget, 3, 4)).toBeUndefined();
+  }
+});
+
+test("typed step snapping matches mouse values without changing mouse bar math", () => {
+  for (const slider of [w({ start: 0.05, stop: 1, step: 0.1 }), w({ start: 0, stop: 10 }), w({ start: 0, stop: 1 })]) {
+    for (let col = 0; col < 16; col++) {
+      const raw = slider.start! + col / 15 * (slider.stop! - slider.start!);
+      const typed = typedValue(slider, String(raw));
+      expect(widgetHit(slider, 0, col + 3)).toEqual({ ...typed, drag: true });
+    }
+  }
+  const discrete = w({ start: 0, stop: 100, steps: [1, 5, 10, 50] });
+  expect(widgetHit(discrete, 1, 3 + 5)).toEqual({ value: 5, drag: true });
+  expect(widgetHit(discrete, 1, 3 + 10)).toEqual({ value: 10, drag: true });
 });
 
 test("a widget's line, with the value set since it was made", () => {

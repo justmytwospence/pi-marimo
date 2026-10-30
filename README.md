@@ -54,7 +54,7 @@ The **outline** lists sections and cells. A cell is named by its name, or what i
 | `✗` | failed, or blocked by a failed ancestor |
 | `•` | stale, or edited but not rerun |
 
-Status chips can show execution state and agent changes together. The **detail** shows Markdown, output, diagnostics, widgets and source without redundant type captions; `n`/`p` move between parts, and a stronger separator marks the focused part. Source sits in a padded, full-width panel. `O` stacks the whole section. Prose uses the available width. Expanded source and fenced code retain every line and scroll horizontally rather than wrapping or truncating; `H`/`L` scroll the focused block, `0` resets it, and `#` toggles line numbers. `B` folds or unfolds source.
+Status chips can show execution state and agent changes together. The **detail** shows Markdown, output, diagnostics, widgets and source without redundant type captions; `n`/`p` move between parts, with a small `▸` marking the focused part. The layout uses whitespace instead of decorative rules. Source sits in a padded, full-width panel. `O` stacks the whole section. Prose uses the available width. Expanded source and fenced code retain every line and scroll horizontally rather than wrapping or truncating; `H`/`L` scroll the focused block, `0` resets it, and `#` toggles line numbers. `B` folds or unfolds source.
 
 Mermaid fences and `mo.mermaid` render as diagrams when image support is available. If rendering or images are unavailable, the view explains why and shows the complete diagram source; `s` switches a focused diagram to or from source.
 
@@ -65,14 +65,14 @@ From 100 columns the outline and detail sit side by side. Narrower, as when dock
 | key | |
 |---|---|
 | `j` / `k` | next / previous cell |
-| `ctrl+j` / `ctrl+k` | next / previous section |
+| `ctrl+d` / `ctrl+u` | next / previous section |
 | `n` / `p` | next / previous part of the cell (error, printed output, output, widgets, code) |
 | Enter, `b` | act on the focused part, or edit source/Markdown in place |
 | `B`, `H`/`L`, `0`, `#` | fold code; scroll left/right; reset horizontal scroll; toggle line numbers |
 | `!`, `\` | cycle diagnostics; toggle output independently |
 | `r` | run the cell (`R` stale cells, `A` all, each twice) |
 | `x` twice | interrupt the kernel |
-| `/` | find a cell: type, `ctrl+j`/`ctrl+k` through matches, Enter goes there |
+| `/` | find a cell: type, `ctrl+d`/`ctrl+u` or arrows through matches, Enter goes there |
 | Tab / Shift+Tab | fold the section / fold all |
 | `t` | drive the cell's table |
 | `w` | drive the cell's widgets |
@@ -88,9 +88,9 @@ From 100 columns the outline and detail sit side by side. Narrower, as when dock
 | key | |
 |---|---|
 | `j`/`k`, `↑`/`↓` | next or previous cell |
-| `ctrl+j`/`ctrl+k`, `]`/`[` | next or previous section |
+| `ctrl+d`/`ctrl+u`, `]`/`[` | next or previous section |
 | `n`/`p` | next or previous part of the cell |
-| `^D`/`^U`, PgDn/PgUp, Space | scroll the detail |
+| PgDn/PgUp, Space | scroll the detail |
 | `g`/`G` | first or last cell |
 | Enter, `l` | act on the focused part; on source or editable Markdown, edit in place |
 | `b`, `B` | edit source; fold or unfold code |
@@ -139,7 +139,7 @@ The notebook also docks by itself, without taking focus, when the agent starts r
 
 ### Tables
 
-`t` (or Enter on a table) drives a `mo.ui.table` through the table's own kernel functions, as the browser does, so paging, sorting, search and filters work on tables of any size. The grid shows frozen, hidden, justified and wrapped columns, data types and cell styles. Each table keeps its page, sort and filters until its cell reruns.
+`t` (or Enter on a table cell) drives a `mo.ui.table` through the table's own kernel functions, as the browser does, so paging, sorting, search and filters work on tables of any size. The table fills the detail pane with a pinned header and page-local scrollbar, a focused cell distinct from selected rows/cells, frozen columns, readable types, explicit nulls and full-value inspection. Click a cell to focus its row and column; click a header to sort (Shift-click adds a sort), or wheel through loaded rows. A static table without a live object id remains a preview, not a fake remote table. Each live table keeps its page, sort, filters and column widths until its cell reruns.
 
 | key | |
 |---|---|
@@ -151,6 +151,9 @@ The notebook also docks by itself, without taking focus, when the agent starts r
 | Space | select the row or cell; the selection goes to the kernel, so cells reading it rerun |
 | Enter, `i` | the row as a card; the column's statistics and top values |
 | `c` | column summaries with sparklines |
+| `H`, `L`, `=` | shrink/grow the current column by two; fit loaded values |
+| `ctrl+g` | choose a column from a cancel-first list |
+| `v` | inspect the complete raw cell value; Esc returns to the table |
 | `y`, `Y` | copy the cell or the row (OSC 52) |
 | `D` | save the table as CSV in Pi's working directory (never overwrites) |
 | `r`, Esc | refresh; close the card, then leave |
@@ -159,7 +162,7 @@ Filters: `> 5`, `<= 2.5`, `1..10`, `in a, b`, `null`, `!null`, `~regex`, `^start
 
 ### Widgets
 
-Sliders, range sliders, numbers, dropdowns, radios, multiselects, checkboxes, switches, text, dates and buttons. With the keyboard: `w`, then `j`/`k` pick, `h`/`l` change (`H`/`L` ten steps), Space toggles or presses, Enter types a value, Esc is done. With the mouse: press on a slider's bar and drag; click a checkbox, switch, button, multiselect option, or a number's or choice's `‹` `›`; click text or a date to type it; the wheel steps the focused widget. Each change reaches the kernel as it does from the browser, so dependent cells rerun, and the agent's next context says what you set.
+Sliders, range sliders, numbers, dropdowns, radios, multiselects, checkboxes, switches, text, dates and buttons. With the keyboard: `w` (or Enter on a control cell), then Tab/Shift+Tab or `j`/`k` traverse controls across notebook cells, including folded sections; `h`/`l` change a value (`H`/`L` or Shift+Left/Right change ten steps). Space toggles, presses or switches the range handle; Enter types a numeric slider value, a `lower, upper` range, text or a date. Esc leaves control mode; `o` opens unsupported controls in the browser. Disabled controls can be focused but not changed. With the mouse: press on a slider's bar and drag; click a checkbox, switch, button, multiselect option, or a number's or choice's `‹` `›`; click text or a date to type it; the wheel steps the focused widget. Each change reaches the kernel as it does from the browser, so dependent cells rerun, and the agent's next context says what you set.
 
 ### Editing cells
 
@@ -330,6 +333,7 @@ npm ci && npm run check
 - Live tests (need `marimo` on PATH): `PI_MARIMO_LIVE_TEST=1 npx vitest run test/e2e.test.ts test/e2e-actions.test.ts`
 - The demo notebook: `uvx --with pandas,numpy,matplotlib,plotly,altair,vl-convert-python,rich,tqdm,marimo-lens marimo edit --no-token examples/coffee.py`
 - Releases and rollout: `AGENTS.md`.
+- Table design references (interaction ideas, not copied implementations): [Textual DataTable](https://textual.textualize.io/widgets/data_table/) for pinned headers and focus, [Harlequin](https://harlequin.sh/docs/bindings) for column navigation and full values, [VisiData](https://www.visidata.org/docs/columns/) for sizing and feedback, and [Ratatui table](https://ratatui.rs/examples/apps/table/) for position indicators.
 
 The coffee demo includes selectable tables, every supported widget family, Matplotlib, live Plotly plots (including a heatmap and 3D surface), Altair/Vega-Lite and Vega, Mermaid, rich output, gated progress and intentional diagnostics. Its tour covers editing, agent changes, Lens marks, variables, packages, docking and notebook lifecycle actions. Plotly gestures work in the terminal; Altair brushing runs in the browser, while the terminal shows its rendered image. Slow runs and errors are opt-in. Package mutations, exports and server shutdowns are left for you to invoke deliberately.
 

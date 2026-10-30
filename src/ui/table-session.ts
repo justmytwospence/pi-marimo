@@ -7,7 +7,7 @@ import type { Cell, NotebookState } from "../core/notebook.js";
 import { cellText, type TableData } from "../core/output.js";
 import { type ColumnSummaries, type FilterCondition, type SearchResult, parseSearch, parseSummaries, parseTopK } from "../core/table-rpc.js";
 import type { Followed } from "../core/watcher.js";
-import { orderedColumns, visibleColumns } from "./table.js";
+import { columnGroups, layoutTable, measureColumn, orderedColumns, type TableRender } from "./table.js";
 
 export interface TableRpc {
   call(f: Followed, objectId: string, fn: string, args: unknown): Promise<unknown>;
@@ -43,6 +43,8 @@ export class TableSession {
   row = 0;
   col = 0;
   colOffset = 0;
+  rowOffset = 0;
+  columnWidths = new Map<string, number>();
   summaries: ColumnSummaries | undefined;
   summariesOn = false;
   card: Card | undefined;
@@ -88,13 +90,15 @@ export class TableSession {
     this.asked = true;
     const objectId = this.base.objectId;
     if (!objectId) return Promise.resolve();
+    const my = ++this.seq;
     if (this.isDefault() && this.base.records?.length) {
       this.fetched = undefined;
+      this.loading = false;
       this.error = undefined;
+      this.clampCursor();
       this.changed();
       return Promise.resolve();
     }
-    const my = ++this.seq;
     this.loading = true;
     this.error = undefined;
     this.changed();
@@ -108,7 +112,7 @@ export class TableSession {
     return rpc.call(f, objectId, "search", args)
       .then((value) => parseSearch(value, (ref) => rpc.file(f, ref)))
       .then(
-        (result) => { if (my === this.seq) { this.fetched = result; this.loading = false; } },
+        (result) => { if (my === this.seq) { this.fetched = result; this.loading = false; this.clampCursor(); } },
         (e: unknown) => { if (my === this.seq) { this.error = message(e); this.loading = false; } },
       )
       .finally(() => this.changed());
@@ -129,15 +133,47 @@ export class TableSession {
     return this.fetched?.records.length ?? this.base.records?.length ?? this.base.rows.length;
   }
 
+  private clampCursor(): void {
+    this.row = Math.max(0, Math.min(this.row, this.rowsHere() - 1));
+    this.col = Math.max(0, Math.min(this.col, orderedColumns(this.base).length - 1));
+    this.rowOffset = Math.max(0, Math.min(this.rowOffset, this.rowsHere() - 1));
+    this.colOffset = Math.max(0, Math.min(this.colOffset, columnGroups(this.base).middle.length - 1));
+  }
+
+  private render(): TableRender {
+    return {
+      focused: true, cursorRow: this.row, cursorCol: this.col,
+      colOffset: this.colOffset, columnWidths: this.columnWidths,
+      selected: new Set<string>(), sort: this.sort,
+      rowIdOf: (i) => this.rowId(i), firstRow: this.page * this.pageSize,
+    };
+  }
+
+  /** Resize from the same effective width the renderer uses, retaining it across pages. */
+  resizeColumn(column: string, delta: number): void {
+    if (!this.base.columns.includes(column) || !Number.isFinite(delta)) return;
+    const width = this.columnWidths.get(column) ?? layoutTable(this.data(), Number.MAX_SAFE_INTEGER, { ...this.render(), colOffset: 0 }).columns.find((c) => c.column === column)?.width ?? 4;
+    this.columnWidths.set(column, Math.max(4, Math.min(120, Math.round(width + delta))));
+    this.changed();
+  }
+
+  /** Fit only the loaded header and values, measured in terminal columns rather than characters. */
+  fitColumn(column: string): void {
+    if (!this.base.columns.includes(column)) return;
+    const width = measureColumn(this.data(), column, this.sort);
+    this.columnWidths.set(column, Math.max(4, Math.min(120, width)));
+    this.changed();
+  }
+
   /** Moves the cursor; past the page's edge, the page turns. */
   move(f: Followed, rpc: TableRpc, dr: number, dc: number): void {
     if (dr) {
       const next = this.row + dr;
       if (next >= this.rowsHere()) {
-        if (this.page + 1 < this.pages() && this.rowsHere() >= this.pageSize) { this.page++; this.row = 0; void this.refresh(f, rpc); }
+        if (this.page + 1 < this.pages() && this.rowsHere() >= this.pageSize) { this.page++; this.row = 0; this.rowOffset = 0; void this.refresh(f, rpc); }
         else this.row = Math.max(0, this.rowsHere() - 1);
       } else if (next < 0) {
-        if (this.page > 0) { this.page--; this.row = this.pageSize - 1; void this.refresh(f, rpc); }
+        if (this.page > 0) { this.page--; this.row = this.pageSize - 1; this.rowOffset = 0; void this.refresh(f, rpc); }
         else this.row = 0;
       } else this.row = next;
     }
@@ -148,14 +184,14 @@ export class TableSession {
   /** Keeps the cursor column inside the scrolled window at this width. */
   ensureVisible(width: number): void {
     const column = orderedColumns(this.base)[this.col];
-    const middle = this.base.columns.filter((c) => !(this.base.freezeLeft ?? []).includes(c) && !(this.base.freezeRight ?? []).includes(c));
+    const middle = columnGroups(this.base).middle;
     const at = column === undefined ? -1 : middle.indexOf(column);
     if (at < 0) return;
     if (at < this.colOffset) this.colOffset = at;
     const d = this.data();
     for (let guard = 0; guard < middle.length; guard++) {
-      const v = visibleColumns(d, width, this.colOffset, this.sort, Math.min(10, d.records?.length ?? d.rows.length));
-      if (v.middle.includes(column!) || this.colOffset >= at) break;
+      const layout = layoutTable(d, width, this.render());
+      if (layout.columns.some((c) => c.column === column) || this.colOffset >= at) break;
       this.colOffset++;
     }
   }
@@ -163,6 +199,7 @@ export class TableSession {
   setPage(f: Followed, rpc: TableRpc, n: number): void {
     this.page = Math.max(0, Math.min(this.pages() - 1, n));
     this.row = 0;
+    this.rowOffset = 0;
     void this.refresh(f, rpc);
   }
 
@@ -171,6 +208,7 @@ export class TableSession {
     this.pageSize = PAGE_SIZES[(Math.max(0, at) + by + PAGE_SIZES.length) % PAGE_SIZES.length]!;
     this.page = 0;
     this.row = 0;
+    this.rowOffset = 0;
     void this.refresh(f, rpc);
   }
 
@@ -181,6 +219,7 @@ export class TableSession {
     this.sort = [...others, ...(next ? [next] : [])];
     this.page = 0;
     this.row = 0;
+    this.rowOffset = 0;
     void this.refresh(f, rpc);
   }
 
@@ -188,6 +227,7 @@ export class TableSession {
     this.query = q.trim();
     this.page = 0;
     this.row = 0;
+    this.rowOffset = 0;
     void this.refresh(f, rpc);
   }
 
@@ -195,6 +235,7 @@ export class TableSession {
     this.filters = [...this.filters, c];
     this.page = 0;
     this.row = 0;
+    this.rowOffset = 0;
     void this.refresh(f, rpc);
   }
 
@@ -203,6 +244,7 @@ export class TableSession {
     this.query = "";
     this.page = 0;
     this.row = 0;
+    this.rowOffset = 0;
     void this.refresh(f, rpc);
   }
 
@@ -275,6 +317,18 @@ export class TableSession {
     const has = current.some((v) => String(v) === id);
     const rest = current.filter((v) => String(v) !== id);
     return has ? rest : mode === "single" ? [id] : [...rest, id];
+  }
+
+  /** Raw value for inspection; unlike copy/export, null and unavailable are explicit. */
+  fullCellValue(): string {
+    const d = this.data();
+    const column = this.columnName();
+    const record = d.records?.[this.row];
+    if (d.records && (!record || !Object.hasOwn(record, column))) return "unavailable";
+    const value = record ? record[column] : d.rows[this.row]?.[d.columns.indexOf(column)];
+    if (value === undefined) return "unavailable";
+    if (value === null) return "NULL";
+    return typeof value === "string" ? value : typeof value === "object" ? JSON.stringify(value, null, 2) : String(value);
   }
 
   cellValue(): string {

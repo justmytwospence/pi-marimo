@@ -11,11 +11,14 @@ import { PackageClient } from "../src/core/packages.js";
 import { HeadlessSessions } from "../src/core/headless.js";
 import { nodeIo } from "../src/core/node-io.js";
 import type { CellOutput } from "../src/core/output.js";
+import { callFunction, fileText } from "../src/core/table-rpc.js";
 import { MarimoWatcher } from "../src/core/watcher.js";
 import { OwnServers } from "../src/servers.js";
 import { runCells, setUiValues } from "../src/ui/interrupt.js";
 import { markCell, unmarkSelection } from "../src/ui/lens-mark.js";
 import { runScratch, type ScratchEvent } from "../src/ui/scratch.js";
+import { notebookKey } from "../src/ui/identity.js";
+import { NotebookView } from "../src/ui/view.js";
 
 const live = (() => {
   if (process.env.PI_MARIMO_LIVE_TEST !== "1") return false;
@@ -153,6 +156,178 @@ test.skipIf(!live)("a notebook Pi starts: run, set a widget, run Python, mark a 
     await unmarkSelection(f, selection!.id);
     await until(() => !nb.lens.selections().some((s) => s.id === selection!.id));
   } finally {
+    await watcher.stop();
+  }
+}, 120_000);
+
+// Only this generated fixture is driven by the keyboard test, never a discovered user notebook.
+const KEYBOARD_NOTEBOOK = `import marimo
+
+app = marimo.App()
+
+
+@app.cell
+def _():
+    import marimo as mo
+    return (mo,)
+
+
+@app.cell
+def _(mo):
+    n = mo.ui.slider(0, 10, value=3, label="n")
+    n
+    return (n,)
+
+
+@app.cell
+def _(mo):
+    enabled = mo.ui.checkbox(value=False, label="enabled")
+    enabled
+    return (enabled,)
+
+
+@app.cell
+def _(n, enabled):
+    keyboard_result = n.value * 2 + int(enabled.value)
+    keyboard_result
+    return (keyboard_result,)
+
+
+@app.cell
+def _(mo):
+    cities = mo.ui.table(
+        [{"city": "Oslo", "population": 11}, {"city": "Rome", "population": 22}],
+        selection="multi", label="Cities",
+    )
+    cities
+    return (cities,)
+
+
+@app.cell
+def _(cities):
+    selection_count = len(cities.value)
+    selection_count
+    return (selection_count,)
+
+
+if __name__ == "__main__":
+    app.run()
+`;
+
+test.skipIf(!live)("keyboard controls update kernel values; table cursor, full value, copy and selection agree", async () => {
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), "pi-marimo-keyboard-")));
+  const file = join(dir, "keyboard.py");
+  writeFileSync(file, KEYBOARD_NOTEBOOK);
+  const server = await servers.start({ command: ["marimo"], file, cwd: dir, timeoutMs: 60_000 });
+  const sessionId = await headless.attach(server.url, file);
+  const watcher = new MarimoWatcher({ io: nodeIo(), cwd: dir, pollMs: 300, onChange: () => undefined });
+  watcher.start();
+  let view: NotebookView | undefined;
+  try {
+    const f = await until(() => watcher.followed().find(o => o.attachment.path === file && o.connection === "connected" && o.notebook.ready));
+    expect(f.attachment.sessionId).toBe(sessionId);
+    const nb = f.notebook;
+    await runCells(f.attachment, nb.ordered().map(c => ({ id: c.id, code: c.code })));
+    const result = await until(() => nb.ordered().find(c => c.code.includes("keyboard_result =") && scalarResult(c.output) === "6"));
+    const count = await until(() => nb.ordered().find(c => c.code.includes("selection_count =") && scalarResult(c.output) === "0"));
+    const slider = await until(() => nb.ordered().find(c => c.code.includes("n = mo.ui.slider") && c.output?.widgets?.some(w => w.kind === "slider")));
+    const checkbox = await until(() => nb.ordered().find(c => c.code.includes("enabled = mo.ui.checkbox") && c.output?.widgets?.some(w => w.kind === "checkbox")));
+    const table = await until(() => nb.ordered().find(c => c.code.includes("cities = mo.ui.table") && c.output?.table?.objectId));
+    const writes: string[] = [];
+    const mutations: Promise<void>[] = [];
+    const rpcCalls: Array<{ fn: string; args: unknown; result: Promise<unknown> }> = [];
+    view = new NotebookView(
+      { requestRender: () => {}, terminal: { rows: 32, write: (text: string) => writes.push(text) } } as ConstructorParameters<typeof NotebookView>[0],
+      { fg: (_color: string, text: string) => text, bold: (text: string) => text },
+      notebookKey(f),
+      {
+        followed: () => [f], interrupt: async () => {}, openInBrowser: () => {},
+        setWidget: (followed, cell, widget, value) => {
+          followed.notebook.setUserValue(cell.id, widget.objectId, widget.label, value);
+          mutations.push(setUiValues(followed.attachment, [widget.objectId], [value]));
+        },
+        table: {
+          call: (followed, id, fn, args) => {
+            const result = callFunction(followed, id, fn, args);
+            rpcCalls.push({ fn, args, result });
+            return result;
+          },
+          file: fileText,
+        },
+        setTableSelection: (followed, cell, id, value) => {
+          followed.notebook.setUserValue(cell.id, id, "table selection", value);
+          mutations.push(setUiValues(followed.attachment, [id], [value]));
+        },
+      },
+      () => {},
+    );
+    const screen = () => view!.render(120).join("\n");
+    const press = (key: string) => { view!.handleInput(key); screen(); };
+    // Move the notebook cursor using keys, rather than injecting a private view state.
+    const goTo = (id: string) => {
+      press("g");
+      for (let i = 0; i < nb.order.indexOf(id); i++) press("j");
+      expect(view!.snapshot().cursor).toBe(id);
+    };
+    screen();
+    goTo(slider.id);
+    press("\r"); // Enter on a control cell enters widget mode, not source editing.
+    expect(view.snapshot().widget).toMatchObject({ cell: slider.id, index: 0 });
+    press("l");
+    await Promise.all(mutations);
+    await until(() => scalarResult(result.output) === "8", 30_000, () => result);
+    press("\r"); // Type a slider value through the real dock editor.
+    press("\x7f");
+    press("7");
+    press("\r");
+    await Promise.all(mutations);
+    await until(() => scalarResult(result.output) === "14", 30_000, () => result);
+    press("\t");
+    expect(view.snapshot().widget).toMatchObject({ cell: checkbox.id, index: 0 });
+    press(" ");
+    await Promise.all(mutations);
+    await until(() => scalarResult(result.output) === "15", 30_000, () => result);
+    press("\x1b[Z");
+    expect(view.snapshot().widget).toMatchObject({ cell: slider.id, index: 0 });
+    press("\x1b");
+    expect(view.snapshot().widget).toBeUndefined();
+
+    goTo(table.id);
+    press("t");
+    expect(view.snapshot().table).toMatchObject({ cell: table.id, objectId: table.output!.table!.objectId });
+    press("l"); // population column
+    press("s"); // A real server-side sort, not fixture-supplied rows.
+    await until(() => rpcCalls.some(call => call.fn === "search"));
+    await Promise.all(rpcCalls.map(call => call.result));
+    expect(rpcCalls).toEqual(expect.arrayContaining([
+      expect.objectContaining({ fn: "search", args: expect.objectContaining({ sort: [{ by: "population", descending: false }] }) }),
+    ]));
+    expect(screen()).toContain("Rome");
+    press("j"); // Rome, population 22
+    expect(scalarResult(count.output)).toBe("0");
+    expect(mutations).toHaveLength(3); // Cursor movement and sorting never select rows.
+    const tableState = view.snapshot().table;
+    press("v");
+    expect(view.snapshot().message?.text).toBe("22");
+    press("\x1b");
+    expect(view.snapshot().message).toBeUndefined();
+    expect(view.snapshot().table).toEqual(tableState);
+    press("y");
+    expect(writes.at(-1)).toBe(`\x1b]52;c;${Buffer.from("22").toString("base64")}\x07`);
+    press(" ");
+    await Promise.all(mutations);
+    await until(() => scalarResult(count.output) === "1", 30_000, () => count);
+    const events: ScratchEvent[] = [];
+    const selected = await runScratch(f.attachment, 'print(cities.value == [{"city": "Rome", "population": 22}])', undefined, event => events.push(event));
+    expect(selected.success).toBe(true);
+    expect(events).toContainEqual({ stream: "stdout", text: "True" });
+    press(" ");
+    await Promise.all(mutations);
+    await until(() => scalarResult(count.output) === "0", 30_000, () => count);
+    press("\x1b");
+    expect(view.snapshot().table).toBeUndefined();
+  } finally {
+    view?.dispose();
     await watcher.stop();
   }
 }, 120_000);

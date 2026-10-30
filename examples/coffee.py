@@ -43,7 +43,7 @@ def coffee_imports():
 
 @app.cell(hide_code=True)
 def start_here(mo):
-    mo.md("""
+    mo.md(r"""
     # Coffee shop explorer
     ## Start here
     Ninety deterministic days, five drinks, 450 observations: follow cold brew from winter into spring. This is a live notebook, not a collection of terminal screenshots.
@@ -57,9 +57,9 @@ def start_here(mo):
 
 @app.cell(hide_code=True)
 def data_heading(mo):
-    mo.md("""
+    mo.md(r"""
     ## Data
-    The original plain DataFrame follows. Use `t` or Enter on a table to page, sort, search/filter, select, view row cards and summaries. Select rows in Sales and watch Selected sales below. The two-table composition exercises independent leaf targeting; inventory includes dates, categories, numbers, booleans and missing values.
+    The original plain DataFrame follows. Use `t` or Enter on a table cell for a pinned-header viewport: click a cell to focus its row and column or a header to sort; wheel through loaded rows. `H`/`L` resize the current column, `=` fits loaded values, Ctrl+G chooses a column, and `v` inspects its full value. Page, sort, search/filter, select, row cards and summaries still use marimo’s kernel functions. Select rows in Sales and watch Selected sales below. The two-table composition exercises independent leaf targeting; inventory includes dates, categories, numbers, booleans and missing values.
     """)
     return
 
@@ -119,9 +119,9 @@ def inventory_tables(mo, pd, sales):
 
 @app.cell(hide_code=True)
 def controls_heading(mo):
-    mo.md("""
+    mo.md(r"""
     ## Controls
-    Each control has its own definition and rerun boundary. Drink/window/weekends/title retain the original trend story. Cup range, date bounds and multiselect filter the shared coffee data. Empty or reversed filters are safe. Price scales revenue; normalization changes trend units; aggregation changes daily totals; annotation and revision have separate observable outputs. `w` enters controls; Enter types, Space toggles/presses and Esc leaves.
+    Each control has its own definition and rerun boundary. Drink/window/weekends/title retain the original trend story. Cup range, date bounds and multiselect filter the shared coffee data. Empty or reversed filters are safe. Price scales revenue; normalization changes trend units; aggregation changes daily totals; annotation and revision have separate observable outputs. `w` or Enter on a control cell enters keyboard control mode. Tab/Shift+Tab and `j`/`k` move across controls in notebook order; `h`/`l` adjust, Enter types a slider value or `lower, upper` range, Space toggles/presses or changes the range handle, `o` opens unsupported controls in the browser, and Esc leaves.
     """)
     return
 
@@ -249,7 +249,7 @@ def annotation_output(annotation, mo, revision):
 
 @app.cell(hide_code=True)
 def trend_heading(mo):
-    mo.md("""
+    mo.md(r"""
     ## Trend
     Cold brew has the strongest built-in seasonal growth. The first two charts follow the selected drink and shared filters; totals and heatmap use all filtered drinks. Hover for values, drag to zoom, choose pan, wheel to zoom, toggle traces in the legend and double-click to reset. The 3D surface uses deterministic local data: drag to rotate. `i` enters terminal chart mode; arrows move, Space starts/ends a drag, `+`/`-` zoom and `0` resets. Esc leaves.
     """)
@@ -331,7 +331,7 @@ def trend_summary(daily, drink, mo, smooth):
 
 @app.cell(hide_code=True)
 def altair_heading(mo):
-    mo.md("""
+    mo.md(r"""
     ## Altair
     The layered trend follows the same controls. The scatter/histogram shares a Vega-Lite interval selection: **brush in the browser**, then inspect Selected Altair records. The terminal shows a static image, not a pointer bridge. A separate raw Vega MIME object exercises Vega rather than Vega-Lite.
     """)
@@ -433,7 +433,7 @@ def raw_vega(drinks, totals):
 
 @app.cell(hide_code=True)
 def rich_heading(mo):
-    mo.md("""
+    mo.md(r"""
     ## Rich output
     ### Notebook ingredients
     - **Markdown** with emphasis, lists and [marimo documentation](https://docs.marimo.io).
@@ -468,7 +468,7 @@ def rich_heading(mo):
 
 @app.cell(hide_code=True)
 def mermaid_fence(mo):
-    mo.md("""
+    mo.md(r"""
     ### Coffee dataflow
     ```mermaid
     graph LR
@@ -522,7 +522,7 @@ def mixed_result(mixed_note, mixed_ready, mo):
 
 @app.cell(hide_code=True)
 def progress_heading(mo):
-    mo.md("""
+    mo.md(r"""
     ## Progress
     All slow work is opt-in. Run one button at a time. Each short loop takes about three seconds and streams updates; the long loop takes twenty seconds. Press `x` twice to interrupt the long loop, `f` to follow running, and `T` for timing. Its dependent result demonstrates queued/blocked work. Run buttons reset after execution; rerun the cell with the button off to clear an interrupted state. No model is being fit.
     """)
@@ -662,7 +662,7 @@ def error_dependent(error_demo_result):
 
 @app.cell(hide_code=True)
 def pairing_heading(mo):
-    mo.md("""
+    mo.md(r"""
     ## Pairing
     Edit the ordinary Markdown below with Enter or `b`. In the parameter cell, change the price: F2/`:w` saves only (downstream becomes stale), F3/`:MarimoRun` saves and runs, F4 closes and F6 reverts with confirmation when dirty. `:q!` deliberately discards a draft. Browser/agent changes cause a conflict prompt rather than silent overwrite; compare or discard/reload. Unexpected editor exit retains the draft in memory, not across Pi restarts.
 
@@ -710,7 +710,7 @@ def tour_heading(mo):
 
     ### Navigate and explore
 
-    - **Navigate and find:** `j`/`k` cells, Ctrl+J/K or `[`/`]` sections, `g`/`G` ends, `/` finds cell/variable/code/error; Esc cancels. `n`/`p` focus parts.
+    - **Navigate and find:** `j`/`k` cells, Ctrl+D/U or `[`/`]` sections, `g`/`G` ends, `/` finds cell/variable/code/error; Ctrl+D/U or arrows step through search matches; Esc cancels. `n`/`p` focus parts without separator rules.
     - **Fold and inspect source:** Tab folds a section, Shift+Tab folds all; `O` switches whole section/cell. `B` folds code, `H`/`L` scroll, `0` resets, `#`/F7 toggles line numbers. Rich output has long fenced source; `s` shows Mermaid source.
     - **Help and long messages:** `?` opens context-aware help; Tab/Shift+Tab cycles categories, `/` searches keys/actions/descriptions, Esc clears search then closes. `?`/F1 closes outside search. F8 opens a long transient message; scroll then Esc/F8 returns with drafts retained.
     - **Dock, focus and resize:** `/marimo split coffee.py` docks; `|` toggles full screen, Ctrl+] changes chat/notebook focus, Ctrl+' docks/closes. Click a pane to focus; drag divider to resize. Pi dialogs temporarily use the full width.
@@ -718,8 +718,8 @@ def tour_heading(mo):
 
     ### Data and charts
 
-    - **Tables:** Data: `t`, hjkl movement, `]`/`[` pages, `+`/`-` page size, `s`/`S` sort, `/` search, `f` filter, `F` clear, Space select, Enter row card, `i` statistics, `c` summaries. `y`/`Y` copies and `D` CSV export are **user-invoked side effects**, not run by this demo. Esc leaves.
-    - **Controls:** Controls: `w`, j/k picks, h/l changes, H/L ten steps, Space toggles/presses, Enter types, Esc leaves. Dates use two separate date inputs, not date-range. Mixed output has multiple independently targetable leaves.
+    - **Tables:** Data: `t`/Enter opens a pinned-header viewport; hjkl moves the active cell without selecting it, wheel moves rows, click cells to focus, click headers to sort (Shift-click adds a sort). `]`/`[` pages, `+`/`-` page size, `s`/`S` sort, `/` search, `f` filter, `F` clear, Space selects, Enter opens a row card, `i` statistics, `c` summaries. `H`/`L` resize a column, `=` fits loaded values, Ctrl+G chooses a column, and `v` shows its full value. `y`/`Y` copies and `D` CSV export are **user-invoked side effects**, not run by this demo. Esc leaves.
+    - **Controls:** Controls: `w` or Enter enters; Tab/Shift+Tab or j/k moves across cells, h/l changes, H/L or Shift+Left/Right changes ten steps, Space toggles/presses or chooses a range handle, Enter types a slider number or `lower, upper` range, `o` opens unsupported controls in the browser, Esc leaves. Dates use two separate date inputs, not date-range. Mixed output has multiple independently targetable leaves.
     - **Charts and limits:** Trend: live Plotly hover/drag/pan/zoom/legend/reset and `i` keyboard mode. Altair: browser-only brush, reactive static terminal images; raw Vega in Altair and PNG in Rich output. Static Plotly fallback uses `liveCharts: false`. Kitty graphics is required for inline images; unavailable rendering is a capability limit, not a fabricated chart.
 
     ### Run and pair

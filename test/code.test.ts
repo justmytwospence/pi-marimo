@@ -1,8 +1,9 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
 import { codePanelRows, codeRows, expandTabs, scrollCode } from "../src/ui/code.js";
 import { diffLines } from "../src/ui/rows.js";
 import { CellConsole } from "../src/core/console.js";
+import { SyntaxHighlighter } from "../src/ui/syntax.js";
 
 describe("source panels", () => {
   const theme = {
@@ -56,6 +57,26 @@ describe("source panels", () => {
 });
 
 describe("code viewport", () => {
+  it("passes exact source to highlighting and retains logical metadata through folding and scrolling", () => {
+    const source = "\t界é\n\n  tail\tend\n";
+    const syntax = new SyntaxHighlighter();
+    const request = vi.spyOn(syntax, "request").mockReturnValue(source.split("\n").map(line => `\x1b[31m${line}\x1b[0m`));
+    const theme = { fg: (_: string, text: string) => text, bold: (text: string) => text };
+    const onReady = vi.fn();
+    const state = { offset: 2 };
+    try {
+      const options = { width: 8, blockId: "cell:source", language: "py", syntax, theme, onReady, lineNumbers: true, state };
+      const rows = codeRows(source, options);
+      expect(request).toHaveBeenCalledExactlyOnceWith(source, "py", theme, onReady);
+      expect(rows.map(({ blockId, sourceLine, code }) => ({ blockId, sourceLine, code }))).toEqual(
+        [undefined, 0, 1, 2, 3].map(sourceLine => ({ blockId: "cell:source", sourceLine, code: true })),
+      );
+      expect(rows.slice(1).map(row => stripTerminalSequences(row.text))).toEqual(["1   界é", "2 ", "3 tail  ", "4 "]);
+      const folded = codePanelRows(source, { ...options, folded: true, previewLines: 2 });
+      expect(folded.map(row => row.sourceLine)).toEqual([undefined, undefined, 0, 1, undefined]);
+      expect(folded.every(row => row.code && row.blockId === "cell:source" && visibleWidth(row.text) === 8)).toBe(true);
+    } finally { syntax.dispose(); }
+  });
   it("keeps every logical line including trailing blanks", () => {
     const source = Array.from({ length: 10001 }, (_, i) => `line ${i}`).join("\n") + "\n\n";
     const rows = codeRows(source, { width: 80 });
