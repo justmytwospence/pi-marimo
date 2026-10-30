@@ -54,7 +54,7 @@ The **outline** lists sections and cells. A cell is named by its name, or what i
 | `✗` | failed, or blocked by a failed ancestor |
 | `•` | stale, or edited but not rerun |
 
-Status chips can show execution state and agent changes together. The **detail** shows Markdown, output, diagnostics, widgets and source; `n`/`p` move between parts. `O` stacks the whole section. Prose uses the available width. Expanded source and fenced code retain every line and scroll horizontally rather than wrapping or truncating; `H`/`L` scroll the focused block, `0` resets it, and `#` toggles line numbers. `B` folds or unfolds source.
+Status chips can show execution state and agent changes together. The **detail** shows Markdown, output, diagnostics, widgets and source without redundant type captions; `n`/`p` move between parts, and a stronger separator marks the focused part. Source sits in a padded, full-width panel. `O` stacks the whole section. Prose uses the available width. Expanded source and fenced code retain every line and scroll horizontally rather than wrapping or truncating; `H`/`L` scroll the focused block, `0` resets it, and `#` toggles line numbers. `B` folds or unfolds source.
 
 Mermaid fences and `mo.mermaid` render as diagrams when image support is available. If rendering or images are unavailable, the view explains why and shows the complete diagram source; `s` switches a focused diagram to or from source.
 
@@ -127,7 +127,7 @@ From 100 columns the outline and detail sit side by side. Narrower, as when dock
 
 </details>
 
-The mouse works too: the wheel scrolls the pane under it, a click selects a cell or part, and a double click acts on it. Help starts in the current mode: `j`/`k`, PgUp/PgDn, `g`/`G` or the wheel scroll; `/` searches; Tab/Shift+Tab cycles categories; Esc clears search then closes, and `?` or F1 closes when not typing. The footer shows help and a contextual action, with a position indicator when it fits.
+The mouse works too: the wheel scrolls the pane under it, a click selects a cell or part, and a double click acts on it. Help starts in the current mode, with aligned keys and actions and a category rail when there is room. `j`/`k`, PgUp/PgDn, `g`/`G` or the wheel scroll; `/` searches keys, actions and descriptions across categories; Tab/Shift+Tab cycles categories; Esc clears search then closes, and `?` or F1 closes when not typing. The footer shows help and a contextual action, with a position indicator when it fits.
 
 Transient messages preview in up to three rows, reserving four body rows when possible. When there is room, an overflowing preview shows `F8 more` and the number of hidden lines; F8 opens the full captured message in a read-only view. Scroll with `j`/`k` or arrows, PgUp/PgDn, `g`/`G` or Home/End, or the mouse wheel; Esc or F8 returns to the prior view and scroll position. Editor and prompt drafts are retained, and ordinary keys keep their normal behavior outside the message view.
 
@@ -328,8 +328,10 @@ npm ci && npm run check
 ```
 
 - Live tests (need `marimo` on PATH): `PI_MARIMO_LIVE_TEST=1 npx vitest run test/e2e.test.ts test/e2e-actions.test.ts`
-- The demo notebook: `uvx --with pandas,numpy,matplotlib,plotly marimo edit examples/coffee.py`
+- The demo notebook: `uvx --with pandas,numpy,matplotlib,plotly,altair,vl-convert-python,rich,tqdm,marimo-lens marimo edit --no-token examples/coffee.py`
 - Releases and rollout: `AGENTS.md`.
+
+The coffee demo includes selectable tables, every supported widget family, Matplotlib, live Plotly plots (including a heatmap and 3D surface), Altair/Vega-Lite and Vega, Mermaid, rich output, gated progress and intentional diagnostics. Its tour covers editing, agent changes, Lens marks, variables, packages, docking and notebook lifecycle actions. Plotly gestures work in the terminal; Altair brushing runs in the browser, while the terminal shows its rendered image. Slow runs and errors are opt-in. Package mutations, exports and server shutdowns are left for you to invoke deliberately.
 
 ## License
 

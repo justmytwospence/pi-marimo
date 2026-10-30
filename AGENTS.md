@@ -6,7 +6,7 @@ Pi package for live marimo notebooks (npm: `pi-marimo`, repo `justmytwospence/pi
 
 - `npm ci`, then `npm run check`.
 - Live e2e (needs `marimo` on PATH): `PI_MARIMO_LIVE_TEST=1 npx vitest run test/e2e.test.ts test/e2e-actions.test.ts`
-- Demo: `uvx --with pandas,numpy,matplotlib,plotly marimo edit examples/coffee.py`
+- Demo: `uvx --with pandas,numpy,matplotlib,plotly,altair,vl-convert-python,rich,tqdm,marimo-lens marimo edit --no-token examples/coffee.py`
 
 ## Contract copies
 
