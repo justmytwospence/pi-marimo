@@ -651,6 +651,28 @@ test.each([46, 80, 100, 120, 180])("a live Plotly chart is drawn from its page's
     expect(events.at(-1)).toMatchObject({ type: "drag" });
     v.handleMouse(ev("release", 0, 0));
     expect(v.handleMouse(ev("move", 0, 0, { button: "none" }))).toBeUndefined();
+    // Cell view retains wheel zoom. Section view scrolls until explicitly inspecting.
+    const wheel = () => ev("wheel", live.rects[0]!.left + 1, live.rects[0]!.top + 1, { button: "none", wheelDelta: 1 });
+    v.handleMouse(wheel());
+    expect(events.at(-1)).toMatchObject({ type: "wheel", wheelDelta: 1 });
+    v.handleInput("O");
+    v.render(width);
+    await new Promise(r => setTimeout(r, 0));
+    v.render(width);
+    const before = events.length;
+    const scroll = (v as any).detailScroll;
+    v.handleMouse(wheel());
+    expect(events).toHaveLength(before);
+    expect((v as any).detailScroll).toBe(scroll + 1);
+    // Restore the fully visible chart before inspecting it.
+    (v as any).detailScroll = 0;
+    v.render(width);
+    v.handleInput("i");
+    expect(live.inspecting).toBe(true);
+    v.handleMouse(wheel());
+    expect(events.at(-1)).toMatchObject({ type: "wheel", wheelDelta: 1 });
+    v.handleInput("\x1b");
+    v.handleInput("O");
     // Moving to a cell without the chart closes its page.
     v.handleInput("j");
     v.render(width);
@@ -1385,6 +1407,26 @@ test.each([false, true])("detail finalization drops mixed-output wrappers and re
   expect(plain(focused.rows[focused.parts[1]!.row]!.text)).toBe("▸");
 });
 
+test.each([46, 80, 100, 120].flatMap(width => [false, true].map(section => ({ width, section }))))("clipped images show one alt on the first visible image row (width=$width, section=$section)", ({ width, section }) => {
+  const f = nbWith([{ id: "a", code: "diagram" }]);
+  f.notebook.cells.get("a")!.output = { kind: "chart", text: "", mermaid: ["graph TD; A-->B"] };
+  const v = make(f);
+  (v as any).section = section;
+  (v as any).diagramRows = () => Array.from({ length: 40 }, (_, index) => ({
+    text: index === 0 ? "IMAGE PLACEMENT" : "",
+    image: { index, height: 40, alt: "[clipped diagram]" },
+  }));
+  try {
+    expect(screen(v, width).match(/\[clipped diagram\]/g)).toHaveLength(1);
+    const start = (v as any).lastDetail.findIndex((r: any) => r.image);
+    (v as any).detailScroll = start + 3;
+    const shown = screen(v, width);
+    expect(shown).toContain("[clipped diagram]");
+    expect(shown).not.toContain("IMAGE PLACEMENT");
+    expect(shown.match(/\[clipped diagram\]/g)).toHaveLength(1);
+  } finally { v.dispose(); }
+});
+
 test("structural gaps compact without consuming source padding, blank lines or editor rows", () => {
   const f = nbWith([{ id: "a", code: "x = 1\n\n" }]);
   const cell = f.notebook.cells.get("a")!;
@@ -2072,11 +2114,25 @@ test.each([46, 80, 100, 120, 180])("STEP6 12-row terminal has a whole-token, sin
       const footer = footerText(lines);
       const tokens = footer.split(" · ");
       expect(tokens.slice(0, 2)).toEqual(["? help", action]);
-      expect(tokens.length).toBeLessThanOrEqual(3);
-      if (tokens.length === 3) expect(tokens[2]).toBe(position);
+      expect(tokens.length).toBeLessThanOrEqual(position ? 4 : 2);
+      if (position) {
+        expect(tokens[2]).toBe("O cell");
+        if (tokens.length === 4) expect(tokens[3]).toBe(position);
+      } else expect(footer).not.toMatch(/O (cell|section)/u);
       expect(footer).not.toMatch(/[…\n]|\.\.\./u);
       expect(lines.filter(line => plain(line).includes("? help"))).toHaveLength(1);
     }
+  } finally { v.dispose(); }
+});
+
+test("notebook footer names the current reading view and disappears outside notebook mode", () => {
+  const v = make(dataflow());
+  try {
+    expect(footerText(v.render(100))).toContain("O cell");
+    v.handleInput("O");
+    expect(footerText(v.render(100))).toContain("O section");
+    v.handleInput("v");
+    expect(footerText(v.render(100))).not.toMatch(/O (cell|section)/u);
   } finally { v.dispose(); }
 });
 

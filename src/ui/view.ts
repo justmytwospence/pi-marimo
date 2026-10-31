@@ -1961,7 +1961,7 @@ export class NotebookView implements Component, Focusable {
       const detailText = (i: number): string => {
         const r = detail[i];
         if (!r?.image || visible(i)) return r?.text ?? "";
-        return r.image.index === 0 ? r.image.alt : r.text;
+        return r.image.index === 0 || i === this.detailScroll ? r.image.alt : r.text;
       };
       for (let i = 0; i < page; i++) {
         const left = i < oh ? built.rows[this.scroll + i]?.text ?? (this.filter && !cells.length && i === 0 ? th.fg("dim", `No cell matches "${this.filter}".`) : "") : "";
@@ -2039,7 +2039,7 @@ export class NotebookView implements Component, Focusable {
       for (const token of tokens) if (visibleWidth([...kept, token].join(" · ")) <= inner) kept.push(token);
       return this.theme.fg("dim", kept.join(" · "));
     }
-    return this.theme.fg("dim", footerTokens(inner, primary, position, mode === "editor"));
+    return this.theme.fg("dim", footerTokens(inner, primary, position, mode === "editor", mode === "notebook" ? this.section : undefined));
   }
 
   /** A theme change or resize: the terminal may have dropped image data with the redraw, so live charts upload their frames again. */
@@ -2116,7 +2116,8 @@ export class NotebookView implements Component, Focusable {
       return { handled: true };
     }
     if (this.timing) return { handled: true };
-    const live = this.live.mouse(event);
+    // Section reading keeps wheel input for scrolling unless chart inspection is explicit.
+    const live = event.type === "wheel" && this.section && !this.live.inspecting ? undefined : this.live.mouse(event);
     if (live) return live;
     if (this.closed) return undefined;
     // A slider dragged with the mouse follows it until the button goes up.

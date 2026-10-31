@@ -127,7 +127,7 @@ From 100 columns the outline and detail sit side by side. Narrower, as when dock
 
 </details>
 
-The mouse works too: the wheel scrolls the pane under it, a click selects a cell or part, and a double click acts on it. Help starts in the current mode, with aligned keys and actions and a category rail when there is room. `j`/`k`, PgUp/PgDn, `g`/`G` or the wheel scroll; `/` searches keys, actions and descriptions across categories; Tab/Shift+Tab cycles categories; Esc clears search then closes, and `?` or F1 closes when not typing. The footer shows help and a contextual action, with a position indicator when it fits.
+The mouse works too: the wheel scrolls the pane under it, a click selects a cell or part, and a double click acts on it. Help starts in the current mode, with aligned keys and actions and a category rail when there is room. `j`/`k`, PgUp/PgDn, `g`/`G` or the wheel scroll; `/` searches keys, actions and descriptions across categories; Tab/Shift+Tab cycles categories; Esc clears search then closes, and `?` or F1 closes when not typing. The footer shows help and a contextual action, with a position indicator when it fits. Cell view adds `O cell`, section view adds `O section` to show the current mode, and other modes omit this hint; the hint is shown whole or not at all.
 
 Transient messages preview in up to three rows, reserving four body rows when possible. When there is room, an overflowing preview shows `F8 more` and the number of hidden lines; F8 opens the full captured message in a read-only view. Scroll with `j`/`k` or arrows, PgUp/PgDn, `g`/`G` or Home/End, or the mouse wheel; Esc or F8 returns to the prior view and scroll position. Editor and prompt drafts are retained, and ordinary keys keep their normal behavior outside the message view.
 
@@ -201,7 +201,9 @@ On terminals with Kitty graphics (Ghostty, Kitty, herdr) charts draw inline at t
 
 - PNG figures (matplotlib, PIL) as they are.
 - Vega-Lite and Altair, drawn with `uv run --with vl-convert-python` (needs `uv`).
-- Plotly, live: hover for tooltips, drag to zoom or pan, the wheel zooms, and `i` drives it from the keyboard. Pi downloads a sandboxed headless Chrome for Testing once into `~/.cache/pi-marimo/chrome`; it never uses your own Chrome. `"liveCharts": false` draws pictures instead.
+- Plotly, live: hover for tooltips, drag to zoom or pan, and `i` enters explicit chart inspection. In section view, the wheel over a live chart scrolls the detail by default and zooms only during chart inspection; cell view is unchanged. Pi downloads a sandboxed headless Chrome for Testing once into `~/.cache/pi-marimo/chrome`; it never uses your own Chrome. `"liveCharts": false` draws pictures instead.
+
+Clipped image and chart placeholders stay visible even when the image's top is above the viewport.
 
 In live-chart mode, `h`/`j`/`k`/`l` or arrows move the pointer; uppercase or shifted arrows move farther. Space or Enter starts or ends a drag, `+`/`-` zoom, `0` resets, and `i`, `q` or Esc leaves chart mode.
 

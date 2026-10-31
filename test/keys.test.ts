@@ -135,6 +135,9 @@ test.each([
 });
 
 test("footer drops lowest priority first and never splits a token", () => {
+  expect(footerTokens(100, "edit", "1/2", false, false)).toBe("? help · b edit source · O cell · 1/2");
+  expect(footerTokens(100, "edit", "1/2", false, true)).toBe("? help · b edit source · O section · 1/2");
+  expect(footerTokens(29, "edit", "1/2", false, false)).toBe("? help · b edit source");
   expect(footerTokens(1, "edit")).toBe("");
   expect(footerTokens(6, "edit", "1/2")).toBe("? help");
   expect(footerTokens(22, "edit", "1/2")).toBe("? help · b edit source");

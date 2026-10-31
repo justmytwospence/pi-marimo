@@ -212,8 +212,8 @@ export function commandToken(id: string): string {
   return `${entry.keys[0]} ${entry.label}`;
 }
 /** Whole tokens in descending priority; no ellipses or partially visible shortcuts. */
-export function footerTokens(width: number, primary: string, position?: string, editor = false): string {
-  const tokens = [commandToken(editor ? "editor-help" : "help"), commandToken(primary), ...(position ? [position] : [])];
+export function footerTokens(width: number, primary: string, position?: string, editor = false, section?: boolean): string {
+  const tokens = [commandToken(editor ? "editor-help" : "help"), commandToken(primary), ...(section !== undefined ? [`${commandKey("section")} ${section ? "section" : "cell"}`] : []), ...(position ? [position] : [])];
   const kept: string[] = [];
   for (const token of tokens) {
     if (visibleWidth([...kept, token].join(" · ")) <= width) kept.push(token);
