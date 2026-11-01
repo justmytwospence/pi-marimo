@@ -82,6 +82,30 @@ describe("cell output for the notebook view", () => {
   });
 });
 
+describe("ordered HTML whitespace and sampler leaves", () => {
+  const html = (data: string) => summarizeOutput({ mimetype: "text/html", data })!;
+
+  test("collapses pretty-printed indentation without joining inline words or losing NBSP and br", () => {
+    const out = html(`<div>\n  <section>\n    <p>Alpha <strong>beta</strong>  gamma&nbsp;delta<br>epsilon</p>\n    <p>Next  line</p>\n  </section>\n</div>`);
+    expect(out.text).toContain("Alpha beta gamma\u00a0delta\nepsilon");
+    expect(out.text).toContain("Next line");
+    expect(out.text).not.toMatch(/\n +| +\n|\n{3,}/u);
+    expect(html("<p>first<br>second</p>").text).toBe("first\nsecond");
+    expect(html("<span>one </span><span>two</span>").text).toBe("one two");
+  });
+
+  test("pre/code, plain-text output and terminal snapshots retain source whitespace", async () => {
+    const source = "  raw\n\tcode\n\n final  \n";
+    expect(html(`<pre><code>${source}</code></pre>`).codeBlocks).toEqual([{ source }]);
+    expect(summarizeOutput({ mimetype: "text/plain", data: source })?.text).toBe(source);
+    const console = new CellConsole();
+    await console.append({ channel: "stdout", data: "  raw\n\n final  \n" });
+    expect(console.snapshot().map(line => line.text)).toEqual(["  raw", "", " final  "]);
+    console.dispose();
+  });
+
+});
+
 describe("output prefixes", () => {
   const theme = { fg: (_: string, text: string) => text, bold: (text: string) => text };
   const limits = { textLines: 1, tableRows: 1 };

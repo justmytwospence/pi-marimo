@@ -386,8 +386,13 @@ function orderedHtml(html: string): CellOutput | undefined {
     if (text) blocks.push({ id: `html:text:${blocks.length}`, output: { kind: "text", text: clip(text) } });
     residual = "";
   };
+  const newline = () => { residual = residual.replace(/[ \t\r\f]*$/gu, "") + "\n"; };
   const visit = (node: OutputNode, path: string, objectId?: string) => {
-    if (node.nodeName === "#text" && "value" in node) { residual += node.value; return; }
+    if (node.nodeName === "#text" && "value" in node) {
+      const text = node.value.replace(/[ \t\r\n\f]+/gu, " ");
+      residual += residual.endsWith("\n") ? text.replace(/^ /u, "") : text;
+      return;
+    }
     if (!("tagName" in node)) {
       if ("childNodes" in node) node.childNodes.forEach((child, i) => visit(child, `${path}.${i}`, objectId));
       return;
@@ -430,10 +435,10 @@ function orderedHtml(html: string): CellOutput | undefined {
       if (leaf.progress) leaf.progress = leaf.progress.map(task => ({ ...task, id: blocks.some(block => block.output.progress?.some(previous => previous.id === task.id)) ? `${path}:${task.id}` : task.id }));
       flush(); blocks.push({ id: `html:${path}:${tag}:${id ?? ""}`, output: leaf }); return;
     }
-    const boundary = /^(?:p|div|li|h[1-6]|br|ul|ol|section|blockquote)$/u.test(tag);
-    if (boundary) residual += "\n";
-    node.childNodes.forEach((child, i) => visit(child, `${path}.${i}`, id));
-    if (boundary) residual += "\n";
+    const boundary = /^(?:p|div|li|h[1-6]|ul|ol|section|blockquote)$/u.test(tag);
+    if (boundary || tag === "br") newline();
+    if (tag !== "br") node.childNodes.forEach((child, i) => visit(child, `${path}.${i}`, id));
+    if (boundary) newline();
   };
   visit(parseOutputFragment(html), "0"); flush();
   if (!blocks.length) return undefined;
