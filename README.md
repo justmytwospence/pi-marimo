@@ -43,7 +43,7 @@ A notebook you already have open in the browser (started with `marimo edit --no-
 
 ## The notebook view
 
-`ctrl+'` docks it beside the chat; `/marimo view` opens it full screen; `|` switches between the two.
+`ctrl+'` docks it beside the chat; `/marimo view` opens it full screen; `|` switches between the two. One key press toggles once: held repeats and release do nothing. With pi-sidebar installed, an already-open Sidebar keeps the key; otherwise an eligible notebook takes it before Sidebar, regardless of extension load order. `/sidebar` explicitly opens Sidebar.
 
 The **outline** lists sections and cells. A cell is named by its name, or what it defines that other cells use, or what it shows (`imports`, `daily, smooth`, `chart`, `controls`); ids are never shown. A cell has a glyph only when it needs attention:
 
@@ -187,7 +187,7 @@ A failed save keeps the draft. If the browser or agent changes the cell, saving 
 
 `!` cycles **All → Errors → Warnings → None**; `\` independently toggles stdout and result output. Source, Markdown prose, status and active progress remain visible. Headers retain execution/error state and indicate hidden content.
 
-Native marimo progress, PyMC's HTML chain tables, Rich terminal bars and tqdm terminal progress are recognized where their data is available. Native HTML `<progress>` from fastprogress is supported when that HTML reaches the view. Common unambiguous text counts and percentages may also become bars; unknown formats remain readable rather than receiving invented progress. Arbitrary IPython widgets and legacy fastprogress display-handle transports are not guaranteed. Console output is the current terminal display, including redraws, not a lossless log.
+Native marimo progress, PyMC's HTML chain tables, Rich terminal bars and tqdm terminal progress are recognized where their data is available. Nutpie's 0.16.8 sampler output appears as a compact aggregate and per-chain panel, using only the producer's supplied counts, timing and diagnostics; customized or unknown templates fall back to readable HTML. Native HTML `<progress>` from fastprogress is supported when that HTML reaches the view. Common unambiguous text counts and percentages may also become bars; unknown formats remain readable rather than receiving invented progress. Arbitrary IPython widgets and legacy fastprogress display-handle transports are not guaranteed. Console output is the current terminal display, including redraws, not a lossless log.
 
 ### Variables and packages
 
@@ -308,7 +308,7 @@ Live line-number, diagnostics and output toggles last for the Pi session and do 
 
 Each is optional and talks over Pi's event bus. Without the other package nothing changes.
 
-- [pi-bg](https://pi-plugins.vercel.app/plugins/pi-bg/): notebooks are listed in `/tasks`, and `bg_wait` can wait on `marimo:<path>` until the notebook's cells finish. A marimo server pi-bg runs is shown with its notebook's state, and stopping a marimo-pair job interrupts the cells it started.
+- [pi-bg](https://pi-plugins.vercel.app/plugins/pi-bg/): notebooks are listed in `/tasks`, and `bg_wait` can wait on `marimo:<path>` until the notebook's cells finish. A marimo server pi-bg runs is shown with its notebook's state, and stopping a marimo-pair job interrupts the cells it started. Independent services such as sleep prevention remain separate tasks; their count is not duplicated notebook work.
 - [pi-subagents](https://pi-plugins.vercel.app/plugins/pi-subagents/): the notebook rows join its panel under the prompt.
 - [pi-sidebar](https://pi-plugins.vercel.app/plugins/pi-sidebar/): shares the right-hand side.
 - [pi-status-footer](https://pi-plugins.vercel.app/plugins/pi-status-footer/): notebook rows in the footer.

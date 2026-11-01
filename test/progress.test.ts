@@ -5,7 +5,7 @@ import { parseOutputFragment } from "../src/core/html.js";
 import { stripTerminalSequences } from "@earendil-works/pi-tui";
 import { NotebookState } from "../src/core/notebook.js";
 import { detailRows } from "../src/ui/detail.js";
-import { progressRows } from "../src/ui/progress.js";
+import { progressRows, visibleProgress } from "../src/ui/progress.js";
 
 type Fixture = {
   name: string;
@@ -165,6 +165,83 @@ describe("progress display contracts", () => {
     }
     expect(rendered).toContain("\x1b[35m");
     expect(rendered.replace(/\x1b\[(?:35|0)m/gu, "")).not.toMatch(/[\x00-\x09\x0b-\x1f\x7f-\x9f]/u);
+  });
+});
+
+describe("sampler notebook visibility and snapshot identity", () => {
+  const fixture = readFileSync(new URL("./fixtures/nutpie-0.16.8.html", import.meta.url), "utf8");
+  const theme = { fg: (_: string, text: string) => text, bold: (text: string) => text };
+  const notebook = () => { const nb = new NotebookState(); nb.apply("kernel-ready", { cell_ids: ["a"], codes: ["pass"] }); return nb; };
+  const update = (nb: NotebookState, html: string) => nb.apply("cell-op", { cell_id: "a", output: { mimetype: "text/html", data: html } });
+
+  it("keeps finished chains beside active ones when output is hidden; fully complete groups disappear only then", () => {
+    const nb = notebook();
+    const partlyDone = fixture.replace('value="42" max="1500"', 'value="1500" max="1500"');
+    update(nb, partlyDone);
+    const cell = nb.cells.get("a")!;
+    expect(cell.progress).toHaveLength(5);
+    expect(cell.progress?.[1]?.state).toBe("complete");
+    const active = visibleProgress(cell.progress!, false);
+    expect(active).toHaveLength(5);
+    expect(active.map(t => t.id)).toEqual(cell.progress?.map(t => t.id));
+    const rows = detailRows(nb, theme, 0, { cell, width: 80, codeOpen: false, diff: false, section: false, diagnostics: "none", showOutput: false });
+    expect(new Set(rows.rows.filter(row => row.progress).map(row => row.progress!.id))).toEqual(new Set(cell.progress?.map(task => task.id)));
+    const allDone = partlyDone.replace('value="136" max="6000"', 'value="6000" max="6000"')
+      .replace('value="41" max="1500"', 'value="1500" max="1500"')
+      .replace('value="27" max="1500"', 'value="1500" max="1500"')
+      .replace('value="26" max="1500"', 'value="1500" max="1500"');
+    update(nb, allDone);
+    expect(visibleProgress(cell.progress!, false)).toEqual([]);
+    expect(visibleProgress(cell.progress!, true)).toEqual([]); // output leaves render the full group themselves
+    const shown = detailRows(nb, theme, 0, { cell, width: 80, codeOpen: false, diff: false, section: false, showOutput: true });
+    expect(new Set(shown.rows.filter(row => row.progress).map(row => row.progress!.id)).size).toBe(5);
+    nb.dispose();
+  });
+
+  it("renders each visible group once with unrelated generic progress and replaces snapshots/run state", async () => {
+    const nb = notebook();
+    update(nb, `<p>before</p>${fixture}<p>between</p>${fixture}<p>after</p>`);
+    const cell = nb.cells.get("a")!;
+    expect(cell.progress).toHaveLength(10);
+    const initial = cell.progress!.map(task => task.id);
+    expect(new Set(initial).size).toBe(10);
+    const shown = detailRows(nb, theme, 0, { cell, width: 120, codeOpen: false, diff: false, section: false, diagnostics: "none", showOutput: true });
+    expect(shown.rows.filter(row => row.progress?.id === `output:${cell.output!.blocks![1]!.output.progress![0]!.id}`)).toHaveLength(4);
+    expect(shown.rows.map(row => row.text).join("\n")).toMatch(/before[\s\S]*between[\s\S]*after/u);
+    update(nb, `<p>before</p>${fixture.replace('value="136"', 'value="300"')}<p>between</p>${fixture}<p>after</p>`);
+    expect(cell.progress).toHaveLength(10);
+    expect(cell.progress?.[0]?.completed).toBe(300);
+    expect(cell.progress?.map(task => task.id)).toEqual(initial);
+    update(nb, fixture);
+    expect(cell.progress).toHaveLength(5);
+    expect(cell.progress?.[0]?.sampler?.groupId).toBe(cell.output?.progress?.[0]?.sampler?.groupId);
+    nb.apply("cell-op", { cell_id: "a", console: { channel: "stderr", data: "Sampling: 2/4 [====>....]" } });
+    await nb.settled();
+    expect(visibleProgress(cell.progress!, true).map(task => task.id)).toEqual(["console:text:0"]);
+    expect(visibleProgress(cell.progress!, false)).toHaveLength(6);
+    nb.apply("cell-op", { cell_id: "a", status: "running" });
+    expect(cell.progress).toEqual([]);
+    nb.dispose();
+  });
+
+  it("preserves warnings under the existing diagnostic filter while sampler progress stays visible", async () => {
+    const nb = notebook(); update(nb, fixture);
+    nb.apply("cell-op", { cell_id: "a", console: { channel: "stderr", data: "UserWarning: check sampler" } });
+    await nb.settled();
+    const cell = nb.cells.get("a")!;
+    const rows = (diagnostics: "all" | "none") => detailRows(nb, theme, 0, { cell, width: 80, codeOpen: false, diff: false, section: false, showOutput: false, diagnostics }).rows;
+    expect(rows("all").map(row => row.text).join("\n")).toContain("UserWarning: check sampler");
+    expect(rows("none").map(row => row.text).join("\n")).not.toContain("UserWarning: check sampler");
+    expect(new Set(rows("none").filter(row => row.progress).map(row => row.progress!.id)).size).toBe(5);
+    nb.dispose();
+  });
+
+  it("does not hide ungrouped active tasks or add generic progress to a sampler panel", () => {
+    const tasks = progressFromHtml(fixture);
+    const generic: ProgressTask = { id: "ordinary", label: "Batch", completed: 1, total: 2, state: "running", stats: {} };
+    const finished: ProgressTask = { ...generic, id: "finished", completed: 2, state: "complete" };
+    expect(visibleProgress([...tasks, generic, finished], false).map(t => t.id)).toEqual([...tasks.map(t => t.id), "ordinary"]);
+    expect(progressRows([...tasks, generic], 80, theme, 0).filter(row => row.progress?.id === "ordinary").length).toBeGreaterThan(0);
   });
 });
 

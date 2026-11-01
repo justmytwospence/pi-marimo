@@ -4,6 +4,7 @@
 import { serializeOuter } from "parse5";
 import type { OutputNode } from "./html.js";
 import { progressFromNode, type ProgressTask } from "./progress.js";
+import { nutpieProgressFromNode } from "./sampler.js";
 import { componentProps, outputElements, parseOutputFragment, textContent } from "./html.js";
 
 export type OutputKind = "text" | "table" | "image" | "chart" | "widgets" | "other";
@@ -403,7 +404,11 @@ function orderedHtml(html: string): CellOutput | undefined {
     const props = componentProps(node);
     const markup = () => serializeOuter(node).replace(/="([^"]*)"/gu, (_, value: string) => `="${value.replace(/>/gu, "&gt;").replace(/</gu, "&lt;")}"`);
     let leaf: OutputLeaf | undefined;
-    if (tag === "marimo-mermaid" && typeof props.diagram === "string") leaf = { kind: "chart", text: "[Mermaid]", mermaid: [props.diagram] };
+    if (tag === "div" && node.attrs.some(a => a.name === "class" && a.value.split(/\s+/u).includes("nutpie"))) {
+      const progress = nutpieProgressFromNode(node, `nutpie:${path}`);
+      if (progress) leaf = { kind: "text", text: "", progress };
+    }
+    if (!leaf && tag === "marimo-mermaid" && typeof props.diagram === "string") leaf = { kind: "chart", text: "[Mermaid]", mermaid: [props.diagram] };
     else if (tag === "pre") {
       const code = [...outputElements(node)].find(child => child.tagName === "code");
       const language = /(?:^|\s)language-([^\s]+)/u.exec(code?.attrs.find(a => a.name === "class")?.value ?? "")?.[1];

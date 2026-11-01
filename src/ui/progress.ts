@@ -4,12 +4,20 @@ import type { ProgressTask } from "../core/progress.js";
 import type { FrameTheme } from "../frame.ts";
 import { oneLine } from "./text.js";
 import { spinner } from "./outline.js";
+import { samplerRows } from "./sampler.js";
 import type { Row } from "./rows.js";
 
 const seconds = (n: number): string => n < 60 ? `${Math.round(Math.max(0, n))}s` : `${Math.floor(n / 60)}m ${Math.round(n % 60)}s`;
 
-/** Every task gets its own proportional bar and unmodified raw counters. */
-export function progressRows(tasks: readonly ProgressTask[], width: number, theme: FrameTheme, now: number): Row[] {
+/** Output leaves render themselves when visible. Hidden output keeps entire active sampler groups. */
+export function visibleProgress(tasks: readonly ProgressTask[], showOutput: boolean): ProgressTask[] {
+  if (showOutput) return tasks.filter(task => !task.id.startsWith("output:"));
+  const activeGroups = new Set(tasks.filter(task => task.sampler && task.state !== "complete").map(task => task.sampler!.groupId));
+  return tasks.filter(task => task.sampler ? activeGroups.has(task.sampler.groupId) : task.state !== "complete");
+}
+
+/** Every generic task gets its own proportional bar and unmodified raw counters. */
+function genericProgressRows(tasks: readonly ProgressTask[], width: number, theme: FrameTheme, now: number): Row[] {
   width = Math.max(1, Math.floor(width));
   return tasks.flatMap(task => {
     const rows: Row[] = [];
@@ -37,4 +45,22 @@ export function progressRows(tasks: readonly ProgressTask[], width: number, them
     }
     return rows;
   });
+}
+
+/** Contiguous sampler tasks share one compact panel; other producers keep their existing view. */
+export function progressRows(tasks: readonly ProgressTask[], width: number, theme: FrameTheme, now: number): Row[] {
+  const rows: Row[] = [];
+  for (let index = 0; index < tasks.length;) {
+    const group = tasks[index]!.sampler?.producer === "nutpie" ? tasks[index]!.sampler!.groupId : undefined;
+    if (group !== undefined) {
+      let end = index + 1;
+      while (end < tasks.length && tasks[end]!.sampler?.producer === "nutpie" && tasks[end]!.sampler?.groupId === group) end++;
+      rows.push(...samplerRows(tasks.slice(index, end), width, theme, now));
+      index = end;
+    } else {
+      rows.push(...genericProgressRows([tasks[index]!], width, theme, now));
+      index++;
+    }
+  }
+  return rows;
 }

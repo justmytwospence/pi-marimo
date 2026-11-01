@@ -1,4 +1,5 @@
 import { componentProps, outputElements, parseOutputFragment, textContent, type OutputNode } from "./html.js";
+import { nutpieProgressFromNode } from "./sampler.js";
 
 export interface ProgressTask {
   id: string;
@@ -12,6 +13,12 @@ export interface ProgressTask {
   state: "running" | "complete";
   /** Original producer columns, subtitle, and/or percent (without invented counts). */
   stats: Record<string, string>;
+  sampler?: {
+    producer: "nutpie";
+    groupId: string;
+    role: "total" | "chain";
+    summary?: { totalChains?: number; activeChains?: number; finishedChains?: number; elapsed?: string; eta?: string };
+  };
 }
 
 type Element = Extract<OutputNode, { tagName: string }>;
@@ -47,8 +54,18 @@ export function progressFromHtml(html: string): ProgressTask[] {
 export function progressFromNode(root: OutputNode): ProgressTask[] {
   const result: ProgressTask[] = [];
   const consumed = new Set<OutputNode>();
+  let samplerIndex = 0;
   for (const node of outputElements(root)) {
     if (consumed.has(node)) continue;
+    if (node.tagName === "div") {
+      const sampler = nutpieProgressFromNode(node, `nutpie:${samplerIndex}`);
+      if (sampler) {
+        samplerIndex++;
+        for (const child of outputElements(node)) consumed.add(child);
+        result.push(...sampler);
+        continue;
+      }
+    }
     if (node.tagName === "marimo-progress") {
       const props = componentProps(node);
       const t = task(attr(node, "id") ?? `marimo:${result.length}`, typeof props.title === "string" ? props.title : "");

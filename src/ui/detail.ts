@@ -8,7 +8,7 @@ import { editableMarkdown } from "../core/markdown.js";
 import type { Cell, NotebookState } from "../core/notebook.js";
 import { truncate } from "../core/notebook.js";
 import { duration, runTime } from "./time.js";
-import { progressRows } from "./progress.js";
+import { progressRows, visibleProgress } from "./progress.js";
 import type { FrameTheme } from "../frame.ts";
 import { clean, consoleLineText, outputRows } from "./outputs.js";
 import { cellGlyph, headingText, spinner } from "./outline.js";
@@ -240,7 +240,7 @@ export function detailRows(nb: NotebookState, theme: FrameTheme, now: number, o:
       if (cell.error && errors) p.add(`${theme.fg("error", truncate(clean(cell.error), 300))}`);
       for (const l of diagnosticLines) p.add(consoleLineText(l, theme));
     }
-    rows.push(...progressRows((cell.progress ?? []).filter(task => o.showOutput === false ? task.state !== "complete" : !task.id.startsWith("output:")), width, theme, now));
+    rows.push(...progressRows(visibleProgress(cell.progress ?? [], o.showOutput !== false), width, theme, now));
     const diagnosticOutput = cell.output?.severity;
     if (diagnosticOutput) {
       if (diagnosticOutput === "error" ? errors : warnings) {

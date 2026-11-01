@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, test, vi } from "vitest";
 import * as outputHtml from "../src/core/html.js";
 import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
@@ -83,6 +84,7 @@ describe("cell output for the notebook view", () => {
 });
 
 describe("ordered HTML whitespace and sampler leaves", () => {
+  const fixture = readFileSync(new URL("./fixtures/nutpie-0.16.8.html", import.meta.url), "utf8");
   const html = (data: string) => summarizeOutput({ mimetype: "text/html", data })!;
 
   test("collapses pretty-printed indentation without joining inline words or losing NBSP and br", () => {
@@ -104,6 +106,29 @@ describe("ordered HTML whitespace and sampler leaves", () => {
     console.dispose();
   });
 
+  test("keeps prose around one sampler leaf, stable distinct groups and scalar progress", () => {
+    const one = html(`<p>before</p>${fixture}<p>after</p>`);
+    expect(one.blocks?.map(b => b.output.progress ? "sampler" : b.output.text)).toEqual(["before", "sampler", "after"]);
+    expect(one.blocks?.[1]?.output.progress).toHaveLength(5);
+    expect(one.progress).toEqual(one.blocks?.[1]?.output.progress);
+    const twice = html(`<p>begin</p>${fixture}<p>middle</p>${fixture}<p>end</p>`);
+    expect(twice.blocks?.map(b => b.output.progress ? "sampler" : b.output.text)).toEqual(["begin", "sampler", "middle", "sampler", "end"]);
+    const groups = twice.blocks!.filter(b => b.output.progress).map(b => b.output.progress![0]!.sampler!.groupId);
+    expect(new Set(groups).size).toBe(2);
+    expect(new Set(twice.progress?.map(t => t.id)).size).toBe(10);
+    expect(html(`<p>begin</p>${fixture}<p>middle</p>${fixture}<p>end</p>`).blocks?.map(b => b.id)).toEqual(twice.blocks?.map(b => b.id));
+  });
+
+  test("does not swallow unsupported nutpie schemas or their readable text/table", () => {
+    for (const invalid of [fixture.replace('id="chain-details"', 'id="unknown"'), fixture.replace('</table>', '</table><aside>unhandled data</aside>'), fixture.replace('<th>Draws</th>', '<th>Samples</th>')]) {
+      const out = html(`<p>before</p>${invalid}<p>after</p>`);
+      expect(out.blocks?.some(block => block.output.progress?.some(task => task.sampler))).toBe(false);
+      expect(out.table?.columns).toContain("Progress");
+      expect(out.blocks?.map(block => block.output.text).join(" ")).toContain("before");
+      expect(out.blocks?.map(block => block.output.text).join(" ")).toContain("after");
+      if (invalid.includes("unhandled data")) expect(out.blocks?.map(block => block.output.text).join(" ")).toContain("unhandled data");
+    }
+  });
 });
 
 describe("output prefixes", () => {
