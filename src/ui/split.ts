@@ -10,7 +10,9 @@ import { type LayoutTui, SplitLayout, canSplit, dividerLines, muteEditorBorders 
 import type { DockedHost, NotebookView, ViewState } from "./view.js";
 
 export const SIDE_PANEL_CHANNEL = "pi-plugins.side-panel.v1";
+export const SIDE_PANEL_TOGGLE_CHANNEL = "pi-plugins.side-panel-toggle.v1";
 export const SIDE_PANEL_ID = "pi-marimo";
+interface ToggleRequest { claim(): void }
 export const FOCUS_KEY = "ctrl+]";
 /** Sidebar's toggle keys (PI_SIDEBAR_KEYS, default ctrl+'), which toggle the docked notebook while one is active. */
 export function toggleKeys(raw: string | undefined = process.env.PI_SIDEBAR_KEYS): string[] {
@@ -124,6 +126,10 @@ export class NotebookSplit {
         this.otherPanel = d.id;
         if (this.isOpen) this.close();
       } else if (this.otherPanel === d.id) this.otherPanel = undefined;
+    });
+    pi.events?.on?.(SIDE_PANEL_TOGGLE_CHANNEL, (data: unknown) => {
+      const request = data as Partial<ToggleRequest> | undefined;
+      if (typeof request?.claim === "function" && this.toggle()?.consume) request.claim();
     });
     pi.on("input", ((e: { source?: string }) => { if (e.source === "interactive") this.suppressed = false; }) as never);
   }

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { Component } from "@earendil-works/pi-tui";
-import { NotebookSplit } from "../src/ui/split.ts";
+import { NotebookSplit, SIDE_PANEL_TOGGLE_CHANNEL } from "../src/ui/split.ts";
 import { SplitRoot } from "../src/ui/split-layout.ts";
 
 const theme = { fg: (_: string, t: string) => t, bold: (t: string) => t };
@@ -429,6 +429,48 @@ describe("NotebookSplit", () => {
     expect(s.split.isOpen).toBe(false);
     s.fire("input", { source: "interactive" });
     s.split.autoOpen(s.ctx, "k");
+    expect(s.split.isOpen).toBe(true);
+  });
+
+  it("claims shortcut requests only for an eligible notebook, without claiming after shutdown", () => {
+    let active: string | undefined;
+    let busy = false;
+    const s = setup({ active: () => active, busy: () => busy });
+    let claims = 0;
+    const request = () => s.pi.events.emit(SIDE_PANEL_TOGGLE_CHANNEL, { claim: () => { claims++; } });
+    request();
+    busy = true; active = "k"; request();
+    expect(claims).toBe(0);
+    busy = false; request();
+    expect(claims).toBe(1);
+    expect(s.split.isOpen).toBe(true);
+    s.fire("ui_prompt_start", { kind: "input" });
+    request(); expect(claims).toBe(1);
+    s.fire("ui_prompt_end");
+    s.pi.events.emit("herdr:blocked", { active: true });
+    request(); expect(claims).toBe(1);
+    s.pi.events.emit("herdr:blocked", { active: false });
+    request(); expect(claims).toBe(2);
+    expect(s.split.isOpen).toBe(false);
+    s.pi.events.emit("pi-plugins.side-panel.v1", { id: "pi-sidebar", open: true });
+    request(); expect(claims).toBe(2);
+    s.split.shutdown();
+    request(); expect(claims).toBe(2);
+  });
+
+  it("owns a dirty notebook close request while the editor negotiates", async () => {
+    const s = setup({ active: () => "k" });
+    s.split.open(s.ctx, "k", { focus: true });
+    const v = s.views[0];
+    const decision = Promise.withResolvers<boolean>();
+    v.editing = true;
+    v.requestClose = vi.fn(() => decision.promise);
+    const claim = vi.fn();
+    s.pi.events.emit(SIDE_PANEL_TOGGLE_CHANNEL, { claim });
+    expect(claim).toHaveBeenCalledOnce();
+    expect(s.split.isOpen).toBe(true);
+    decision.resolve(false);
+    await Promise.resolve();
     expect(s.split.isOpen).toBe(true);
   });
 
