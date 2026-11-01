@@ -3,11 +3,18 @@
      repeats span#active-chains for Active and Finished, and emits a stray </tr>.
      Every chain's max=1500 is supplied explicitly, not inferred from 6000/4. -->
 <div class="nutpie">
+  <p><strong>Sampler Progress</strong></p>
   <p>Total Chains: <span id="total-chains">4</span></p>
   <p>Active Chains: <span id="active-chains">4</span></p>
-  <p>Finished Chains: <span id="active-chains">0</span></p>
-  <p>Time Elapsed: 4 minutes</p>
-  <p>Estimated Time Remaining: 3 hours</p>
+  <p>
+    Finished Chains:
+    <span id="active-chains">0</span>
+  </p>
+  <p>Sampling for 4 minutes</p>
+  <p>
+    Estimated Time to Completion:
+    <span id="eta">3 hours</span>
+  </p>
   <progress id="total-progress-bar" value="136" max="6000"></progress>
   <table>
     <thead><tr><th>Progress</th><th>Draws</th><th>Divergences</th><th>Step Size</th><th>Gradients/Draw</th></tr></thead>

@@ -48,16 +48,16 @@ export function nutpieProgressFromNode(root: OutputNode, groupId: string): Progr
   let extra = 0;
   for (const paragraph of paragraphs) {
     const value = clean(paragraph);
-    if (!value) continue;
+    if (!value || value === "Sampler Progress") continue;
     const chains = /^(total|active|finished)\s+chains\s*:\s*(\d+)\s*$/iu.exec(value);
     if (chains) {
       const key = `${chains[1]!.toLowerCase()}Chains` as "totalChains" | "activeChains" | "finishedChains";
       const parsed = integer(chains[2]!);
       if (parsed !== undefined) { summary[key] = parsed; continue; }
     }
-    const timing = /^(?:time\s+)?elapsed\s*:\s*(.+)$/iu.exec(value);
+    const timing = /^(?:sampling\s+for\s+|(?:time\s+)?elapsed\s*:\s*)(.+)$/iu.exec(value);
     if (timing) { summary.elapsed = timing[1]!.trim(); continue; }
-    const eta = /^(?:estimated\s+time\s+remaining|eta|remaining)\s*:\s*(.+)$/iu.exec(value);
+    const eta = /^(?:estimated\s+time\s+to\s+completion|estimated\s+time\s+remaining|eta|remaining)\s*:\s*(.+)$/iu.exec(value);
     if (eta) { summary.eta = eta[1]!.trim(); continue; }
     stats[`Summary ${++extra}`] = value;
   }

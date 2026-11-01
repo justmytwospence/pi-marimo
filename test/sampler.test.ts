@@ -13,6 +13,9 @@ const theme = { fg: (color: string, text: string) => color === "warning" ? `\x1b
 
 describe("nutpie 0.16.8 structured adapter", () => {
   it("parses the synthetic producer template, duplicate span ID and stray closing tr, once", () => {
+    expect(fixture).toContain('<strong>Sampler Progress</strong>');
+    expect(fixture).toContain('Sampling for 4 minutes');
+    expect(fixture).toContain('Estimated Time to Completion:');
     expect(fixture).toContain('id="active-chains">4');
     expect(fixture).toContain('id="active-chains">0');
     expect(fixture).toContain("</tr>\n    </tbody>");
@@ -20,6 +23,7 @@ describe("nutpie 0.16.8 structured adapter", () => {
     expect(tasks).toHaveLength(5);
     expect(tasks.map(task => task.id)).toEqual(["sample:total", ...[0, 1, 2, 3].map(i => `sample:chain:${i}`)]);
     expect(tasks[0]).toMatchObject({ label: "Sampler", completed: 136, total: 6000, state: "running", sampler: { producer: "nutpie", groupId: "sample", role: "total", summary: { totalChains: 4, activeChains: 4, finishedChains: 0, elapsed: "4 minutes", eta: "3 hours" } } });
+    expect(tasks[0]?.stats).toEqual({});
     expect(tasks.slice(1).map(task => [task.completed, task.total, task.stats.Draws, task.label])).toEqual([[42, 1500, "42", "Chain 1"], [41, 1500, "41", "Chain 2"], [27, 1500, "27", "Chain 3"], [26, 1500, "26", "Chain 4"]]);
     expect(progressFromHtml(fixture)).toHaveLength(5);
   });
@@ -54,7 +58,7 @@ describe("nutpie 0.16.8 structured adapter", () => {
   });
 
   it("supports empty/complete snapshots and retains arbitrary duplicate diagnostics and summary text", () => {
-    const extra = fixture.replace('<p>Time Elapsed:', '<p>Sampler notice: synthetic</p><p>Time Elapsed:')
+    const extra = fixture.replace('<p>Sampling for', '<p>Sampler notice: synthetic</p><p>Sampling for')
       .replace('<th>Gradients/Draw</th>', '<th>Gradients/Draw</th><th>Metric</th><th>Metric</th>')
       .replace(/<td>(127|255|511)<\/td><\/tr>/gu, '<td>$1</td><td>x</td><td>y</td></tr>');
     const parsed = nutpieProgressFromNode(root(extra), "extra")!;
@@ -80,6 +84,11 @@ describe("compact sampler rows", () => {
     const rows = samplerRows(tasks, width, theme, 0);
     const plain = rows.map(row => stripTerminalSequences(row.text)).join("\n");
     expect(rows.every(row => visibleWidth(row.text) <= width)).toBe(true);
+    expect(plain).not.toMatch(/Summary \d|Sampler Progress|Estimated Time to Completion/u);
+    expect(plain).toContain("4 minutes elapsed");
+    expect(plain).toContain("ETA 3 hours");
+    expect(plain.split("4 minutes elapsed")).toHaveLength(2);
+    expect(plain.split("ETA 3 hours")).toHaveLength(2);
     expect(new Set(rows.map(row => row.progress?.id))).toEqual(new Set(tasks.map(task => task.id)));
     for (const count of ["42/1500", "41/1500", "27/1500", "26/1500"]) expect(plain).toContain(count);
     for (const value of ["127", "255", "511", "0.05", "0.04", "0.01"]) expect(plain).toContain(value);
