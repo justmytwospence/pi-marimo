@@ -328,7 +328,7 @@ export function snapshot(entries: SnapshotEntry[], options: SnapshotOptions = {}
   const outlines = shown.some((s) => !s.full);
   return [
     `<${STATE_TAG} notebooks="${entries.length}">`,
-    `Live state of the marimo notebook${many ? "s" : ""} open in the user's browser, added automatically by pi-marimo (not`,
+    `Live state of the marimo notebook${many ? "s" : ""} connected to Pi, added automatically by pi-marimo (not`,
     ...(options.refresh === "prompt"
       ? ["written by the user). Taken when the user sent their latest message and not updated during the turn;",
         "earlier copies are removed. Check current values through marimo-pair before relying on them."]

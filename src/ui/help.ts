@@ -64,6 +64,7 @@ export class Help {
   private maxScroll = Number.MAX_SAFE_INTEGER;
   private page = 1;
   private lastViewport?: { width: number; height: number; theme: FrameTheme };
+  private rail?: { start: number; top: number; page: number };
 
   constructor(state?: HelpState) {
     this.state = state ? { ...state } : { group: "Navigation", query: "", typing: false, scroll: 0 };
@@ -73,11 +74,22 @@ export class Help {
   open(mode: string): void {
     Object.assign(this.state, { group: CONTEXT[mode] ?? "Navigation", query: "", typing: false, scroll: 0 });
     this.maxScroll = Number.MAX_SAFE_INTEGER;
+    this.rail = undefined;
   }
 
   /** Positive deltas move down; render owns the actual viewport's bounds. */
   wheel(delta: number, _page = this.page): void {
     this.state.scroll = Math.max(0, Math.min(this.maxScroll, this.state.scroll + delta));
+  }
+
+  /** Select a category from the last rendered rail; coordinates are relative to help, not the frame. */
+  selectCategoryAt(x: number, y: number): boolean {
+    const rail = this.rail;
+    if (!rail || x < 0 || x >= 16 || y < rail.top || y >= rail.top + rail.page) return false;
+    const group = GROUPS[rail.start + y - rail.top];
+    if (!group) return false;
+    this.selectCategory(group);
+    return true;
   }
 
   /** False asks the host to close help; unrelated keys never dismiss it. */
@@ -119,7 +131,7 @@ export class Help {
   render(width: number, height: number, theme: FrameTheme, _layoutWidth = width, _where?: string): string[] {
     width = Math.max(0, Math.floor(width));
     height = Math.max(0, Math.floor(height));
-    if (!width || !height) return [];
+    if (!width || !height) { this.rail = undefined; return []; }
     this.lastViewport = { width, height, theme };
     const wrap = (text: string) => wrapTextWithAnsi(text, width);
     const query = this.state.query.toLocaleLowerCase();
@@ -158,6 +170,7 @@ export class Help {
     this.state.scroll = Math.max(0, Math.min(this.maxScroll, this.state.scroll));
     const visible = body.slice(this.state.scroll, this.state.scroll + this.page);
     const railStart = Math.max(0, Math.min(groupIndex, GROUPS.length - this.page));
+    this.rail = rail ? { start: railStart, top: top.length, page: this.page } : undefined;
     const rows = rail ? Array.from({ length: this.page }, (_, i) => {
       const group = GROUPS[railStart + i];
       const name = group ? `${group === this.state.group ? "› " : "  "}${group}` : "";
@@ -180,11 +193,16 @@ export class Help {
     const index = GROUPS.findIndex(group => group === this.state.group) + direction;
     const next = wrap ? (index + GROUPS.length) % GROUPS.length : Math.max(0, Math.min(GROUPS.length - 1, index));
     if (!wrap && next === GROUPS.findIndex(group => group === this.state.group)) return;
-    this.state.group = GROUPS[next]!;
+    this.selectCategory(GROUPS[next]!);
+  }
+
+  private selectCategory(group: string): void {
+    if (this.state.group === group && !this.state.query && !this.state.typing) return;
+    this.state.group = group;
     this.state.query = "";
     this.state.typing = false;
     this.resetScroll();
-    // Recompute the next category's bounds before another key arrives; TUI paints asynchronously.
+    // Recompute the next category's bounds before another key or click arrives; TUI paints asynchronously.
     if (this.lastViewport) this.render(this.lastViewport.width, this.lastViewport.height, this.lastViewport.theme);
   }
 

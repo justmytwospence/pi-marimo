@@ -330,6 +330,8 @@ describe("render", () => {
     for (const id of ["a", "b"]) nb.apply("cell-op", { cell_id: id, stale_inputs: true });
     const text = snapshot([{ notebook: nb, attachment }]);
     expect(text).toContain("Kernel: 2 of 3 cells stale (inputs changed, not rerun).");
+    expect(text).toContain("Live state of the marimo notebook connected to Pi, added automatically by pi-marimo (not");
+    expect(text).toContain("written by the user). It is replaced with a fresh copy on every request");
     expect(text).not.toContain("-- stale");
   });
 
@@ -347,6 +349,8 @@ describe("render", () => {
       { notebook: other, attachment: { ...attachment, path: "/w/prep.py", sessionId: "s2" } },
     ]);
     expect(text).toContain('<marimo_notebook_state notebooks="2">');
+    expect(text).toContain("Live state of the marimo notebooks connected to Pi, added automatically by pi-marimo (not");
+    expect(text).not.toContain("open in the user's browser");
     expect(text).toContain("=== /tmp/pmt/nb.py (current; http://127.0.0.1:2799, session s1) ===");
     expect(text).toContain("  lEQa: defines y");
     const prep = text.slice(text.indexOf("=== /w/prep.py"));

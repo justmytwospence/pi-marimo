@@ -230,6 +230,35 @@ test.each([24, 39, 40, 59, 60, 89, 90, 120, 180])("responsive chrome and body fi
   }
 });
 
+test("clicking rendered rail categories selects them and ignores heading, padding, footer and empty rows", () => {
+  const help = new Help();
+  help.render(90, 100, theme);
+  expect(help.selectCategoryAt(0, 0)).toBe(false); // heading
+  expect(help.selectCategoryAt(-1, 3)).toBe(false);
+  expect(help.selectCategoryAt(16, 3)).toBe(false); // gap before commands
+  expect(help.selectCategoryAt(1, 99)).toBe(false); // footer
+  expect(help.selectCategoryAt(1, 14)).toBe(false); // no category after the tenth row
+  expect(help.selectCategoryAt(15, 11)).toBe(true);
+  expect(help.state).toMatchObject({ group: "Dock/Mouse", scroll: 0 });
+  expect(help.render(90, 100, theme).join("\n")).toContain("› Dock/Mouse");
+  expect(help.selectCategoryAt(1, 2)).toBe(true);
+  expect(help.state.group).toBe("Navigation");
+});
+
+test("rail click leaves search, and re-rendering after resize changes hit coordinates", () => {
+  const help = new Help();
+  help.render(90, 13, theme);
+  enterSearch(help, "key0_12");
+  help.render(90, 13, theme);
+  expect(help.selectCategoryAt(1, 3)).toBe(true);
+  expect(help.state).toMatchObject({ group: "Display", query: "", typing: false, scroll: 0 });
+  help.render(46, 13, theme);
+  expect(help.selectCategoryAt(1, 2)).toBe(false);
+  help.render(90, 100, theme);
+  expect(help.selectCategoryAt(1, 2)).toBe(true);
+  expect(help.state.group).toBe("Navigation");
+});
+
 test("fitted j/k and arrows select adjacent categories, clamp, and leave Tab wrapping", () => {
   const help = new Help();
   help.render(90, 100, theme);

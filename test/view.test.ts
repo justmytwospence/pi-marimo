@@ -2228,6 +2228,37 @@ test("help navigation moves categories in a fitted tall pane and scrolls in a sh
   } finally { v.dispose(); }
 });
 
+test("help rail clicks select categories without changing the notebook; closing help exposes Variables and Packages", () => {
+  const f = followed();
+  const tui = { requestRender: vi.fn(), terminal: { rows: 90 } };
+  const v = new NotebookView(tui as any, theme, notebookKey(f), {
+    followed: () => [f], interrupt: async () => {}, openInBrowser: () => {},
+  }, () => {});
+  try {
+    v.render(120);
+    const before = v.snapshot();
+    v.handleInput("?"); v.render(120);
+    const click = (x: number, y: number, type = "click") => v.handleMouse(helpMouse(type, { x, y, screenX: x, screenY: y, width: 120, height: 90 }));
+    expect(click(2, 4, "press")).toEqual({ handled: true, render: false });
+    expect(click(2, 4)).toEqual({ handled: true }); // Display is the second rail row.
+    expect(v.snapshot().help?.group).toBe("Display");
+    expect(v.render(120).join("\n")).toContain("fold code");
+    const selected = v.snapshot().help;
+    click(40, 4); // Command text is not a category.
+    click(0, 4); // Frame padding is not a category.
+    click(2, 1); // Heading is not a category.
+    expect(v.snapshot().help).toEqual(selected);
+    click(2, 8); // Packages is the sixth rail row.
+    expect(v.snapshot().help?.group).toBe("Packages");
+    expect(tui.requestRender).toHaveBeenCalled();
+    expect(v.snapshot().cursor).toBe(before.cursor);
+    v.handleInput("?");
+    expect(v.snapshot()).toEqual(before);
+    v.handleInput("v"); expect(v.snapshot().mode).toBe("variables");
+    v.handleInput("P"); expect(v.snapshot().mode).toBe("packages");
+  } finally { v.dispose(); }
+});
+
 test("STEP6 help scrolls, cycles categories both ways, searches globally and Escape clears before closing", () => {
   const f = followed();
   const v = new NotebookView(shortTui() as any, theme, notebookKey(f), {

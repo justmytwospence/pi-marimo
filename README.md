@@ -39,7 +39,7 @@ If you use [Pi Plugins](https://pi-plugins.vercel.app) pinned to a version from 
 3. Press `ctrl+'`. The notebook docks beside the chat and follows the running cell.
 4. Press `ctrl+]` to switch between the chat and the notebook, and `?` in the notebook for every key.
 
-A notebook you already have open in the browser (started with `marimo edit --no-token`) is followed automatically when it is under Pi's working directory.
+A notebook you already have open in the browser (started with `marimo edit --no-token`) is followed automatically when it is under Pi's working directory. A server with no browser session is reusable too: `/marimo edit <file>` opens its notebook in Pi without starting another server. A marimo-pair call to that server attaches a headless session without a browser; pass `--url` and `--file` to target the right notebook.
 
 ## The notebook view
 
@@ -81,6 +81,8 @@ From 100 columns the outline and detail sit side by side. Narrower, as when dock
 | `ctrl+]` | docked: switch between chat and notebook |
 | `ctrl+'` | dock or close |
 | Esc | back to the chat |
+
+The `?` cheat sheet shows all categories. On a wide view, click a category in its left rail; Tab/Shift+Tab move between categories at any width. When every command in the category fits, `j`/`k` and the arrows also move between categories; when it overflows, they scroll its commands. To open the actual Variables or Packages view, close help with `?` or Esc, then press `v` or capital `P` (Shift+P) in the notebook.
 
 <details>
 <summary>Every key</summary>
@@ -333,7 +335,7 @@ npm ci && npm run check
 ```
 
 - Live tests (need `marimo` on PATH): `PI_MARIMO_LIVE_TEST=1 npx vitest run test/e2e.test.ts test/e2e-actions.test.ts`
-- The demo notebook: `uvx --with pandas,numpy,matplotlib,plotly,altair,vl-convert-python,rich,tqdm,marimo-lens marimo edit --no-token examples/coffee.py`
+- To start the demo server from scratch with its dependencies: `uvx --with pandas,numpy,matplotlib,plotly,altair,vl-convert-python,rich,tqdm,marimo-lens marimo edit --no-token examples/coffee.py`. If it is already running, `/marimo edit examples/coffee.py` opens its Pi view using that server without a browser or another server.
 - Releases and rollout: `AGENTS.md`.
 - Table design references (interaction ideas, not copied implementations): [Textual DataTable](https://textual.textualize.io/widgets/data_table/) for pinned headers and focus, [Harlequin](https://harlequin.sh/docs/bindings) for column navigation and full values, [VisiData](https://www.visidata.org/docs/columns/) for sizing and feedback, and [Ratatui table](https://ratatui.rs/examples/apps/table/) for position indicators.
 

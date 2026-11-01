@@ -186,7 +186,8 @@ test("a marimo-pair call at a server whose notebook is open nowhere opens it fir
   const x = setup(undefined, "tui");
   await x.fire("session_start");
   await until(() => (x.section()?.pill(Date.now())?.rows?.length ?? 0) === 2);
-  await x.fire("tool_call", { toolCallId: "t1", input: { command: "bash /s/marimo-pair/scripts/execute-code.sh --url http://127.0.0.1:2719 -c 'print(1)'" } });
+  const pair = "bash /s/marimo-pair/scripts/execute-code.sh --url http://127.0.0.1:2719 --file /w/1_second.py -c 'print(1)'";
+  await x.fire("tool_call", { toolCallId: "t1", input: { command: pair } });
   // Only the server the call names was opened, through the page's own WebSocket address.
   expect(sockets).toHaveLength(1);
   const url = new URL(sockets[0]!.url);
@@ -195,9 +196,11 @@ test("a marimo-pair call at a server whose notebook is open nowhere opens it fir
   expect(url.searchParams.get("file")).toBe("/w/1_second.py");
   expect(url.searchParams.get("session_id")).toMatch(/^s_/u);
   expect(host.spawned).toEqual([]);
-  // Unrelated calls and calls that name no server open nothing.
-  await x.fire("tool_call", { toolCallId: "t2", input: { command: "ls" } });
+  // Reusing the exact notebook and making an unrelated call never start a second session or browser.
+  await x.fire("tool_call", { toolCallId: "t2", input: { command: pair } });
+  await x.fire("tool_call", { toolCallId: "t3", input: { command: "ls" } });
   expect(sockets).toHaveLength(1);
+  expect(host.spawned).toEqual([]);
   await x.fire("session_shutdown");
   vi.unstubAllGlobals();
 });

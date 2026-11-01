@@ -2111,6 +2111,8 @@ export class NotebookView implements Component, Focusable {
     }
     if (this.help) {
       if (event.type === "wheel") { this.helpView.wheel(event.wheelDelta ?? 0); this.tui.requestRender(); }
+      else if (event.button === "left" && event.type === "press") return { handled: true, render: false };
+      else if (event.button === "left" && event.type === "click" && this.helpView.selectCategoryAt(event.x - CONTENT_LEFT, event.y - 1)) this.tui.requestRender();
       return { handled: true };
     }
     if (this.editors.active) return { handled: true };
