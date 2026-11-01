@@ -10,6 +10,11 @@ import type { Cancellable, Io, StreamEnd } from "../src/core/io.js";
 const CWD = "/w";
 const SERVER = "http://127.0.0.1:2799";
 
+vi.mock("@earendil-works/pi-coding-agent", async importOriginal => ({
+  ...await importOriginal<typeof import("@earendil-works/pi-coding-agent")>(),
+  keyHint: (_action: string, text: string) => `<configured-expand> ${text}`,
+}));
+
 /** A marimo server with one session (`/w/nb.py`, unless a test adds more) whose /sse streams the test feeds. */
 const server = vi.hoisted(() => ({ feeds: [] as Array<(text: string) => void>, urls: [] as string[], sessions: {} as Record<string, { path: string }> }));
 
@@ -165,6 +170,7 @@ function setup(branch: unknown[] = [], mode = "tui") {
   const statuses = new Map<string, string | undefined>();
   const commands = new Map<string, { handler: (args: string, ctx: unknown) => Promise<void> }>();
   const tools = new Map<string, any>();
+  const messageRenderers = new Map<string, any>();
   const notes: Array<[string, string | undefined]> = [];
   const pi = {
     on: (name: string, h: (e: unknown, c: unknown) => unknown) => void handlers.set(name, [...(handlers.get(name) ?? []), h]),
@@ -177,7 +183,7 @@ function setup(branch: unknown[] = [], mode = "tui") {
     },
     registerCommand: (name: string, spec: { handler: (args: string, ctx: unknown) => Promise<void> }) => void commands.set(name, spec),
     registerEntryRenderer: () => undefined,
-    registerMessageRenderer: () => undefined,
+    registerMessageRenderer: (name: string, renderer: unknown) => void messageRenderers.set(name, renderer),
     registerTool: (tool: { name: string }) => void tools.set(tool.name, tool),
     sendMessage: (message: unknown, options: unknown) => void sent.push(["message", { message, options }]),
     appendEntry: () => undefined,
@@ -210,7 +216,7 @@ function setup(branch: unknown[] = [], mode = "tui") {
   };
   /** Runs `/name args` as pi would. */
   const command = (name: string, args: string) => commands.get(name)!.handler(args, ctx);
-  return { pi, fire, sent, of, widgets, customs, pillText, ui, entries, statuses, handlers, command, notes, tools };
+  return { pi, fire, sent, of, widgets, customs, pillText, ui, entries, statuses, handlers, command, notes, tools, messageRenderers };
 }
 
 const pair = `bash .agents/skills/marimo-pair/scripts/execute-code.sh --url ${SERVER} --file nb.py - <<'PY'\nfit()\nPY`;
@@ -262,6 +268,31 @@ test("native tools register and slash commands display results without starting 
     await x.fire("session_shutdown");
     watch.mockRestore(); status.mockRestore(); unsubscribe.mockRestore();
   }
+});
+
+test("execution message renderers improve legacy history without starting or notifying execution", async () => {
+  const x = setup();
+  const start = vi.spyOn(ExecutionHost.prototype, "start");
+  const watch = vi.spyOn(ExecutionSession.prototype, "watch");
+  const id = "legacy-execution-id";
+  const content = `${id}: succeeded\n\n${id}: Long demo · succeeded\n/w/coffee.py\nstdout:\nretained legacy output`;
+  const message = { role: "custom", customType: "pi-marimo-completion", content, display: true, details: { version: 1, ids: [`pi-marimo-execution:${id}`], executions: [{ id, target: { path: "/w/coffee.py", canonicalPath: "/w/coffee.py", url: SERVER, sessionId: "legacy-session" }, state: "succeeded", errors: [], blocked: [] }] } };
+  const theme = { fg: (_color: string, text: string) => text, bold: (text: string) => text };
+  try {
+    expect([...x.messageRenderers.keys()]).toEqual(expect.arrayContaining(["pi-marimo-completion", "pi-marimo-executions"]));
+    const renderer = x.messageRenderers.get("pi-marimo-completion")!;
+    const collapsed = renderer(message, { expanded: false, outputPad: 0 }, theme).render(120).join("\n");
+    expect(collapsed).toContain("coffee.py");
+    expect(collapsed).toContain("Long demo");
+    expect(collapsed).not.toContain("retained legacy output");
+    const expanded = renderer(message, { expanded: true, outputPad: 0 }, theme).render(120).join("\n");
+    expect(expanded).toContain("retained legacy output");
+    expect(expanded).toContain(id);
+    expect(message.content).toBe(content);
+    expect(start).not.toHaveBeenCalled(); expect(watch).not.toHaveBeenCalled();
+    expect(x.of("message")).toEqual([]);
+    expect(server.feeds).toEqual([]);
+  } finally { await x.fire("session_shutdown"); start.mockRestore(); watch.mockRestore(); }
 });
 
 test("session shutdown retains an external headless consumer required by native background work", async () => {

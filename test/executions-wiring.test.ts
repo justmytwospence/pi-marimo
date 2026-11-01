@@ -144,6 +144,8 @@ test("factory registers three Type.Object native tools but initializes no host u
   expect(x.observers).toEqual([]);
   for (const tool of x.tools.values()) {
     expect(tool.parameters.type).toBe("object");
+    expect(tool.renderCall).toBeTypeOf("function");
+    expect(tool.renderResult).toBeTypeOf("function");
     expect(tool.promptGuidelines.join(" ")).toMatch(/official.*CLI/);
     expect(tool.promptGuidelines.join(" ")).toContain("help(cm)");
     expect(tool.promptGuidelines.join(" ")).toContain("Never poll a busy kernel");
@@ -175,7 +177,7 @@ test("delayed official execution survives unrelated turns and sends exactly one 
   x.children[0]!.finish();
   await tick();
   expect(x.messages).toHaveLength(1);
-  expect(x.messages[0]).toMatchObject({ customType: COMPLETION_MESSAGE, delivery: { deliverAs: "followUp", triggerTurn: true }, details: { ids: [`pi-marimo-execution:${r.id}`] } });
+  expect(x.messages[0]).toMatchObject({ customType: COMPLETION_MESSAGE, delivery: { deliverAs: "followUp", triggerTurn: true }, details: { version: 2, ids: [`pi-marimo-execution:${r.id}`], executions: [expect.objectContaining({ id: r.id, label: "Python execution", startedAt: r.startedAt, endedAt: expect.any(Number), stdoutOmittedBytes: 0, stderrOmittedBytes: 0 })] } });
   expect(x.messages[0].content).toContain("Other work in the same kernel may still be busy");
   x.manager.beforeTurn(); x.manager.update(x.followed); await tick();
   expect(x.messages).toHaveLength(1);

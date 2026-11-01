@@ -31,7 +31,8 @@ import { basename } from "./core/io.js";
 import { nodeIo } from "./core/node-io.js";
 import { HeadlessSessions, ownHeadlessSessions } from "./core/headless.js";
 import { ownExecutions } from "./core/execution.js";
-import { ExecutionSession, normalizeExecutionConfig, registerExecutionTools } from "./executions.js";
+import { COMPLETION_MESSAGE, EXECUTIONS_MESSAGE, ExecutionSession, normalizeExecutionConfig, registerExecutionTools } from "./executions.js";
+import { registerExecutionMessageRenderers } from "./ui/execution-render.js";
 import { EditCellService, pythonJson, type EditorSession, type SaveReceipt, type ScratchExecute } from "./core/edit-cell.js";
 import { PackageClient } from "./core/packages.js";
 import { InlineEditorManager } from "./ui/inline-editor.js";
@@ -340,6 +341,7 @@ export default function piMarimo(pi: ExtensionAPI): void {
     },
     onChange: () => schedule(),
   });
+  registerExecutionMessageRenderers(pi, COMPLETION_MESSAGE, EXECUTIONS_MESSAGE);
   registerExecutionTools(pi, executions);
   const executionActivity = (f: Followed) => {
     const activity = executions.activity(f);
@@ -1041,7 +1043,7 @@ export default function piMarimo(pi: ExtensionAPI): void {
           executions.update(watcher.followed());
           if (word === "unwatch" && !ref) { ctx.ui.notify("marimo: /marimo unwatch <execution id>", "info"); return; }
           const result = word === "watch" ? await executions.watch(ref ? { notebook: ref } : {}) : word === "unwatch" ? executions.unsubscribe(ref) : executions.status();
-          pi.sendMessage({ customType: "pi-marimo-executions", content: result.content.map(part => part.text).join("\n"), display: true, details: result.details }, { triggerTurn: false });
+          pi.sendMessage({ customType: EXECUTIONS_MESSAGE, content: result.content.map(part => part.text).join("\n"), display: true, details: { ...result.details, action: word === "unwatch" ? "unsubscribe" : word === "watch" ? "watch" : "status" } }, { triggerTurn: false });
         } catch (error) { ctx.ui.notify(`marimo: ${error instanceof Error ? error.message : String(error)}`, "warning"); }
         return;
       }

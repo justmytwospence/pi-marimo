@@ -245,6 +245,8 @@ pi-marimo supervises the official `marimo pair execute` CLI; marimo remains resp
 
 A typical workflow is: ask Pi to start a fit, receive a subscribed execution handle, chat about something else, then receive a completion follow-up when the execution finishes. Pi queues that follow-up if it is already answering you; it does not overwrite your draft or interrupt the response.
 
+Completion notices, execution status replies and native tool results show a compact summary by default: notebook, task label, outcome and known elapsed time. Use Pi's configured expand/collapse action to reveal the full captured message, including execution IDs, paths, output, errors and omission notices. The hint shows your actual keybinding. This presentation also applies to older completion messages after reload; it does not shorten the model-visible result or change output retention. For longer retained per-task output tails, use `marimo_execution` with the execution ID.
+
 `marimo_execute` defaults to a 1000 ms foreground window (`yield_ms`, range 0–1000) and subscribes by default. Short results return inline without a redundant wake-up. Long execution stays owned by pi-marimo after the tool returns or its wait is interrupted. `subscribe:false` disables continuation for that execution even in `all` mode. A busy kernel rejects additional native Python requests: use `marimo_watch` or the status tool instead of queueing an inspection behind a fit. Notebook selection must be unambiguous; the optional `url` distinguishes the same file on different servers.
 
 | `completion.mode` | behavior |

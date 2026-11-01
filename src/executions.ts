@@ -7,9 +7,11 @@ import { Type } from "typebox";
 import { ownExecutions, type ExecutionActivity, type ExecutionHost, type ExecutionOwner, type ExecutionRecord, type ExecutionTarget } from "./core/execution.js";
 import { sameServer } from "./core/touch.js";
 import type { Followed } from "./core/watcher.js";
+import { executionToolRenderers } from "./ui/execution-render.js";
 
 export const EXECUTION_ENTRY = "pi-marimo-execution";
 export const COMPLETION_MESSAGE = "pi-marimo-completion";
+export const EXECUTIONS_MESSAGE = "pi-marimo-executions";
 export type CompletionMode = "subscribed" | "all" | "off";
 export interface ExecutionConfig {
   execution: { command: string[] };
@@ -433,7 +435,7 @@ export class ExecutionSession {
     const body = batch.map(r => `${r.id}: ${r.label} · ${r.state}\n${r.target.canonicalPath}\n${r.summary ?? ""}${r.errors.length ? `\nNew notebook errors:\n${r.errors.join("\n").slice(-2048)}` : ""}${r.blocked.length ? `\nBlocked cells: ${r.blocked.join(", ").slice(-1024)}` : ""}${outputTail("stdout", r.stdout, r.stdoutOmittedBytes, 4096)}${outputTail("stderr", r.stderr, r.stderrOmittedBytes, 4096)}`).join("\n\n");
     const content = `${headline}\n\n${body.length > 22_000 ? "Some details omitted; use marimo_execution with an ID for its result.\n" : ""}${body.slice(-22_000)}\n\nA native CLI success confirms only its Python request, not every downstream notebook cell. Other work in the same kernel may still be busy; inspect new notebook errors/blocked cells before continuing. Do not retry an unknown outcome automatically.`;
     try {
-      this.pi.sendMessage({ customType: COMPLETION_MESSAGE, content, display: true, details: { version: 1, ids, executions: batch.map(r => ({ id: r.id, target: r.target, state: r.state, summary: r.summary, errors: r.errors, blocked: r.blocked })) } }, { deliverAs: "followUp", triggerTurn: true });
+      this.pi.sendMessage({ customType: COMPLETION_MESSAGE, content, display: true, details: { version: 2, ids, executions: batch.map(r => ({ id: r.id, label: r.label, target: r.target, state: r.state, startedAt: r.startedAt, endedAt: r.endedAt, summary: r.summary, errors: r.errors, blocked: r.blocked, stdoutOmittedBytes: r.stdoutOmittedBytes, stderrOmittedBytes: r.stderrOmittedBytes })) } }, { deliverAs: "followUp", triggerTurn: true });
     } catch {
       // Keep queued metadata recoverable. A host change callback is already queued;
       // block it from retrying indefinitely. beforeTurn/rebind may retry safely.
@@ -459,18 +461,21 @@ export function registerExecutionTools(pi: Pick<ExtensionAPI, "registerTool">, s
     "Never poll a busy kernel with Python or queue inspection behind a fit. Use marimo_watch to subscribe and marimo_execution to read results or unsubscribe. Yield/abort and unsubscribe do not interrupt Python. Never automatically retry an unknown outcome.",
   ];
   pi.registerTool({
+    ...executionToolRenderers("execute"),
     name: "marimo_execute", label: "Execute Python", description: "Run Python through the official marimo CLI in an already-followed connected notebook. Returns inline within 1000 ms or a supervised execution handle; subscribed completion resumes this session with a native follow-up.",
     promptGuidelines: guidelines,
     parameters: Type.Object({ ...selector, code: Type.String({ minLength: 1 }), label: Type.Optional(Type.String()), subscribe: Type.Optional(Type.Boolean()), yield_ms: Type.Optional(Type.Integer({ minimum: 0, maximum: 1000 })) }),
     execute: (_id, params, signal) => session.execute(params, signal),
   });
   pi.registerTool({
+    ...executionToolRenderers("watch"),
     name: "marimo_watch", label: "Watch execution", description: "Subscribe once to the currently observed notebook execution wave, including queued descendants and scratch work. Read-only: executes no Python, starts no server or kernel. No observed busy evidence means no subscription.",
     promptGuidelines: guidelines,
     parameters: Type.Object(selector),
     execute: (_id, params) => session.watch(params),
   });
   pi.registerTool({
+    ...executionToolRenderers("execution"),
     name: "marimo_execution", label: "Execution status", description: "List this session/branch's execution results or inspect one ID. Unsubscribe changes notification intent only; Python is not interrupted.",
     promptGuidelines: guidelines,
     parameters: Type.Object({ action: Type.Optional(Type.Union([Type.Literal("status"), Type.Literal("unsubscribe")])), id: Type.Optional(Type.String()) }),
