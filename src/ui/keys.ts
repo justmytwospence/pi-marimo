@@ -1,5 +1,6 @@
 // Single source of truth for notebook dispatch, help and compact footer tokens.
 import { decodeKittyPrintable, isKeyRelease, matchesKey, parseKey, visibleWidth } from "@earendil-works/pi-tui";
+import type { ViewPreferences } from "./settings.js";
 
 export type CommandMode = "notebook" | "variables" | "packages" | "table" | "widget" | "chart" | "editor" | "help" | "message";
 export interface Command {
@@ -211,13 +212,34 @@ export function commandToken(id: string): string {
   const entry = entryFor(id);
   return `${entry.keys[0]} ${entry.label}`;
 }
-/** Whole tokens in descending priority; no ellipses or partially visible shortcuts. */
-export function footerTokens(width: number, primary: string, position?: string, editor = false, section?: boolean): string {
-  const tokens = [commandToken(editor ? "editor-help" : "help"), commandToken(primary), ...(section !== undefined ? [`${commandKey("section")} ${section ? "section" : "cell"}`] : []), ...(position ? [position] : [])];
+export interface FooterOptions {
+  mode: CommandMode;
+  position?: string;
+  section?: boolean;
+  preferences?: Pick<ViewPreferences, "diagnostics" | "showOutput" | "lineNumbers">;
+}
+
+/** Whole action-first hints: a long one may yield to shorter lower-priority hints. */
+export function footerTokens(width: number, primary: string, options: FooterOptions): string {
+  const { mode, position, section, preferences } = options;
+  const reading = entryFor("diagnostics").modes.includes(mode);
+  const tokens = [commandToken(primary), commandToken(mode === "editor" ? "editor-help" : "help")];
+  if (reading && preferences) {
+    if (preferences.diagnostics !== "all") tokens.push(`${commandKey("diagnostics")} ${preferences.diagnostics === "none" ? "hidden" : preferences.diagnostics}`);
+    if (!preferences.showOutput) tokens.push(`${commandKey("output")} output off`);
+  }
+  if (mode === "notebook") {
+    if (section !== undefined) tokens.push(`${commandKey("section")} ${section ? "section" : "cell"}`);
+    if (position) tokens.push(position);
+  }
+  if (reading && preferences) {
+    if (preferences.diagnostics === "all") tokens.push(commandToken("diagnostics"));
+    if (preferences.showOutput) tokens.push(`${commandKey("output")} output`);
+    if (mode === "notebook") tokens.push(`${commandKey("numbers")} lines${preferences.lineNumbers ? " on" : ""}`);
+  }
   const kept: string[] = [];
   for (const token of tokens) {
-    if (visibleWidth([...kept, token].join(" · ")) <= width) kept.push(token);
-    else break;
+    if (visibleWidth([...kept, token].join(" · ")) <= Math.max(0, width)) kept.push(token);
   }
   return kept.join(" · ");
 }

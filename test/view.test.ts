@@ -706,7 +706,7 @@ test("the keyboard pointer drives a live chart without a mouse: arrows move it, 
     expect(v.render(100).join("\n")).toContain("i inspect chart");
     v.handleInput("i");
     expect(live.inspecting).toBe(true);
-    expect(screen(v)).toContain("? help · space start / end drag");
+    expect(screen(v)).toContain("space start / end drag · ? help");
     const start = events.at(-1);
     v.handleInput("\x1b[C"); // right
     expect(events.at(-1)).toMatchObject({ type: "move", x: start.x + 0.5, y: start.y });
@@ -1316,7 +1316,7 @@ test("docked: the banner says how to switch, Esc goes to the chat, q closes, and
   try {
     const lines = v.render(100);
     expect(lines[0]).toContain("Notebook nb.py · ctrl+] focus");
-    expect(lines.join("\n")).toContain("? help · enter edit / activate");
+    expect(lines.join("\n")).toContain("enter edit / activate · ? help");
     v.handleInput("\x1b");
     expect(focusMain).toHaveBeenCalledOnce();
     expect(done).not.toHaveBeenCalled();
@@ -1778,7 +1778,7 @@ test("t drives a marimo table: paging, sorting and selection go through the kern
   try {
     v.render(100);
     v.handleInput("t");
-    expect(screen(v)).toContain("? help · enter row detail");
+    expect(screen(v)).toContain("enter row detail · ? help");
     v.handleInput("]");
     await Promise.resolve();
     expect(calls.at(-1)).toMatchObject({ fn: "search", args: { page_number: 1, page_size: 1 } });
@@ -1793,9 +1793,9 @@ test("t drives a marimo table: paging, sorting and selection go through the kern
     expect(screen(v)).toContain("row 1");
     v.handleInput("\x1b");
     expect(screen(v)).not.toContain("row 1");
-    expect(screen(v)).toContain("? help · enter row detail");
+    expect(screen(v)).toContain("enter row detail · ? help");
     v.handleInput("\x1b");
-    expect(screen(v)).not.toContain("? help · enter row detail");
+    expect(screen(v)).not.toContain("enter row detail · ? help");
   } finally { v.dispose(); clearTableSessions(); }
 });
 
@@ -2078,7 +2078,7 @@ test.each([46, 80, 100, 120, 180].flatMap(width => ["t", "w"].map(key => ({ widt
       const lines = v.render(width);
       expect(lines).toHaveLength(12);
       expect(lines.every(line => visibleWidth(line) === width)).toBe(true);
-      expect(footerText(lines)).toBe(key === "t" ? "? help · enter row detail" : width === 46 ? "Tab next · ←/→ adjust · Enter value" : "Tab next · ←/→ adjust · Enter value · Esc done");
+      expect(footerText(lines)).toBe(key === "t" ? width === 46 ? "enter row detail · ? help · ! diagnostics" : "enter row detail · ? help · ! diagnostics · \\ output" : width === 46 ? "Tab next · ←/→ adjust · Enter value" : "Tab next · ←/→ adjust · Enter value · Esc done");
       v.handleInput("?");
       const help = v.render(width);
       expect(help).toHaveLength(12);
@@ -2114,16 +2114,53 @@ test.each([46, 80, 100, 120, 180])("STEP6 12-row terminal has a whole-token, sin
       expect(lines.every(line => visibleWidth(line) === width)).toBe(true);
       const footer = footerText(lines);
       const tokens = footer.split(" · ");
-      expect(tokens.slice(0, 2)).toEqual(["? help", action]);
-      expect(tokens.length).toBeLessThanOrEqual(position ? 4 : 2);
+      expect(tokens.slice(0, 2)).toEqual([action, "? help"]);
       if (position) {
-        expect(tokens[2]).toBe("O cell");
-        if (tokens.length === 4) expect(tokens[3]).toBe(position);
+        expect(tokens).toContain("O cell");
+        expect(tokens).toContain(position);
       } else expect(footer).not.toMatch(/O (cell|section)/u);
+      expect(tokens).not.toContain("# lines on");
       expect(footer).not.toMatch(/[…\n]|\.\.\./u);
       expect(lines.filter(line => plain(line).includes("? help"))).toHaveLength(1);
     }
   } finally { v.dispose(); }
+});
+
+test("footer immediately elevates hidden diagnostics and output while keeping contextual action and whole toggles", () => {
+  const f = dataflow();
+  const v = new NotebookView(shortTui() as any, theme, notebookKey(f), {
+    followed: () => [f], interrupt: async () => {}, openInBrowser: () => {}, run: vi.fn(),
+  }, () => {});
+  try {
+    const foot = (width = 120) => footerText(v.render(width));
+    expect(foot()).toBe("r run cell · ? help · O cell · 1/3 · ! diagnostics · \\ output · # lines");
+    v.handleInput("!");
+    expect(foot()).toBe("r run cell · ? help · ! errors · O cell · 1/3 · \\ output · # lines");
+    expect(v.render(120).join("\n")).toContain("diagnostics errors");
+    v.handleInput("\\");
+    expect(foot()).toBe("r run cell · ? help · ! errors · \\ output off · O cell · 1/3 · # lines");
+    expect(v.render(120).join("\n")).toContain("output hidden");
+    v.handleInput("#");
+    expect(foot()).toContain("# lines on");
+    v.handleInput("O");
+    expect(foot()).toContain("O section");
+    f.notebook.apply("cell-op", { cell_id: "a", status: "running", timestamp: Date.now() / 1000 });
+    expect(foot()).toMatch(/^x interrupt · \? help · ! errors · \\ output off/u);
+    const narrow = foot(46);
+    expect(visibleWidth(narrow)).toBeLessThanOrEqual(44);
+    expect(narrow).not.toMatch(/…|\.\.\./u);
+    expect(narrow).toContain("! errors");
+    v.handleInput("!");
+    expect(foot()).toContain("! warnings");
+    v.handleInput("!");
+    expect(foot()).toContain("! hidden");
+    v.handleInput("!");
+    expect(foot()).toContain("! diagnostics");
+    expect(foot()).not.toContain("! hidden");
+  } finally {
+    if (v.snapshot().section) v.handleInput("O"); // Restore the shared view preference.
+    v.dispose();
+  }
 });
 
 test("notebook footer names the current reading view and disappears outside notebook mode", () => {
@@ -2308,7 +2345,7 @@ test("STEP6 editor F1 opens Editing help; wheel scrolls help, native punctuation
     for (const key of ["?", "/", "!", "\\", "#", ":", "\t", "\x1b"]) v.handleInput(key);
     expect(fake.session.input.mock.calls.map(([data]) => data)).toEqual(["?", "/", "!", "\\", "#", ":", "\t", "\x1b"]);
     expect(v.snapshot().help).toBeUndefined();
-    expect(footerText(v.render(46))).toBe("f1 help · f2 save");
+    expect(footerText(v.render(46))).toBe("f2 save · f1 help");
   } finally { v.dispose(); fake.editors.dispose(); }
 });
 

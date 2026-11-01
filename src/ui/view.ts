@@ -2039,7 +2039,10 @@ export class NotebookView implements Component, Focusable {
       for (const token of tokens) if (visibleWidth([...kept, token].join(" · ")) <= inner) kept.push(token);
       return this.theme.fg("dim", kept.join(" · "));
     }
-    return this.theme.fg("dim", footerTokens(inner, primary, position, mode === "editor", mode === "notebook" ? this.section : undefined));
+    return this.theme.fg("dim", footerTokens(inner, primary, {
+      mode, position, section: mode === "notebook" ? this.section : undefined,
+      preferences: this.preferences.snapshot(),
+    }));
   }
 
   /** A theme change or resize: the terminal may have dropped image data with the redraw, so live charts upload their frames again. */

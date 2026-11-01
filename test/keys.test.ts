@@ -93,11 +93,11 @@ for (const width of [46, 80, 100, 120, 180]) describe(`width ${width}`, () => {
   test("footer contains only prioritized whole registry tokens", () => {
     for (const command of COMMANDS.filter(command => command.modes.length)) {
       const editor = command.modes.includes("editor");
-      const footer = footerTokens(width, command.id, "123/456", editor);
+      const footer = footerTokens(width, command.id, { mode: editor ? "editor" : "notebook", position: "123/456" });
       expect(visibleWidth(footer)).toBeLessThanOrEqual(width);
-      expect(footer.startsWith(editor ? "f1 help" : "? help")).toBe(true);
+      expect(footer.startsWith(commandToken(command.id))).toBe(true);
       expect(footer).not.toMatch(/…|\.\.\./u);
-      expect(footer.split(" · ").every(token => [editor ? "f1 help" : "? help", commandToken(command.id), "123/456"].includes(token))).toBe(true);
+      expect(footer.split(" · ").every(token => [editor ? "f1 help" : "? help", commandToken(command.id), ...(editor ? [] : ["123/456"])].includes(token))).toBe(true);
     }
   });
   test("every command is searchable and reaches the viewport", () => {
@@ -134,15 +134,48 @@ test.each([
   expect(seen.join("\n")).toContain(expected);
 });
 
-test("footer drops lowest priority first and never splits a token", () => {
-  expect(footerTokens(100, "edit", "1/2", false, false)).toBe("? help · b edit source · O cell · 1/2");
-  expect(footerTokens(100, "edit", "1/2", false, true)).toBe("? help · b edit source · O section · 1/2");
-  expect(footerTokens(29, "edit", "1/2", false, false)).toBe("? help · b edit source");
-  expect(footerTokens(1, "edit")).toBe("");
-  expect(footerTokens(6, "edit", "1/2")).toBe("? help");
-  expect(footerTokens(22, "edit", "1/2")).toBe("? help · b edit source");
-  expect(footerTokens(30, "edit", "1/2")).toBe("? help · b edit source · 1/2");
+test("footer prioritizes whole action, help, location, and optional display hints", () => {
+  const preferences = { diagnostics: "all" as const, showOutput: true, lineNumbers: false };
+  const cell = { mode: "notebook" as const, position: "1/2", section: false, preferences };
+  expect(footerTokens(100, "edit", cell)).toBe("b edit source · ? help · O cell · 1/2 · ! diagnostics · \\ output · # lines");
+  expect(footerTokens(100, "edit", { ...cell, section: true })).toContain("O section · 1/2");
+  expect(footerTokens(29, "edit", cell)).toBe("b edit source · ? help · 1/2");
+  expect(footerTokens(1, "edit", cell)).toBe("");
+  expect(footerTokens(6, "edit", cell)).toBe("? help");
+  expect(footerTokens(22, "edit", cell)).toBe("b edit source · ? help");
+  expect(footerTokens(30, "edit", cell)).toBe("b edit source · ? help · 1/2");
+  expect(footerTokens(100, "edit", { ...cell, preferences: { ...preferences, lineNumbers: true } })).toContain("# lines on");
   expect(() => commandToken("nonexistent")).toThrow("Unknown notebook command");
+});
+
+test("nondefault visibility outranks location without duplicating its toggle", () => {
+  const preferences = { diagnostics: "errors" as const, showOutput: false, lineNumbers: false };
+  const cell = { mode: "notebook" as const, position: "2/12", section: false, preferences };
+  expect(footerTokens(120, "run", cell)).toBe("r run cell · ? help · ! errors · \\ output off · O cell · 2/12 · # lines");
+  for (const [diagnostics, label] of [["warnings", "! warnings"], ["none", "! hidden"]] as const) {
+    expect(footerTokens(80, "run", { ...cell, preferences: { ...preferences, diagnostics } })).toContain(label);
+  }
+  expect(footerTokens(26, "run", cell)).toBe("r run cell · ? help · 2/12");
+});
+
+test("mode permissions and width fitting do not advertise unavailable controls", () => {
+  const preferences = { diagnostics: "all" as const, showOutput: true, lineNumbers: false };
+  expect(footerTokens(120, "editor-f2", { mode: "editor", preferences })).toBe("f2 save · f1 help");
+  expect(footerTokens(120, "table-row", { mode: "table", preferences })).toBe("enter row detail · ? help · ! diagnostics · \\ output");
+  expect(footerTokens(120, "table-row", { mode: "table", preferences: { ...preferences, diagnostics: "none", showOutput: false } })).toBe("enter row detail · ? help · ! hidden · \\ output off");
+  expect(footerTokens(120, "help", { mode: "help", preferences })).toBe("? help · ? help");
+  expect(footerTokens(120, "message-close", { mode: "message", preferences })).toBe("escape back · ? help");
+  for (const width of [0, 1, 6, 22, 29, 30, 46, 80, 100, 120, 180]) {
+    const value = footerTokens(width, "edit", { mode: "notebook", section: false, position: "123/456", preferences });
+    expect(visibleWidth(value)).toBeLessThanOrEqual(width);
+    expect(value).not.toMatch(/…|\.\.\./u);
+    expect(value.split(" · ").every(token => ["b edit source", "? help", "O cell", "123/456", "! diagnostics", "\\ output", "# lines", ""].includes(token))).toBe(true);
+    const exact = "b edit source · ? help";
+    if (width === visibleWidth(exact)) expect(value).toContain(exact);
+  }
+  const exact = visibleWidth("b edit source · ? help");
+  expect(footerTokens(exact, "edit", { mode: "notebook" })).toBe("b edit source · ? help");
+  expect(footerTokens(exact - 1, "edit", { mode: "notebook" })).toBe("b edit source");
 });
 
 test("editor ordinary keys are not host commands", () => {
