@@ -51,6 +51,22 @@ test("CSI-u printable presses and Kitty repeats dispatch, but releases do not", 
   }
 });
 
+test("F jumps only in notebook mode, while f follows and table F clears filters", () => {
+  expect(commandFor("notebook", "F")?.id).toBe("jump-running");
+  expect(commandFor("notebook", "f")?.id).toBe("follow");
+  expect(commandFor("table", "F")?.id).toBe("table-clear");
+  for (const mode of ["editor", "help", "message", "widget", "chart"] as const) {
+    expect(commandFor(mode, "F")?.id).not.toBe("jump-running");
+  }
+  for (const data of ["\x1b[70u", "\x1b[102;2u", "\x1b[102:70;2:2u"]) {
+    expect(commandFor("notebook", data)?.id).toBe("jump-running");
+  }
+  expect(commandFor("notebook", "\x1b[102:70;2:3u")).toBeUndefined();
+  const command = paletteCommands("notebook").find(c => c.id === "jump-running");
+  expect(command).toMatchObject({ label: "jump to running cell", group: "Navigation" });
+  expect(commandFor("notebook", paletteInput(command!, "notebook")!)?.id).toBe("jump-running");
+});
+
 test("encoded printable bindings preserve uppercase and shifted punctuation", () => {
   for (const [data, id] of [
     ["\x1b[103u", "first"], ["\x1b[71u", "last"],

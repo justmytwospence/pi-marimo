@@ -55,6 +55,7 @@ export const COMMANDS: readonly Command[] = [
   command("page-up", N, ["pageUp"], "Navigation", "page up"),
   command("page-down", N, ["pageDown", "space"], "Navigation", "page down"),
   command("follow", N, ["f"], "Navigation", "follow running cell"),
+  command("jump-running", N, ["F"], "Navigation", "jump to running cell", "Jump to the running cell once without following later execution"),
   command("find", N, ["/"], "Navigation", "find cell", "Filter cells; Enter goes to the match and clears search; Escape restores selection"),
   command("parent", N, ["<"], "Navigation", "upstream cell"),
   command("child", N, [">"], "Navigation", "downstream cell"),

@@ -2,7 +2,8 @@ import { expect, test, vi } from "vitest";
 import { NotebookState } from "../src/core/notebook.js";
 import type { Followed } from "../src/core/watcher.js";
 import { INPUT_CONTEXT } from "../src/activity.js";
-import { NotebookView, notebookLines, detailRows } from "../src/ui/view.js";
+import { NotebookView, notebookLines, detailRows, selectableCells } from "../src/ui/view.js";
+import { outlineRows } from "../src/ui/outline.js";
 import { SessionPreferences } from "../src/ui/settings.js";
 import { progressRows } from "../src/ui/progress.js";
 import type { ProgressTask } from "../src/core/progress.js";
@@ -544,6 +545,117 @@ test("following keeps the cursor on the running cell until the user moves; f fol
     v.handleInput("f");
     expect(screen(v)).toMatch(/▌[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] v40 = 40/u);
   } finally { v.dispose(); }
+});
+
+test.each([46, 100].flatMap(width => [false, true].map(follow => ({ width, follow }))))("F jumps once at $width columns (follow=$follow), without dispatching actions", ({ width, follow }) => {
+  const f = nbWith([{ id: "a", code: "first = 1" }, { id: "b", code: "second = 2" }, { id: "c", code: "third = 3" }]);
+  const seed = make(f); const initial = { ...seed.snapshot(), cursor: "a", follow }; seed.dispose();
+  const run = vi.fn(), interrupt = vi.fn(), setWidget = vi.fn(), tableCall = vi.fn();
+  const v = make(f, { initial, run, interrupt, setWidget, table: { call: tableCall, file: async () => "[]" } });
+  try {
+    f.notebook.apply("cell-op", { cell_id: "b", status: "running" });
+    v.handleInput("F");
+    expect(v.snapshot()).toMatchObject({ cursor: "b", follow: false });
+    const lines = v.render(width);
+    expect(lines.every(line => visibleWidth(line) === width)).toBe(true);
+    expect(lines.join("\n")).toContain("second = 2");
+    f.notebook.apply("cell-op", { cell_id: "b", status: "idle" });
+    f.notebook.apply("cell-op", { cell_id: "c", status: "running" });
+    v.render(width);
+    expect(v.snapshot()).toMatchObject({ cursor: "b", follow: false });
+    expect(run).not.toHaveBeenCalled(); expect(interrupt).not.toHaveBeenCalled();
+    expect(setWidget).not.toHaveBeenCalled(); expect(tableCall).not.toHaveBeenCalled();
+  } finally { v.dispose(); }
+});
+
+test("F reveals deeply folded running cells and clears an incompatible restored filter only", () => {
+  const f = nbWith([
+    { id: "h1", code: 'mo.md("# One")' }, { id: "h2", code: 'mo.md("## Two")' },
+    { id: "h3", code: 'mo.md("### Three")' }, { id: "h4", code: 'mo.md("#### Four")' },
+    { id: "target", code: "target = 42" }, { id: "other", code: 'mo.md("# Other")' }, { id: "x", code: "x = 1" },
+  ]);
+  const seed = make(f); const initial = { ...seed.snapshot(), cursor: "other", follow: false, filter: "incompatible", folded: ["h1", "h2", "h3", "h4", "other"], detailScroll: 10 }; seed.dispose();
+  const v = make(f, { initial });
+  try {
+    f.notebook.apply("cell-op", { cell_id: "target", status: "running" });
+    v.handleInput("F");
+    expect(v.snapshot()).toMatchObject({ cursor: "target", follow: false, filter: "", folded: ["other"], detailScroll: 0, section: initial.section });
+    expect(screen(v)).toContain("target = 42");
+  } finally { v.dispose(); }
+});
+
+test("F reveals only selected headingless prose, retaining it after completion and snapshot transfer", () => {
+  const f = nbWith([{ id: "a", code: "first = 1" }, { id: "prose", code: 'mo.md("Unique prose body")' }, { id: "hidden", code: 'mo.md("Other hidden prose")' }, { id: "b", code: "last = 2" }]);
+  const v = make(f); let moved: NotebookView | undefined;
+  try {
+    screen(v);
+    f.notebook.apply("cell-op", { cell_id: "prose", status: "running" });
+    v.handleInput("F");
+    expect(v.snapshot().cursor).toBe("prose");
+    expect(screen(v)).toContain("Unique prose body");
+    const outline = outlineRows(f.notebook, theme, Date.now(), { cursor: "prose", filter: "", folded: new Set(), width: 40 });
+    expect(outline.cellRows.has("prose")).toBe(true);
+    expect(outline.cellRows.has("hidden")).toBe(false);
+    expect(selectableCells(f.notebook, "missing", { reveal: "prose" })).toEqual([]);
+    f.notebook.apply("cell-op", { cell_id: "prose", status: "idle" });
+    expect(screen(v)).toContain("Unique prose body");
+    expect(v.snapshot().cursor).toBe("prose");
+    moved = make(f, { initial: v.snapshot() });
+    expect(screen(moved)).toContain("Unique prose body");
+    expect(moved.snapshot().cursor).toBe("prose");
+    moved.handleInput("j");
+    expect(moved.snapshot().cursor).toBe("b");
+    expect(screen(moved)).not.toContain("Unique prose body");
+    moved.handleInput("k");
+    expect(moved.snapshot().cursor).toBe("a");
+  } finally { v.dispose(); moved?.dispose(); }
+});
+
+test.each(["idle", "queued", "native", "disconnected", "missing"] as const)("F with %s target disables follow without changing selection, folds or filter", kind => {
+  const f = nbWith([{ id: "h", code: 'mo.md("# Header")' }, { id: "a", code: "a = 1" }, { id: "b", code: "b = 2" }]);
+  f.notebook.apply("cell-op", { cell_id: "a", status: "running" });
+  f.notebook.apply("cell-op", { cell_id: "a", status: kind === "disconnected" || kind === "missing" ? "running" : "idle" });
+  if (kind === "queued") f.notebook.apply("cell-op", { cell_id: "b", status: "queued" });
+  if (kind === "disconnected") f.connection = "disconnected";
+  const seed = make(f); const initial = { ...seed.snapshot(), cursor: "h", follow: true, folded: ["h"], filter: "Header" }; seed.dispose();
+  const v = make(f, { initial, followed: () => kind === "missing" ? [] : [f], executionActivity: () => ({ running: kind === "native", detail: [] }) });
+  try {
+    v.handleInput("F");
+    expect(v.snapshot()).toMatchObject({ cursor: "h", follow: false, folded: ["h"], filter: "Header" });
+    expect(v.snapshot().note).toBe(({ idle: "No notebook cell is running.", queued: "No cell is running yet (1 queued).", native: "Background Python has no document cell to jump to.", disconnected: "The notebook is not connected.", missing: "No notebook is followed." })[kind]);
+  } finally { v.dispose(); }
+});
+
+test("palette dispatches jump to running cell through the notebook command", () => {
+  const f = nbWith([{ id: "a", code: "a = 1" }, { id: "b", code: "b = 2" }]);
+  const v = make(f);
+  try {
+    screen(v); f.notebook.apply("cell-op", { cell_id: "b", status: "running" });
+    paletteSearch(v, "jump to running cell"); v.handleInput("\r");
+    expect(v.snapshot()).toMatchObject({ cursor: "b", follow: false });
+    expect(v.snapshot().palette).toBeUndefined();
+  } finally { v.dispose(); }
+});
+
+test("F remains literal in a filter, embedded prompt and native editor", async () => {
+  const f = nbWith([{ id: "a", code: "a = 1" }, { id: "b", code: "b = 2" }]);
+  const fake = fakeEditors();
+  const prompt = { focused: false, render: () => ["prompt"], handleInput: vi.fn(), dispose: vi.fn() };
+  const v = make(f, { editors: fake.editors, ask: vi.fn(), editorFactory: () => prompt as any, keybindings: {} as any });
+  try {
+    screen(v); f.notebook.apply("cell-op", { cell_id: "b", status: "running" });
+    v.handleInput("/"); v.handleInput("F");
+    expect(v.snapshot().filter).toBe("F");
+    v.handleInput("\x1b"); v.handleInput("a"); v.handleInput("F");
+    expect(prompt.handleInput).toHaveBeenCalledWith("F");
+    expect(v.snapshot().cursor).toBe("a");
+  } finally { v.dispose(); }
+  const editorView = make(f, { editors: fake.editors });
+  try {
+    editorView.render(100); editorView.handleInput("b"); await editorReady(); editorView.handleInput("F");
+    expect(fake.session.input).toHaveBeenCalledWith("F");
+    expect(editorView.snapshot().cursor).toBe("b");
+  } finally { editorView.dispose(); fake.editors.dispose(); }
 });
 
 test("r runs the cell under the cursor with its current code; R and A need a second press", async () => {

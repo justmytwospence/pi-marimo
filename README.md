@@ -112,7 +112,8 @@ With the notebook focused, `ctrl+p` opens a compact floating command palette wit
 | `<` / `>` | a cell this one uses / one that uses it |
 | `v`, `P` | variables; packages |
 | `/` | find a cell or variable by name, variable, code or error; Enter goes there, Esc goes back |
-| `f` | follow the running cell again |
+| `f` | follow the running cell and subsequent execution |
+| `F` (Shift+F) | jump to the running cell once and turn following off |
 | `r`, `R`, `A` | run the cell; stale cells; all cells (the last two need a second press) |
 | `x` | twice: interrupt the kernel |
 | `t` | drive the cell's table |
@@ -132,6 +133,8 @@ With the notebook focused, `ctrl+p` opens a compact floating command palette wit
 | Esc, `q`, `h` | back (docked: Esc goes to the chat, `q` closes) |
 
 </details>
+
+`F` jumps to the current notebook's running document cell, clearing a retained filter and opening its hiding section folds without unfolding unrelated sections. It stays on that cell when execution moves elsewhere; lowercase `f` resumes continuous follow. Queued or last-run cells are not jump targets. Background scratchpad Python has no document cell to jump to, so `F` explains that instead of moving the selection.
 
 The mouse works too: the wheel scrolls the pane under it, a click selects a cell or part, and a double click acts on it. Help starts in the current mode, with aligned keys and actions and a category rail when there is room. `j`/`k` and ↑/↓ scroll one row when a category overflows; when it fits they select the adjacent category (stopping at the ends). PgUp/PgDn, `g`/`G` and the wheel scroll; `/` searches keys, actions and descriptions across categories; Tab/Shift+Tab wraps through categories; Esc clears search then closes, and `?` or F1 closes when not typing. The footer prioritizes the contextual action, `? help`, nondefault visibility (`! errors`/`! warnings`/`! hidden`, `\ output off`), then `O cell`/`O section` and position. With room left, it adds `! diagnostics`, `\ output` and `# lines` (`# lines on` when enabled). Hints are always whole; a longer hint that does not fit can yield to a shorter one. Editor, widget, prompt and help footers keep their own context-specific controls.
 

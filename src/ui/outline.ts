@@ -43,7 +43,7 @@ export function outlineRows(nb: NotebookState, theme: PaneTheme, now: number, o:
   const filtering = !!o.filter.trim();
   const width = Math.max(8, o.width);
   const hidden = filtering ? new Map<string, string>() : foldedCells(nb, o.folded);
-  const shown = new Set(selectableCells(nb, o.filter, { folded: o.folded }).map((c) => c.id));
+  const shown = new Set(selectableCells(nb, o.filter, { folded: o.folded, reveal: o.cursor }).map((c) => c.id));
   const rows: Row[] = [];
   const cellRows = new Map<string, number>();
   let running: number | undefined;
@@ -87,11 +87,12 @@ export function outlineRows(nb: NotebookState, theme: PaneTheme, now: number, o:
     if (hidden.has(cell.id)) continue;
     const here = o.cursor === cell.id;
     if (nb.isMarkdown(cell)) {
-      if (!shown.has(cell.id) || !nb.headings(cell).length) continue;
-      headingRows(cell, here, true);
-      continue;
-    }
-    if (!filtering) headingRows(cell, false, false);
+      if (nb.headings(cell).length) {
+        if (shown.has(cell.id)) headingRows(cell, here, true);
+        continue;
+      }
+      if (!here || !shown.has(cell.id)) continue;
+    } else if (!filtering) headingRows(cell, false, false);
     if (!shown.has(cell.id)) continue;
     const marked = marks.get(cell.id);
     const tags = marked ? ` ${theme.fg("warning", marked.join(" "))}` : "";

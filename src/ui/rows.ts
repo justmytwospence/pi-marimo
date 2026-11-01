@@ -136,12 +136,12 @@ export function foldedCells(nb: NotebookState, folded: ReadonlySet<string>): Map
  * those matching it (name, id, variables, code, error). Folded sections hide their cells, except
  * while filtering.
  */
-export function selectableCells(nb: NotebookState, filter = "", o: { folded?: ReadonlySet<string> } = {}): Cell[] {
+export function selectableCells(nb: NotebookState, filter = "", o: { folded?: ReadonlySet<string>; reveal?: string } = {}): Cell[] {
   const q = filter.trim().toLowerCase();
   const hidden = q ? new Map<string, string>() : foldedCells(nb, o.folded ?? new Set());
   return nb.ordered().filter((c) => {
     if (hidden.has(c.id)) return false;
-    if (nb.isMarkdown(c) && !q && !nb.headings(c).length) return false;
+    if (nb.isMarkdown(c) && !q && !nb.headings(c).length && c.id !== o.reveal) return false;
     if (!q) return true;
     return [c.name, c.id, ...(nb.defs.get(c.id) ?? []), c.code, c.error ?? ""].some((t) => t.toLowerCase().includes(q));
   });

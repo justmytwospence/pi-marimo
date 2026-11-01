@@ -488,7 +488,7 @@ export class NotebookView implements Component, Focusable {
   }
 
   private cells(f: Followed): Cell[] {
-    return selectableCells(f.notebook, this.filter, { folded: this.folded });
+    return selectableCells(f.notebook, this.filter, { folded: this.folded, reveal: this.cursor });
   }
 
   /** Move the cursor to the next/previous selectable cell that passes `want` (wrapping). */
@@ -515,17 +515,40 @@ export class NotebookView implements Component, Focusable {
 
   /** Put the cursor on a cell, opening the fold that hides it. */
   private goTo(f: Followed, id: string): void {
-    const head = foldedCells(f.notebook, this.folded).get(id);
-    if (head) this.folded.delete(head);
-    // A fold inside the opened one may still hide it.
-    const inner = foldedCells(f.notebook, this.folded).get(id);
-    if (inner) this.folded.delete(inner);
+    let head: string | undefined;
+    while ((head = foldedCells(f.notebook, this.folded).get(id)) !== undefined) this.folded.delete(head);
     this.filter = "";
     this.mode = "cells";
     this.table = undefined;
     this.cursor = id;
     this.follow = false;
     this.reveal = true;
+  }
+
+  private jumpToRunning(): void {
+    this.follow = false;
+    const f = this.current();
+    if (!f) { this.note = "No notebook is followed."; return; }
+    if (f.connection !== "connected") { this.note = "The notebook is not connected."; return; }
+    const cell = f.notebook.running()?.cell;
+    if (!cell) {
+      const queued = f.notebook.queued();
+      this.note = this.actions.executionActivity?.(f).running
+        ? "Background Python has no document cell to jump to."
+        : queued > 0 ? `No cell is running yet (${queued} queued).` : "No notebook cell is running.";
+      return;
+    }
+    this.note = undefined;
+    this.widget = undefined;
+    this.dragging = undefined;
+    this.part = undefined;
+    this.partCell = undefined;
+    this.focusedBlock = undefined;
+    this.scrollToPart = false;
+    this.sourceFocus = false;
+    this.live.leave();
+    this.detailScroll = 0;
+    this.goTo(f, cell.id);
   }
 
   private startRun(f: Followed, cells: Cell[], what: string): void {
@@ -1545,7 +1568,8 @@ export class NotebookView implements Component, Focusable {
     else if (command.id === "follow") {
       this.follow = true;
       this.reveal = true;
-    } else if (f && command.id === "down") this.step(f, 1);
+    } else if (command.id === "jump-running") this.jumpToRunning();
+    else if (f && command.id === "down") this.step(f, 1);
     else if (f && command.id === "up") this.step(f, -1);
     else if (command.id === "page-up") this.scrollBy(-page);
     else if (command.id === "page-down") this.scrollBy(page);
