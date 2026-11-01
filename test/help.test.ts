@@ -230,6 +230,80 @@ test.each([24, 39, 40, 59, 60, 89, 90, 120, 180])("responsive chrome and body fi
   }
 });
 
+test("fitted j/k and arrows select adjacent categories, clamp, and leave Tab wrapping", () => {
+  const help = new Help();
+  help.render(90, 100, theme);
+  expect(help.render(90, 100, theme).at(-1)).toContain("j/k categories");
+  help.handleInput("k", 1);
+  help.handleInput("\x1b[A", 1);
+  expect(help.state.group).toBe("Navigation");
+  for (const key of ["j", "\x1b[B"]) {
+    help.handleInput(key, 1);
+    help.render(90, 100, theme);
+  }
+  expect(help.state.group).toBe("Execution");
+  expect(help.render(90, 100, theme).join("\n")).toContain("› Execution");
+  help.handleInput("\x1b[A", 1);
+  expect(help.state.group).toBe("Display");
+  help.handleInput("\x1b[Z", 1);
+  expect(help.state.group).toBe("Navigation");
+  help.handleInput("\x1b[Z", 1);
+  expect(help.state.group).toBe("Dock/Mouse");
+  help.render(90, 100, theme);
+  help.handleInput("j", 1);
+  expect(help.state.group).toBe("Dock/Mouse");
+  help.handleInput("\t", 1);
+  expect(help.state.group).toBe("Navigation");
+});
+
+test("successive fitted keys move through categories before an asynchronous repaint", () => {
+  const help = new Help();
+  help.render(120, 100, theme);
+  help.handleInput("j", 1);
+  help.handleInput("j", 1);
+  help.handleInput("\x1b[B", 1);
+  expect(help.state.group).toBe("Editing");
+  help.handleInput("k", 1);
+  expect(help.state.group).toBe("Execution");
+});
+
+test("resizing switches between row scrolling and category selection", () => {
+  const help = new Help();
+  expect(help.render(90, 13, theme).at(-1)).toContain("j/k scroll");
+  help.handleInput("j", 1);
+  expect(help.state).toMatchObject({ group: "Navigation", scroll: 1 });
+  help.render(90, 100, theme);
+  expect(help.state.scroll).toBe(0);
+  help.handleInput("j", 1);
+  expect(help.state).toMatchObject({ group: "Display", scroll: 0 });
+  help.render(46, 12, theme);
+  help.handleInput("j", 1);
+  expect(help.state).toMatchObject({ group: "Display", scroll: 1 });
+  help.handleInput("\t", 1);
+  expect(help.state).toMatchObject({ group: "Execution", scroll: 0 });
+});
+
+test.each([24, 46, 90, 180])("Display legend is reachable and fits at width %i", width => {
+  const help = new Help({ group: "Display", query: "", typing: false, scroll: 0 });
+  const text = [...collect(help, width)].filter(row => !row.includes("Tab categories") && !row.includes("/ search")).join(" ").replace(/\s+/gu, " ");
+  for (const phrase of [" wait queued", " edit edited, not rerun", " agent changed by agent", " new created by agent", " old stale", " block ancestor failed", " off disabled", " err error"]) {
+    expect(text).toContain(phrase);
+  }
+});
+
+test("fitted real registry navigation uses the rendered viewport", async () => {
+  vi.resetModules();
+  vi.doUnmock("../src/ui/keys.js");
+  const { Help: RealHelp } = await import("../src/ui/help.js");
+  const help = new RealHelp();
+  help.render(120, 100, theme);
+  help.handleInput("j", 1);
+  expect(help.state.group).toBe("Display");
+  help.render(120, 100, theme);
+  help.handleInput("\x1b[A", 1);
+  expect(help.state.group).toBe("Navigation");
+});
+
 test("search groups multiple categories and keeps distinct descriptions discoverable", () => {
   const help = new Help();
   enterSearch(help, "Description");

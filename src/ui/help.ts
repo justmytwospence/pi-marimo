@@ -63,6 +63,7 @@ export class Help {
   readonly state: HelpState;
   private maxScroll = Number.MAX_SAFE_INTEGER;
   private page = 1;
+  private lastViewport?: { width: number; height: number; theme: FrameTheme };
 
   constructor(state?: HelpState) {
     this.state = state ? { ...state } : { group: "Navigation", query: "", typing: false, scroll: 0 };
@@ -92,10 +93,7 @@ export class Help {
     }
     if (command?.id === "help-next-category" || command?.id === "help-previous-category") {
       const direction = command.id === "help-previous-category" ? -1 : 1;
-      s.group = GROUPS[(GROUPS.findIndex((group) => group === s.group) + direction + GROUPS.length) % GROUPS.length]!;
-      s.query = "";
-      s.typing = false;
-      this.resetScroll();
+      this.moveCategory(direction, true);
       return true;
     }
     if (s.typing) {
@@ -108,8 +106,11 @@ export class Help {
     if (command?.id === "help-search") { s.typing = true; return true; }
     if (command?.id === "help-top") s.scroll = 0;
     else if (command?.id === "help-bottom") s.scroll = this.maxScroll;
-    else if (command?.id === "help-down") this.wheel(1, page);
-    else if (command?.id === "help-up") this.wheel(-1, page);
+    else if (command?.id === "help-down" || command?.id === "help-up") {
+      const direction = command.id === "help-down" ? 1 : -1;
+      if (!s.query && this.maxScroll === 0) this.moveCategory(direction, false);
+      else this.wheel(direction, page);
+    }
     else if (command?.id === "help-page-down") this.wheel(Math.max(1, this.page), page);
     else if (command?.id === "help-page-up") this.wheel(-Math.max(1, this.page), page);
     return true;
@@ -119,6 +120,7 @@ export class Help {
     width = Math.max(0, Math.floor(width));
     height = Math.max(0, Math.floor(height));
     if (!width || !height) return [];
+    this.lastViewport = { width, height, theme };
     const wrap = (text: string) => wrapTextWithAnsi(text, width);
     const query = this.state.query.toLocaleLowerCase();
     const searching = this.state.typing || !!query;
@@ -145,6 +147,12 @@ export class Help {
       if (searching) body.push(...wrapTextWithAnsi(group, listWidth).map(line => theme.bold(line)));
       for (const command of entries) body.push(...commandRows(command, listWidth, theme, searching));
     }
+    if (!searching && this.state.group === "Display") {
+      for (const line of [
+        " wait queued ·  edit edited, not rerun ·  agent changed by agent",
+        " new created by agent ·  old stale ·  block ancestor failed ·  off disabled ·  err error",
+      ]) body.push(...wrapTextWithAnsi(line, listWidth).map(row => theme.fg("dim", row)));
+    }
     if (!body.length) body.push(...wrapTextWithAnsi("No matching commands", listWidth));
     this.maxScroll = Math.max(0, body.length - this.page);
     this.state.scroll = Math.max(0, Math.min(this.maxScroll, this.state.scroll));
@@ -156,14 +164,28 @@ export class Help {
       const styled = group === this.state.group ? theme.bold(theme.fg("accent", name)) : theme.fg("dim", name);
       return `${styled}${" ".repeat(16 - visibleWidth(name))}  ${visible[i] ?? ""}`;
     }) : Array.from({ length: this.page }, (_, i) => visible[i] ?? "");
-    const fullHint = "Tab categories · / search · Esc back";
-    const hint = visibleWidth(fullHint) <= width ? fullHint : ["/ search", "Esc back"].reduce((text, token) => {
+    const actionHint = searching || this.maxScroll ? "j/k scroll" : "j/k categories";
+    const baseHint = "Tab categories · / search · Esc back";
+    const fullHint = `${baseHint} · ${actionHint}`;
+    const hint = visibleWidth(fullHint) <= width ? fullHint : visibleWidth(baseHint) <= width ? baseHint : ["/ search", "Esc back"].reduce((text, token) => {
       const candidate = text ? `${text} · ${token}` : token;
       return visibleWidth(candidate) <= width ? candidate : text;
     }, "");
     const range = ` · ${this.state.scroll + 1}–${Math.min(body.length, this.state.scroll + this.page)}/${body.length}`;
     const footer = visibleWidth(hint + range) <= width ? hint + range : hint;
     return [...top, ...rows, ...(footerHeight ? [theme.fg("dim", footer)] : [])];
+  }
+
+  private moveCategory(direction: -1 | 1, wrap: boolean): void {
+    const index = GROUPS.findIndex(group => group === this.state.group) + direction;
+    const next = wrap ? (index + GROUPS.length) % GROUPS.length : Math.max(0, Math.min(GROUPS.length - 1, index));
+    if (!wrap && next === GROUPS.findIndex(group => group === this.state.group)) return;
+    this.state.group = GROUPS[next]!;
+    this.state.query = "";
+    this.state.typing = false;
+    this.resetScroll();
+    // Recompute the next category's bounds before another key arrives; TUI paints asynchronously.
+    if (this.lastViewport) this.render(this.lastViewport.width, this.lastViewport.height, this.lastViewport.theme);
   }
 
   private resetScroll(): void {

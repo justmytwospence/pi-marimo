@@ -441,9 +441,9 @@ test("e and E jump between failed cells; / filters by name, variable or code and
   const v = make(f);
   try {
     v.handleInput("e");
-    expect(screen(v)).toMatch(/▌✗ boom\(\) +\[E\]/u);
+    expect(screen(v)).toMatch(/▌✗ boom\(\) +\[ err\]/u);
     v.handleInput("E");
-    expect(screen(v)).toMatch(/▌✗ boom\(\) +\[E\]/u);
+    expect(screen(v)).toMatch(/▌✗ boom\(\) +\[ err\]/u);
     expect(screen(v)).toContain("E: m");
     v.handleInput("/");
     expect(v[INPUT_CONTEXT]()).toBe("filter");
@@ -968,12 +968,12 @@ test("the agent's changes since the last prompt: marked, counted, c jumps to the
     const v = make(f);
     try {
       const text = screen(v);
-      expect(text).toMatch(/  y = x \+ 2 +\[changed\]/u);
+      expect(text).toMatch(/  y = x \+ 2 +\[ agent\]/u);
       expect(text).toContain("agent: 1 changed · 1 removed");
       expect(text).toMatch(/✗ Removed: z = 3/u);
       v.handleInput("c");
       expect(screen(v)).toMatch(/▌  y = x \+ 2/u);
-      expect(screen(v)).toContain("changed by the agent");
+      expect(screen(v)).toContain(" agent");
       v.handleInput("d");
       const diff = screen(v);
       expect(diff).toMatch(/-\s*\d+ y = x \+ 1/u);
@@ -1232,7 +1232,7 @@ test("narrow, a few outline rows around the cursor sit above the detail, and the
     const lines = v.render(80);
     const text = lines.join("\n");
     // A single blank gap separates the outline from the detail, not a decorative rule.
-    expect(text).toMatch(/daily[\s\S]*▌ {2}✗ model +\[KeyError\][\s\S]*chart[\s\S]*Traceback \(most recent call last\)/u);
+    expect(text).toMatch(/daily[\s\S]*▌ {2}✗ model +\[ err\][\s\S]*chart[\s\S]*Traceback \(most recent call last\)/u);
     expect(text).toContain("enter edit");
     const rule = 2 + (v as any).panes.detailTop - 1;
     expect(plain(lines[rule]!).trim()).toBe("");
@@ -1271,7 +1271,7 @@ test("the detail of a failed cell shows its error, traceback and source", async 
   try {
     v.handleInput("e");
     const text = screen(v);
-    expect(text).toMatch(/▌ {2}✗ model +\[KeyError\]/u);
+    expect(text).toMatch(/▌ {2}✗ model +\[ err\]/u);
     expect(text).toContain("KeyError: 'revenue'");
     expect(text).toContain("Traceback (most recent call last)");
     expect(text).toContain("  model = boom(daily)");
@@ -1921,8 +1921,8 @@ test("r shows the cell queued at once, then marimo's run: a spinner in the outli
     v.handleInput("r");
     expect(run).toHaveBeenCalledOnce();
     let text = screen(v);
-    expect(text).toMatch(/▌◌ load +\[queued\]/u);
-    expect(text).toContain("◌ queued");
+    expect(text).toMatch(/▌◌ load +\[ wait\]/u);
+    expect(text).toContain(" wait");
     expect(text).toContain("◌ 1 queued");
     f.notebook.apply("cell-op", { cell_id: "a", status: "running", timestamp: Date.now() / 1000 });
     text = screen(v);
@@ -2086,6 +2086,7 @@ test.each([46, 80, 100, 120, 180].flatMap(width => ["t", "w"].map(key => ({ widt
       expect(help.join("\n")).toContain("Keyboard shortcuts");
       expect(help.join("\n").match(/Keyboard shortcuts/gu)).toHaveLength(1);
       expect(footerText(help)).toContain("Tab categories · / search · Esc back");
+      if (width >= 80) expect(footerText(help)).toContain("j/k scroll");
     } finally { v.dispose(); }
   },
 );
@@ -2157,6 +2158,37 @@ test.each([
     moved.handleInput("?"); screen(moved);
     expect(moved.snapshot()).toEqual(before);
   } finally { v.dispose(); moved?.dispose(); }
+});
+
+test("help navigation moves categories in a fitted tall pane and scrolls in a short pane without moving the cell cursor", () => {
+  const f = followed();
+  const tui = { requestRender: vi.fn(), terminal: { rows: 90 } };
+  const v = new NotebookView(tui as any, theme, notebookKey(f), {
+    followed: () => [f], interrupt: async () => {}, openInBrowser: () => {},
+  }, () => {});
+  try {
+    v.render(120);
+    const before = v.snapshot().cursor;
+    v.handleInput("?"); v.render(120);
+    expect(v.snapshot().help).toMatchObject({ group: "Navigation", scroll: 0 });
+    v.handleInput("j"); v.render(120);
+    expect(v.snapshot().help).toMatchObject({ group: "Display", scroll: 0 });
+    v.handleInput("\x1b[B"); v.render(120);
+    expect(v.snapshot().help?.group).toBe("Execution");
+    v.handleInput("k"); v.render(120);
+    expect(v.snapshot().help?.group).toBe("Display");
+    v.handleInput("\x1b[A"); v.render(120);
+    expect(v.snapshot().help?.group).toBe("Navigation");
+    expect(v.snapshot().cursor).toBe(before);
+    v.handleInput("?");
+    expect(v.snapshot().help).toBeUndefined();
+    expect(v.snapshot().cursor).toBe(before);
+    tui.terminal.rows = 12;
+    v.handleInput("?"); v.render(46);
+    v.handleInput("j");
+    expect(v.snapshot().help).toMatchObject({ group: "Navigation", scroll: 1 });
+    expect(v.snapshot().cursor).toBe(before);
+  } finally { v.dispose(); }
 });
 
 test("STEP6 help scrolls, cycles categories both ways, searches globally and Escape clears before closing", () => {

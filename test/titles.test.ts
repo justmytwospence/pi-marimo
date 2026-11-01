@@ -72,13 +72,13 @@ describe("a cell's badge", () => {
     nb.apply("cell-op", { cell_id: "a", status: "running", timestamp: 10 });
     expect(badge("a")).toBe("[⠋ 10s]");
     nb.apply("cell-op", { cell_id: "b", status: "queued" });
-    expect(badge("b")).toBe("[queued]");
+    expect(badge("b")).toBe("[ wait]");
     nb.apply("cell-op", { cell_id: "c", status: "idle", stale_inputs: true, output: error("KeyError", "'x'") });
-    expect(badge("c")).toBe("[KeyError] [stale]");
+    expect(badge("c")).toBe("[ err] [ old]");
     nb.apply("cell-op", { cell_id: "c", status: "idle", output: { channel: "marimo-error", mimetype: "application/vnd.marimo+error", data: [{ type: "ancestor-prevented", msg: "up" }] } });
-    expect(badge("c")).toBe("[blocked] [stale]");
+    expect(badge("c")).toBe("[ block] [ old]");
     nb.apply("cell-op", { cell_id: "c", status: "idle", stale_inputs: true, output: { channel: "output", mimetype: "text/plain", data: "3" } });
-    expect(badge("c")).toBe("[stale]");
+    expect(badge("c")).toBe("[ old]");
     nb.apply("cell-op", { cell_id: "d", status: "idle", output: { channel: "output", mimetype: "text/html", data: table } });
     expect(badge("d")).toBe("450×4");
     nb.apply("cell-op", { cell_id: "e", status: "idle", output: { channel: "output", mimetype: "text/html", data: widgets } });
@@ -94,10 +94,10 @@ describe("a cell's badge", () => {
       const nb = notebook([{ id: "a", code: "x = 1" }]);
       vi.setSystemTime(1_010_000);
       nb.apply("notebook-document-transaction", { transaction: { source: "code-mode", changes: [{ type: "set-code", cellId: "a", code: "x = 2" }, { type: "create-cell", cellId: "b", code: "y = 1" }] } });
-      expect(cellBadge(nb, cell(nb, "a"), 0, theme)).toBe("[changed]");
-      expect(cellBadge(nb, cell(nb, "b"), 0, theme)).toBe("[new]");
+      expect(cellBadge(nb, cell(nb, "a"), 0, theme)).toBe("[ agent]");
+      expect(cellBadge(nb, cell(nb, "b"), 0, theme)).toBe("[ new]");
       nb.apply("cell-op", { cell_id: "a", status: "queued" });
-      expect(cellBadge(nb, cell(nb, "a"), 0, theme)).toBe("[queued] [changed]");
+      expect(cellBadge(nb, cell(nb, "a"), 0, theme)).toBe("[ wait] [ agent]");
     } finally { vi.useRealTimers(); }
   });
 });

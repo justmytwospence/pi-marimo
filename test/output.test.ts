@@ -12,6 +12,41 @@ import { snapshot } from "../src/core/render.js";
 import { runCells } from "../src/ui/interrupt.js";
 import { mermaidRows, outputRows } from "../src/ui/outputs.js";
 import { detailRows } from "../src/ui/detail.js";
+import { diagnosticPanelRows } from "../src/ui/diagnostics.js";
+
+// The diagnostic panel formats already-inert terminal rows, never producer escape sequences.
+describe("tinted diagnostic panels", () => {
+  const theme = { fg: (color: string, text: string) => `\x1b[${color === "error" ? 31 : 33}m${text}\x1b[0m`, bold: (text: string) => text };
+  const plain = (text: string) => stripTerminalSequences(text);
+
+  test("wraps text at columns without losing traceback indentation, Unicode, or row ownership", () => {
+    const owner = { kind: "text", text: "" } as const;
+    const rows = [{ text: `  File "x.py", line 12: e\u0301界 ${"a".repeat(60)}`, blockId: "trace", output: owner }];
+    for (const width of [20, 46, 80]) {
+      const rendered = diagnosticPanelRows(rows, "error", width, theme);
+      expect(rendered[0]?.text).toContain(" ERROR");
+      expect(rendered.slice(1).every(row => row.blockId === "trace" && row.output === owner)).toBe(true);
+      expect(rendered.every(row => visibleWidth(row.text) <= width)).toBe(true);
+      expect(plain(rendered[1]!.text)).toContain("▍   File");
+      expect(rendered.slice(1).map(row => plain(row.text).slice(2).trimEnd()).join("")).toBe(rows[0]!.text);
+      expect(rows[0]!.text).toContain("e\u0301界");
+    }
+    expect(rows[0]!.text).toContain("line 12");
+  });
+
+  test("separate warning colors, background restoration, fallback and rich metadata", () => {
+    const bg = vi.fn((_token: string, text: string) => `\x1b[48;5;52m${text}\x1b[49m`);
+    const rich = { text: "[image]", image: { index: 0, height: 1, alt: "image" } };
+    const warning = diagnosticPanelRows([{ text: "first \x1b[1mstrong\x1b[0m last" }, rich], "warning", 32, { ...theme, bg });
+    expect(warning[0]?.text).toContain(" WARNING");
+    expect(plain(warning[1]!.text)).toContain("first strong last");
+    expect(bg.mock.calls.length).toBeGreaterThan(3);
+    expect(bg.mock.calls.every(([token]) => token === "toolPendingBg")).toBe(true);
+    expect(warning[2]).toEqual(rich);
+    expect(diagnosticPanelRows([{ text: "warning" }], "warning", 20, { ...theme, bg: () => { throw Error("no bg"); } })[1]?.text).toContain("▍");
+    expect(diagnosticPanelRows([], "error", 20, theme)).toEqual([]);
+  });
+});
 
 describe("cell output for the notebook view", () => {
   test("parses mixed progress once, consuming every PyMC row without duplicating nested controls or siblings", () => {
@@ -81,6 +116,44 @@ describe("cell output for the notebook view", () => {
     expect(cell.console).toBeUndefined();
     expect(cell.output?.text).toBe("secret-output");
   });
+});
+
+test("detail groups error and warning streams into one focusable part without hiding diagnostic output or progress", () => {
+  const nb = new NotebookState();
+  nb.apply("kernel-ready", { cell_ids: ["a"], codes: ["x = 1"], names: ["model"] });
+  const cell = nb.cells.get("a")!;
+  cell.error = "ValueError: invalid parameter";
+  cell.console = [
+    { stream: "stderr", text: "Traceback (most recent call last):", severity: "error" },
+    { stream: "stderr", text: "  File \"model.py\", line 42", severity: "error" },
+    { stream: "stderr", text: "UserWarning: unstable fit", severity: "warning" },
+    { stream: "stdout", text: "hidden ordinary output", severity: "output" },
+    { stream: "stderr", text: "another exception", severity: "error" },
+  ];
+  cell.output = { kind: "text", text: "", severity: "warning", blocks: [{ id: "warn", output: { kind: "text", text: "warning result" } }] };
+  cell.progress = [{ id: "p", label: "active_progress", completed: 1, total: 10, state: "running", stats: {} }];
+  const theme = { fg: (_: string, value: string) => value, bold: (value: string) => value };
+  const render = (diagnostics: "all" | "errors" | "warnings" | "none", showOutput: boolean, width = 46) =>
+    detailRows(nb, theme, 0, { cell, width, section: false, codeOpen: false, diff: false, diagnostics, showOutput });
+  const all = render("all", false);
+  const text = all.rows.map(row => row.text).join("\n");
+  expect(all.parts.filter(part => part.kind === "error")).toHaveLength(1);
+  expect(text.match(/ ERROR/gu)).toHaveLength(2);
+  expect(text.match(/ WARNING/gu)).toHaveLength(2);
+  expect(text).toContain('▍   File "model.py", line 42');
+  expect(text).toContain("warning result");
+  expect(text).toContain("active_progress");
+  expect(text).not.toContain("hidden ordinary output");
+  expect(all.rows.find(row => row.output?.text === "warning result")?.blockId).toContain(":warn");
+  for (const width of [20, 46, 80]) expect(render("all", false, width).rows.every(row => visibleWidth(row.text) <= width)).toBe(true);
+  for (const [mode, error, warning] of [["errors", true, false], ["warnings", false, true], ["none", false, false]] as const) {
+    const shown = render(mode, false).rows.map(row => row.text).join("\n");
+    expect(shown.includes("ValueError")).toBe(error);
+    expect(shown.includes("UserWarning")).toBe(warning);
+    expect(shown.includes("warning result")).toBe(warning);
+    expect(shown).toContain("active_progress");
+  }
+  expect(render("all", true).rows.map(row => row.text).join("\n")).toContain("hidden ordinary output");
 });
 
 describe("ordered HTML whitespace and sampler leaves", () => {

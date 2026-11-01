@@ -12,8 +12,10 @@ import { progressRows, visibleProgress } from "./progress.js";
 import type { FrameTheme } from "../frame.ts";
 import { clean, consoleLineText, outputRows } from "./outputs.js";
 import { cellGlyph, headingText, spinner } from "./outline.js";
+import { statusLabel } from "./status.js";
 import { MAX_WIDGETS, type Row, type RowOptions, diffLines } from "./rows.js";
 import { codePanelRows } from "./code.js";
+import { diagnosticPanelRows } from "./diagnostics.js";
 import { markdownRows } from "./markdown.js";
 import { cellTitle, sectionOf } from "./titles.js";
 import { oneLine } from "./text.js";
@@ -213,13 +215,13 @@ export function detailRows(nb: NotebookState, theme: FrameTheme, now: number, o:
     const parts: string[] = [];
     if (cell.status === "idle" && cell.lastRunMs !== undefined && (o.section || nb.isMarkdown(cell))) parts.push(dim(`${cell.lastRunEndedAt !== undefined ? `ran ${runTime(cell.lastRunEndedAt, now)} · ` : ""}${duration(cell.lastRunMs)}`));
     if (cell.status === "running") parts.push(theme.bold(theme.fg("accent", `${spinner(now)} running${cell.runningSince !== undefined ? ` ${duration(now - cell.runningSince)}` : ""}`)));
-    else if (cell.status === "queued") parts.push(theme.fg("accent", "◌ queued"));
-    if (cell.blocked) parts.push(theme.fg("error", "not run: an ancestor failed"));
-    if (cell.disabled) parts.push(dim("disabled"));
-    if (cell.stale) parts.push(theme.fg("warning", "stale"));
-    if (nb.edited(cell)) parts.push(theme.fg("warning", "edited, not rerun"));
+    else if (cell.status === "queued") parts.push(theme.fg("accent", statusLabel("queued")));
+    if (cell.blocked) parts.push(theme.fg("error", statusLabel("blocked")));
+    if (cell.disabled) parts.push(dim(statusLabel("disabled")));
+    if (cell.stale) parts.push(theme.fg("warning", statusLabel("stale")));
+    if (nb.edited(cell)) parts.push(theme.fg("warning", statusLabel("edited")));
     const change = nb.agentChanges.get(cell.id);
-    if (change && change.kind !== "deleted") parts.push(theme.fg("accent", change.kind === "created" ? "new from the agent" : "changed by the agent"));
+    if (change && change.kind !== "deleted") parts.push(theme.fg("accent", statusLabel(change.kind === "created" ? "new" : "changed")));
     if (o.diagnostics && o.diagnostics !== "all") parts.push(dim(`diagnostics ${o.diagnostics === "none" ? "hidden" : o.diagnostics}`));
     if (o.showOutput === false) parts.push(dim("output hidden"));
     return parts.join(dim(" · "));
@@ -235,18 +237,25 @@ export function detailRows(nb: NotebookState, theme: FrameTheme, now: number, o:
     const errors = diagnostics === "all" || diagnostics === "errors";
     const warnings = diagnostics === "all" || diagnostics === "warnings";
     const diagnosticLines = lines.filter(x => x.severity === "error" ? errors : (x.severity === "warning" || (x.stream === "stderr" && x.severity !== "progress")) && warnings);
-    if ((cell.error && errors) || diagnosticLines.length) {
-      const p = part("error", cell);
-      if (cell.error && errors) p.add(`${theme.fg("error", truncate(clean(cell.error), 300))}`);
-      for (const l of diagnosticLines) p.add(consoleLineText(l, theme));
+    let diagnosticPart: ReturnType<typeof part> | undefined;
+    const addDiagnostics = (textRows: readonly Row[], severity: "error" | "warning") => {
+      if (!textRows.length) return;
+      const p = diagnosticPart ??= part("error", cell);
+      for (const r of diagnosticPanelRows(textRows, severity, width, theme)) rows.push({ ...r, part: p.index });
+    };
+    let group: Row[] = cell.error && errors ? truncate(clean(cell.error), 300).split("\n").map(text => ({ text: theme.fg("error", text) })) : [];
+    let level: "error" | "warning" | undefined = group.length ? "error" : undefined;
+    for (const line of diagnosticLines) {
+      const severity = line.severity === "error" ? "error" : "warning";
+      if (level && severity !== level) { addDiagnostics(group, level); group = []; }
+      group.push({ text: consoleLineText(line, theme) });
+      level = severity;
     }
+    if (level) addDiagnostics(group, level);
     rows.push(...progressRows(visibleProgress(cell.progress ?? [], o.showOutput !== false), width, theme, now));
     const diagnosticOutput = cell.output?.severity;
-    if (diagnosticOutput) {
-      if (diagnosticOutput === "error" ? errors : warnings) {
-        const p = part("error", cell);
-        for (const r of outputRows(cell, theme, { ...sub, bar: "", showOutput: true }, limits)) rows.push({ ...r, part: p.index });
-      }
+    if (diagnosticOutput && (diagnosticOutput === "error" ? errors : warnings)) {
+      addDiagnostics(outputRows(cell, theme, { ...sub, bar: "", showOutput: true }, limits), diagnosticOutput);
     }
     if (o.showOutput === false || literal) return;
     const stdout = lines.filter((x) => x.stream === "stdout" && (!x.severity || x.severity === "output"));

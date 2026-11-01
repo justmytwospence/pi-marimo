@@ -1,4 +1,5 @@
 // Independent execution, edit and agent state chips, ordered by attention priority.
+// Nerd Font icons keep them compact; short labels remain legible without the font.
 import { visibleWidth } from "@earendil-works/pi-tui";
 import type { Cell, NotebookState } from "../core/notebook.js";
 import type { FrameTheme } from "../frame.ts";
@@ -8,15 +9,27 @@ export type BadgeKind = "running" | "queued" | "error" | "blocked" | "stale" | "
 export interface Badge { kind: BadgeKind; text: string }
 export type BadgeTheme = FrameTheme & { bg?(color: string, text: string): string };
 
+export const STATUS_STYLE: Readonly<Record<Exclude<BadgeKind, "running">, { icon: string; label: string }>> = {
+  queued: { icon: "", label: "wait" },
+  error: { icon: "", label: "err" },
+  blocked: { icon: "", label: "block" },
+  stale: { icon: "", label: "old" },
+  edited: { icon: "", label: "edit" },
+  changed: { icon: "", label: "agent" },
+  new: { icon: "", label: "new" },
+  disabled: { icon: "", label: "off" },
+};
+export const statusLabel = (kind: Exclude<BadgeKind, "running">): string => `${STATUS_STYLE[kind].icon} ${STATUS_STYLE[kind].label}`;
+
 export const SPINNER = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 export const spinner = (now: number): string => SPINNER[((Math.floor(now / 100) % SPINNER.length) + SPINNER.length) % SPINNER.length]!;
 
 export function cellBadges(nb: NotebookState, cell: Cell, now: number): Badge[] {
   const badges: Badge[] = [];
-  const add = (kind: BadgeKind, text: string = kind) => badges.push({ kind, text });
-  if (cell.status === "running") add("running", `${spinner(now)} ${cell.runningSince !== undefined ? duration(now - cell.runningSince) : "running"}`);
+  const add = (kind: Exclude<BadgeKind, "running">) => badges.push({ kind, text: statusLabel(kind) });
+  if (cell.status === "running") badges.push({ kind: "running", text: `${spinner(now)} ${cell.runningSince !== undefined ? duration(now - cell.runningSince) : "running"}` });
   else if (cell.status === "queued") add("queued");
-  if (cell.error) add("error", /^([A-Za-z_][\w.]*)(?::|$)/u.exec(cell.error)?.[1] ?? "error");
+  if (cell.error) add("error");
   else if (cell.blocked) add("blocked");
   if (cell.stale) add("stale");
   if (nb.edited(cell)) add("edited");
