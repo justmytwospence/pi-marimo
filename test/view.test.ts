@@ -7,10 +7,11 @@ import { SessionPreferences } from "../src/ui/settings.js";
 import { progressRows } from "../src/ui/progress.js";
 import type { ProgressTask } from "../src/core/progress.js";
 import { row as notebookRow, CONTENT_LEFT, bodyWidth } from "../src/ui/notebook-frame.js";
-import { CURSOR_MARKER, visibleWidth } from "@earendil-works/pi-tui";
+import { CURSOR_MARKER, stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
 import { NotebookSource } from "../src/ui/source.js";
 import { notebookKey } from "../src/ui/identity.js";
 import { InlineEditorManager } from "../src/ui/inline-editor.js";
+import { paletteBounds } from "../src/ui/palette.js";
 import type { NeovimOpenOptions, NeovimSession } from "../src/core/neovim.js";
 import type { PackageClient, PackageConfirmation } from "../src/core/packages.js";
 
@@ -2063,6 +2064,25 @@ test("palette fuzzy search holds notebook focus and runs only the chosen command
   } finally { v.dispose(); }
 });
 
+test("palette Ctrl+N/P/J/K navigates without dispatching commands or changing notebook focus", () => {
+  const f = dataflow(); const run = vi.fn(async () => {}); const v = make(f, { run });
+  try {
+    screen(v);
+    const cursor = v.snapshot().cursor;
+    paletteSearch(v, "run"); screen(v);
+    for (const [key, selected] of [["\x0e", 1], ["\x0a", 2], ["\x10", 1], ["\x0b", 0]] as const) {
+      v.handleInput(key);
+      expect(v.snapshot().palette).toMatchObject({ query: "run", selected });
+      expect(v.snapshot().cursor).toBe(cursor);
+      expect(v[INPUT_CONTEXT]()).toBe("filter");
+      expect(run).not.toHaveBeenCalled();
+    }
+    v.handleInput("\r");
+    expect(v.snapshot().palette).toBeUndefined();
+    expect(run).toHaveBeenCalledExactlyOnceWith(f, [{ id: "a", code: "x = 1" }]);
+  } finally { v.dispose(); }
+});
+
 test("palette selection keeps two-press run-all, stop and interrupt gates, and F8 suspends the palette", () => {
   const f = dataflow(); const run = vi.fn(async () => {}), interrupt = vi.fn(async () => {}), stopServers = vi.fn(() => 1);
   const v = make(f, { run, interrupt, stopServers, servers: () => ["marimo nb.py"] });
@@ -2165,13 +2185,382 @@ test("palette snapshot, focused dock and mouse click select a command without le
     const lines = moved.render(100);
     expect(lines.join("\n")).toContain("Command palette");
     expect(moved.snapshot().palette).toEqual(saved.palette);
-    const click = (type: string, x = 3, y = 3) => moved!.handleMouse(helpMouse(type, { x, y, width: 100, height: 28 }));
+    const bounds = paletteBounds(100, 28)!;
+    const click = (type: string, x = bounds.left + 2, y = bounds.top + 3) => moved!.handleMouse(helpMouse(type, { x, y, width: 100, height: 28 }));
     expect(click("press")).toEqual({ handled: true, render: false });
     click("wheel"); moved.render(100);
     click("click");
     expect(moved.snapshot().palette).toBeUndefined();
+    expect(moved.snapshot().preferences?.diagnostics).not.toBe(saved.preferences?.diagnostics);
     expect(setWidget).not.toHaveBeenCalled();
   } finally { v.dispose(); moved?.dispose(); }
+});
+
+test.each([false, true])("palette retains bounded notebook context and reading state (docked=%s)", docked => {
+  const f = followed();
+  const local = { requestRender: vi.fn(), terminal: { rows: 28 } };
+  const v = new NotebookView(local as any, theme, notebookKey(f), {
+    followed: () => [f], interrupt: async () => {}, openInBrowser: () => {}, outputs: true,
+    ...(docked ? { docked: { focused: () => true, focusMain: vi.fn() } } : {}),
+  }, () => {});
+  try {
+    // Isolate this reading fixture from the process-wide section preference used by other tests.
+    (v as any).section = true;
+    for (let i = 0; i < 40; i++) v.handleInput("j");
+    v.render(120);
+    (v as any).scroll = 30;
+    (v as any).detailScroll = 5;
+    (v as any).note = "Persistent reading context";
+    const before = v.render(120);
+    const state = v.snapshot();
+    expect(state).toMatchObject({ cursor: "cell-40", section: true, follow: false, scroll: 30, detailScroll: 5 });
+    const metadata = () => [(v as any).lastPage, (v as any).lastRows, (v as any).lastOutline, (v as any).lastDetail];
+    const underlying = metadata();
+    paletteSearch(v, "run cell");
+    const shown = v.render(120);
+    const bounds = paletteBounds(120, 28)!;
+    expect(shown).toHaveLength(before.length);
+    expect(shown.every(line => visibleWidth(line) === 120)).toBe(true);
+    expect(bounds.left).toBeGreaterThan(0);
+    expect(bounds.left + bounds.width).toBeLessThan(120);
+    expect(bounds.top + bounds.height).toBeLessThan(28);
+    expect(shown[0]).toEqual(before[0]);
+    expect(shown[0]).toContain(docked ? "ctrl+] chat" : "Notebook nb.py");
+    expect(shown[1]).toContain("nb.py  idle");
+    expect(shown[1]).toContain("fixture.invalid");
+    expect(shown.at(-1)).toEqual(before.at(-1));
+    expect(shown.join("\n")).toContain("Persistent reading context");
+    for (let y = 0; y < shown.length; y++) {
+      if (y === 1) continue; // The ordinary header names the active input context.
+      if (y < bounds.top || y >= bounds.top + bounds.height) expect(shown[y]).toEqual(before[y]);
+      else {
+        const text = stripTerminalSequences(shown[y]!).replaceAll(CURSOR_MARKER, "");
+        expect(text.slice(0, bounds.left)).toBe(stripTerminalSequences(before[y]!).slice(0, bounds.left));
+        expect(text.slice(bounds.left + bounds.width)).toBe(stripTerminalSequences(before[y]!).slice(bounds.left + bounds.width));
+      }
+    }
+    const { palette, ...reading } = v.snapshot();
+    expect(palette?.query).toBe("run cell");
+    expect(reading).toEqual(state);
+    expect(metadata()).toEqual(underlying);
+    v.handleInput("\x1b");
+    expect(v.render(120)).toEqual(before);
+    expect(v.snapshot()).toEqual(state);
+  } finally { v.dispose(); }
+});
+
+test.each([46, 80].flatMap(width => [false, true].map(docked => ({ width, docked }))))("palette stays within a $width-column notebook pane (docked=$docked)", ({ width, docked }) => {
+  const f = dataflow();
+  const local = { requestRender: vi.fn(), terminal: { rows: 12 } };
+  const v = new NotebookView(local as any, theme, notebookKey(f), {
+    followed: () => [f], interrupt: async () => {}, openInBrowser: () => {},
+    ...(docked ? { docked: { focused: () => true, focusMain: vi.fn() } } : {}),
+  }, () => {});
+  try {
+    const before = v.render(width);
+    paletteSearch(v, "run cell");
+    const shown = v.render(width), bounds = paletteBounds(width, 12)!;
+    expect(shown).toHaveLength(12);
+    expect(shown.every(line => visibleWidth(line) === width)).toBe(true);
+    expect(shown[0]).toEqual(before[0]);
+    expect(shown.at(-1)).toEqual(before.at(-1));
+    expect(bounds).toMatchObject({ left: 2, width: width - 4 });
+    expect(shown[bounds.top]).toContain("Command palette");
+    expect(shown.join("\n")).toContain("› run cell");
+    v.handleInput("\x1b");
+    expect(v.render(width)).toEqual(before);
+  } finally { v.dispose(); }
+});
+
+test("palette mouse uses centered result interiors, swallows outside gestures and dismisses without click-through", () => {
+  const f = dataflow(); const run = vi.fn(async () => {});
+  const local = { requestRender: vi.fn(), terminal: { rows: 28 } };
+  const v = new NotebookView(local as any, theme, notebookKey(f), { followed: () => [f], interrupt: async () => {}, openInBrowser: () => {}, run }, () => {});
+  const bounds = paletteBounds(120, 28)!;
+  const mouse = (type: string, x: number, y: number, extra = {}) => v.handleMouse(helpMouse(type, { x, y, width: 120, height: 28, ...extra }));
+  try {
+    v.render(120); paletteSearch(v, ""); v.render(120);
+    const saved = v.snapshot();
+    for (const type of ["move", "drag", "release", "wheel"]) {
+      expect(mouse(type, 1, 2, { wheelDelta: 3 })).toEqual({ handled: true });
+      expect(v.snapshot()).toEqual(saved);
+    }
+    expect(mouse("press", 1, 2)).toEqual({ handled: true, render: false });
+    expect(v.snapshot()).toEqual(saved);
+    mouse("wheel", bounds.left + 3, bounds.top + 3, { wheelDelta: 2 });
+    expect(v.snapshot().palette?.selected).toBe(2);
+    expect(local.requestRender).toHaveBeenCalled();
+    v.handleInput("\x1b"); paletteSearch(v, "run cell"); v.render(120);
+    const pending = v.snapshot().palette;
+    for (const [x, y] of [
+      [bounds.left, bounds.top], [bounds.left + 1, bounds.top + 3],
+      [bounds.left + bounds.width - 1, bounds.top + 3], [bounds.left + 3, bounds.top + 1],
+      [bounds.left + 3, bounds.top + 2], [bounds.left + 3, bounds.top + bounds.height - 3],
+      [bounds.left + 3, bounds.top + bounds.height - 2], [bounds.left + 3, bounds.top + bounds.height - 1],
+    ]) {
+      mouse("click", x!, y!);
+      expect(v.snapshot().palette).toEqual(pending);
+      expect(run).not.toHaveBeenCalled();
+    }
+    mouse("click", bounds.left + 3, bounds.top + 3, { button: "right" });
+    expect(v.snapshot().palette).toEqual(pending);
+    mouse("click", 1, 2, { clickCount: 2 });
+    expect(v.snapshot().palette).toBeUndefined();
+    expect(v.snapshot().cursor).toBe(saved.cursor);
+    expect(run).not.toHaveBeenCalled();
+    paletteSearch(v, "run cell"); v.render(120);
+    mouse("click", bounds.left + 3, bounds.top + 3);
+    expect(v.snapshot().palette).toBeUndefined();
+    expect(run).toHaveBeenCalledExactlyOnceWith(f, [{ id: "a", code: "x = 1" }]);
+  } finally { v.dispose(); }
+});
+
+test.each(["widget", "table"])("palette outside input cannot mutate or scroll the underlying %s", kind => {
+  const f = nbWith([{ id: "a", code: "value" }]);
+  f.notebook.apply("cell-op", { cell_id: "a", output: { channel: "output", mimetype: "text/html", data: kind === "widget" ? widgetHtml : tableHtml() } });
+  const setWidget = vi.fn(), run = vi.fn(async () => {}), call = vi.fn(async () => ({})), setTableSelection = vi.fn();
+  const v = make(f, { setWidget, run, table: { call, file: async () => "[]" }, setTableSelection });
+  try {
+    v.render(300); v.handleInput(kind === "widget" ? "w" : "t"); v.render(300);
+    paletteSearch(v, ""); v.render(300);
+    const saved = v.snapshot();
+    const session = kind === "table" ? (v as any).tableFor(f, f.notebook.cells.get("a")).session : undefined;
+    if (kind === "table") expect(session).toBeDefined();
+    const row = session?.row;
+    call.mockClear();
+    const x = (v as any).panes.detailLeft + 3;
+    expect(x).toBeLessThan(paletteBounds(300, 28)!.left);
+    for (const type of ["press", "move", "drag", "release", "wheel"]) {
+      v.handleMouse(helpMouse(type, { x, y: 4, width: 300, height: 28, wheelDelta: -3, clickCount: 2 }));
+      expect(v.snapshot()).toEqual(saved);
+    }
+    v.handleMouse(helpMouse("click", { x, y: 4, width: 300, height: 28, clickCount: 2 }));
+    expect(v.snapshot().palette).toBeUndefined();
+    expect(session?.row).toBe(row);
+    expect(setWidget).not.toHaveBeenCalled();
+    expect(setTableSelection).not.toHaveBeenCalled();
+    expect(run).not.toHaveBeenCalled();
+    expect(call).not.toHaveBeenCalled();
+  } finally { v.dispose(); }
+});
+
+test("palette ignores missing, resized and zero-width hit geometry until rendered again", () => {
+  const f = dataflow(); const run = vi.fn(async () => {});
+  const local = { requestRender: vi.fn(), terminal: { rows: 28 } };
+  const v = new NotebookView(local as any, theme, notebookKey(f), { followed: () => [f], interrupt: async () => {}, openInBrowser: () => {}, run }, () => {});
+  const click = (width: number, height: number) => {
+    const bounds = paletteBounds(width, height)!;
+    return v.handleMouse(helpMouse("click", { x: bounds.left + 2, y: bounds.top + 3, width, height }));
+  };
+  try {
+    paletteSearch(v, "run cell");
+    expect(click(120, 28)).toEqual({ handled: true });
+    expect(v.snapshot().palette).toBeDefined();
+    v.render(120);
+    expect(click(46, 28)).toEqual({ handled: true });
+    expect(v.snapshot().palette).toBeDefined();
+    v.render(46);
+    local.terminal.rows = 12;
+    expect(click(46, 12)).toEqual({ handled: true });
+    expect(v.snapshot().palette).toBeDefined();
+    v.render(46);
+    expect(v.render(0)).toEqual([]);
+    expect(click(46, 12)).toEqual({ handled: true });
+    expect(v.snapshot().palette).toBeDefined();
+    expect(run).not.toHaveBeenCalled();
+    v.render(46); click(46, 12);
+    expect(run).toHaveBeenCalledOnce();
+    expect(v.snapshot().palette).toBeUndefined();
+  } finally { v.dispose(); }
+});
+
+test.each([1, 2])("palette at %i terminal rows retains its cursor, cancel and compact mouse routing", height => {
+  const f = dataflow(); const run = vi.fn(async () => {});
+  const local = { requestRender: vi.fn(), terminal: { rows: height } };
+  const v = new NotebookView(local as any, theme, notebookKey(f), { followed: () => [f], interrupt: async () => {}, openInBrowser: () => {}, run }, () => {});
+  try {
+    paletteSearch(v, "run cell");
+    const lines = v.render(46); const bounds = paletteBounds(46, height)!;
+    expect(lines).toHaveLength(height);
+    expect(lines.every(line => visibleWidth(line) === 46)).toBe(true);
+    expect(lines.join("\n").split(CURSOR_MARKER)).toHaveLength(2);
+    expect(lines[0]).toContain("> run cell");
+    v.handleMouse(helpMouse("click", { x: bounds.left + 2, y: bounds.top, width: 46, height }));
+    expect(v.snapshot().palette).toBeDefined();
+    if (height === 2) {
+      expect(lines[1]).toContain("› run cell");
+      v.handleMouse(helpMouse("click", { x: bounds.left + 2, y: bounds.top + 1, width: 46, height }));
+      expect(run).toHaveBeenCalledOnce();
+      expect(v.snapshot().palette).toBeUndefined();
+      paletteSearch(v, "run cell"); v.render(46);
+    }
+    v.handleInput("\x1b");
+    expect(v.snapshot().palette).toBeUndefined();
+    expect(v.render(46).join("\n")).not.toContain(CURSOR_MARKER);
+    expect(v[INPUT_CONTEXT]()).toBe("viewer");
+  } finally { v.dispose(); }
+});
+
+test("palette focus loss, snapshot transfer and F8 preserve search and selection without a stray cursor", () => {
+  const f = dataflow(); const v = make(f); let moved: NotebookView | undefined;
+  try {
+    v.render(120);
+    (v as any).note = "A message retained behind the command palette";
+    paletteSearch(v, "run"); v.render(120); v.handleInput("\x1b[B"); v.render(120);
+    const saved = v.snapshot();
+    expect(saved.palette).toMatchObject({ query: "run", selected: 1 });
+    expect(v.render(120).join("\n").split(CURSOR_MARKER)).toHaveLength(2);
+    v.focused = false;
+    expect(v.render(120).join("\n")).not.toContain(CURSOR_MARKER);
+    expect(v.snapshot().palette).toEqual(saved.palette);
+    moved = make(f, { initial: v.snapshot(), docked: { focused: () => true, focusMain: vi.fn() } });
+    expect(moved.snapshot().palette).toEqual(saved.palette);
+    expect(moved.render(80).join("\n").split(CURSOR_MARKER)).toHaveLength(2);
+    moved.handleInput("\x1b[19~");
+    const message = moved.render(80).join("\n");
+    expect(message).toContain("nb.py · message");
+    expect(message).not.toContain("Command palette");
+    expect(message).not.toContain(CURSOR_MARKER);
+    expect(moved.snapshot().palette).toEqual(saved.palette);
+    moved.handleMouse(helpMouse("click", { x: 0, y: 0 }));
+    expect(moved.snapshot().palette).toEqual(saved.palette);
+    moved.handleInput("\x1b");
+    expect(moved.render(80).join("\n")).toContain("Command palette");
+    expect(moved.snapshot().palette).toEqual(saved.palette);
+    moved.focused = false;
+    expect(moved.render(80).join("\n")).not.toContain(CURSOR_MARKER);
+    moved.focused = true;
+    expect(moved.render(80).join("\n").split(CURSOR_MARKER)).toHaveLength(2);
+    moved.handleInput("\x10");
+    expect(moved.snapshot().palette).toMatchObject({ query: "run", selected: 0 });
+    moved.handleInput("\x1b");
+    expect(moved.snapshot().palette).toBeUndefined();
+    expect(moved.snapshot().cursor).toBe(saved.cursor);
+  } finally { v.dispose(); moved?.dispose(); }
+});
+
+const palettePng = "iVBORw0KGgoAAAANSUhEUgAAAAoAAAAKCAYAAACNMs+9AAAAFUlEQVR42mP8z8BQz0AEYBxVSF+FABJADveWkH6oAAAAAElFTkSuQmCC";
+
+test.each([
+  { label: "wholly above", width: 120, height: 160, padding: 0, hidden: false },
+  { label: "wholly below", width: 120, height: 160, padding: 70, hidden: false },
+  { label: "opening above but body crossing", width: 120, height: 160, padding: 30, hidden: true },
+  { label: "opening inside", width: 120, height: 160, padding: 50, hidden: true },
+  { label: "horizontally adjacent", width: 300, height: 28, padding: 0, hidden: true },
+])("palette static image occlusion and restoration: $label", async ({ label, width, height, padding, hidden }) => {
+  const { getCapabilities, getCellDimensions, setCapabilities, setCellDimensions } = await import("@earendil-works/pi-tui");
+  const caps = getCapabilities(), dimensions = getCellDimensions();
+  setCapabilities({ images: "kitty", trueColor: true, hyperlinks: false });
+  setCellDimensions({ widthPx: 9, heightPx: 18 });
+  const f = nbWith([{ id: "a", code: "plot()" }]);
+  const cell = f.notebook.cells.get("a")!;
+  cell.output = { kind: "image", text: "plot", blocks: [
+    ...Array.from({ length: Math.ceil(padding / 20) }, (_, block) => ({
+      id: `prefix-${block}`, output: { kind: "text" as const, text: Array.from({ length: Math.min(20, padding - block * 20) }, (_, i) => `padding ${block * 20 + i}`).join("\n") },
+    })),
+    { id: "picture", output: { kind: "image", text: "plot", image: { mime: "image/png", data: palettePng } } },
+    { id: "tail", output: { kind: "text", text: "After the picture" } },
+  ] };
+  const local = { requestRender: vi.fn(), terminal: { rows: height } };
+  const v = new NotebookView(local as any, theme, notebookKey(f), { followed: () => [f], interrupt: async () => {}, openInBrowser: () => {}, outputs: false }, () => {});
+  try {
+    (v as any).section = false;
+    const before = v.render(width);
+    const top = before.findIndex(line => line.includes("\x1b_G"));
+    expect(top).toBeGreaterThanOrEqual(0);
+    const imageRows = (v as any).lastDetail.filter((r: any) => r.image);
+    expect(imageRows.length).toBeGreaterThan(1);
+    const bounds = paletteBounds(width, height)!;
+    const overlaps = top < bounds.top + bounds.height && top + imageRows.length > bounds.top;
+    expect(overlaps).toBe(hidden);
+    if (label === "wholly above") expect(top + imageRows.length).toBeLessThanOrEqual(bounds.top);
+    if (label === "wholly below") expect(top).toBeGreaterThanOrEqual(bounds.top + bounds.height);
+    if (label === "opening above but body crossing") expect(top).toBeLessThan(bounds.top);
+    if (label === "opening inside") expect(top).toBeGreaterThanOrEqual(bounds.top);
+    if (label === "horizontally adjacent") {
+      const imageCols = Number(/(?:,|;)c=(\d+)/u.exec(before[top]!)![1]);
+      expect((v as any).panes.detailLeft + imageCols).toBeLessThanOrEqual(bounds.left);
+    }
+    paletteSearch(v, "run cell");
+    const modal = v.render(width);
+    expect(modal.join("\n")).toContain("Command palette");
+    expect(modal.join("\n")).toContain("› run cell");
+    expect(modal.every(line => visibleWidth(line) === width)).toBe(true);
+    expect(modal.filter(line => line.includes("\x1b_G"))).toHaveLength(hidden ? 0 : 1);
+    // The placeholder on an uncovered opening row proves the whole block, not only the card rows, is hidden.
+    if (hidden && (top < bounds.top || label === "horizontally adjacent")) expect(modal[top]).toContain("[image hidden by command palette]");
+    if (!hidden) expect(modal[top]).toEqual(before[top]);
+    const detail = (v as any).lastDetail;
+    expect(detail.filter((r: any) => r.image)).toEqual(imageRows);
+    v.handleInput("\x1b");
+    expect(v.render(width)).toEqual(before);
+  } finally { v.dispose(); setCapabilities(caps); setCellDimensions(dimensions); }
+});
+
+test.each([false, true])("palette keeps a hidden live chart alive and restores placements and pointer (Painter=%s)", async withPainter => {
+  const { getCapabilities, getCellDimensions, setCapabilities, setCellDimensions } = await import("@earendil-works/pi-tui");
+  const { LiveCharts } = await import("../src/ui/live-charts.js");
+  const { Painter } = await import("../src/ui/painter.js");
+  const caps = getCapabilities(), dimensions = getCellDimensions();
+  setCapabilities({ images: "kitty", trueColor: true, hyperlinks: false });
+  setCellDimensions({ widthPx: 9, heightPx: 18 });
+  const f = nbWith([{ id: "a", code: "fig" }]);
+  f.notebook.apply("cell-op", { cell_id: "a", status: "idle", output: { channel: "output", mimetype: "text/html", data: `<marimo-plotly data-figure='{&quot;data&quot;:[],&quot;layout&quot;:{}}'></marimo-plotly>` } });
+  const pointer = vi.fn(), close = vi.fn(), cursor = vi.fn();
+  const open = vi.fn(async () => ({ frame: palettePng, pointer, cursor, close }));
+  const writes: string[] = []; let lines: string[] = [];
+  const local = { requestRender: vi.fn(), terminal: { rows: 28, write: (data: string) => { writes.push(data); } },
+    ...(withPainter ? { getScreenLines: () => lines, doRender: () => {} } : {}),
+  };
+  const painter = withPainter ? Painter.for(local)! : undefined;
+  const live = new LiveCharts(() => {}, () => ({ stop: vi.fn() }) as any, open, data => { writes.push(data); }, () => painter, "overlay");
+  const v = new NotebookView(local as any, theme, notebookKey(f), { followed: () => [f], interrupt: async () => {}, openInBrowser: () => {}, outputs: false }, () => {}, undefined, undefined, live);
+  const draw = () => { lines = v.render(360); local.doRender?.(); return lines; };
+  try {
+    draw(); await editorReady(); draw();
+    expect(open).toHaveBeenCalledOnce();
+    expect(live.rects).toHaveLength(1);
+    const rect = live.rects[0]!;
+    const state = [...(live as any).states.values()][0];
+    const marker = (v as any).lastDetail.find((r: any) => r.image?.index === 0).text;
+    expect(lines.join("\n")).toContain(marker);
+    if (withPainter) expect(writes.join("")).toContain("a=p,i=");
+    else expect(lines.join("\n")).toContain("\x1b_Ga=p,i=");
+    v.handleInput("i"); draw();
+    expect(live.inspecting).toBe(true);
+    const start = pointer.mock.calls.at(-1)![0];
+    const bounds = paletteBounds(360, 28)!;
+    expect(rect.left + rect.geometry.cols).toBeLessThanOrEqual(bounds.left);
+    writes.length = 0; pointer.mockClear();
+    paletteSearch(v, ""); draw();
+    expect(live.inspecting).toBe(true);
+    expect(v.snapshot().palette?.mode).toBe("chart");
+    expect(lines.join("\n")).toContain("Command palette");
+    expect(lines.join("\n")).toContain("[image hidden by command palette]");
+    expect(lines.join("\n")).not.toContain(marker);
+    expect(live.rects).toEqual([]);
+    expect([...(live as any).states.values()][0]).toBe(state);
+    expect(close).not.toHaveBeenCalled();
+    expect(open).toHaveBeenCalledOnce();
+    if (withPainter) {
+      expect(writes.join("")).toContain("a=d,d=i,i=");
+      expect(writes.join("")).not.toContain("a=p,i=");
+    } else expect(lines.join("\n")).not.toContain("\x1b_G");
+    for (const type of ["press", "move", "drag", "release", "wheel"]) v.handleMouse(helpMouse(type, { x: rect.left + 1, y: rect.top + 1, width: 360, height: 28, wheelDelta: 3 }));
+    expect(pointer).not.toHaveBeenCalled();
+    writes.length = 0;
+    v.handleInput("\x1b"); draw();
+    expect(live.rects).toEqual([rect]);
+    expect(lines.join("\n")).toContain(marker);
+    expect(live.inspecting).toBe(true);
+    expect(open).toHaveBeenCalledOnce(); expect(close).not.toHaveBeenCalled();
+    if (withPainter) expect(writes.join("")).toContain("a=p,i=");
+    v.handleInput("\x1b[C");
+    expect(pointer).toHaveBeenLastCalledWith(expect.objectContaining({ type: "move", x: start.x + 0.5, y: start.y }));
+    v.handleMouse(helpMouse("move", { x: rect.left + 1, y: rect.top + 1, width: 360, height: 28, button: "none" }));
+    expect(pointer).toHaveBeenLastCalledWith(expect.objectContaining({ type: "move", x: 1.5, y: 1.5 }));
+  } finally { v.dispose(); painter?.retire(); setCapabilities(caps); setCellDimensions(dimensions); }
+  expect(close).toHaveBeenCalledOnce();
 });
 
 // --- STEP6: compact contextual chrome and modal, searchable registry help ---

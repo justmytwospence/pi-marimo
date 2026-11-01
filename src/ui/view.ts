@@ -30,7 +30,7 @@ import type { EditorFactoryFn } from "../editor-contract.ts";
 import { Dock, type DockSpec } from "./dock.js";
 import { type Part, detailRows } from "./detail.js";
 import { Help, type HelpState } from "./help.js";
-import { Palette, type PaletteState } from "./palette.js";
+import { Palette, compositePalette, paletteBounds, type PaletteBounds, type PaletteState } from "./palette.js";
 import { MessageView, messagePreview, type MessageState } from "./message.js";
 import { clean, oneLine } from "./text.js";
 import { commandFor, commandKey, footerTokens, paletteInput, type Command, type CommandMode } from "./keys.js";
@@ -282,6 +282,7 @@ export class NotebookView implements Component, Focusable {
   private help = false;
   private helpView = new Help();
   private palette?: Palette;
+  private paletteRect?: PaletteBounds;
   private lastTransient = 0;
   private messageView?: MessageView;
   private messageOverflow = false;
@@ -1681,7 +1682,25 @@ export class NotebookView implements Component, Focusable {
   }
 
   render(width: number): string[] {
+    this.paletteRect = undefined;
     if (width < 8) return [];
+    if (this.palette && !this.messageView) this.paletteRect = paletteBounds(width, this.tui.terminal.rows);
+    const base = this.renderBase(width);
+    const rect = this.paletteRect;
+    const out = this.palette && rect
+      ? compositePalette(base, this.palette.render(rect.width, rect.height, this.theme, this.focused), rect, width)
+      : base;
+    // The images this frame draws stay when the painter wipes the transcript's from under the view.
+    const ids = new Set<number>();
+    for (const line of out) if (line.includes("\x1b_G")) for (const m of line.matchAll(/\x1b_G([^;\x1b]*)/gu)) {
+      const id = /(?:^|,)i=(\d+)(?:,|$)/u.exec(m[1]!)?.[1];
+      if (id !== undefined) ids.add(Number(id));
+    }
+    if (!this.actions.docked) Painter.for(this.tui)?.setViewImages(ids);
+    return out;
+  }
+
+  private renderBase(width: number): string[] {
     const th = this.theme;
     const inner = bodyWidth(width);
     const row = (s: string) => frameRow(s, width, th);
@@ -1697,11 +1716,10 @@ export class NotebookView implements Component, Focusable {
     const height = Math.max(0, this.tui.terminal.rows);
     const dock = this.messageView ? [] : this.dockRows(width, height <= CHROME ? height : height - CHROME);
     this.lastDock = dock.length;
-    const transient = this.messageView || this.palette ? undefined : this.transientMessage();
+    const transient = this.messageView ? undefined : this.transientMessage();
     const transientRows = messagePreview(transient, inner, Math.max(0, height - CHROME - dock.length));
     this.messageOverflow = !!transient && wrapTextWithAnsi(clean(transient), inner).length > transientRows.length;
     this.lastTransient = transientRows.length;
-    if (this.palette && !this.messageView && height < CHROME) return this.palette.render(inner, height, th, this.focused).map(row);
     if (this.help && !this.messageView && height < CHROME) return this.helpView.render(inner, height, th).map(row);
     if (height < CHROME || (height === CHROME && dock.length)) {
       if (this.messageView) {
@@ -1714,14 +1732,6 @@ export class NotebookView implements Component, Focusable {
       const compact = height === 1 ? [row(this.footer(f, inner))] : [row(file), ...transientRows.map(row)];
       if (height > 1) compact.push(row(this.footer(f, inner)));
       return compact.slice(0, height);
-    }
-    if (this.palette && !this.messageView) {
-      const rows = this.palette.render(inner, height - 1, th, this.focused);
-      this.lastPage = height - 1;
-      this.lastRows = rows.map(text => ({ text }));
-      this.lastOutline = [];
-      this.lastDetail = [];
-      return [...out, ...rows.map(row)];
     }
     if (this.help && !this.messageView) {
       const rows = this.helpView.render(inner, height - 1, th);
@@ -1978,16 +1988,25 @@ export class NotebookView implements Component, Focusable {
         }
       }
       this.lastDetail = detail;
+      // Raw image lines cannot be composited, even beside the modal. Hide whole blocks sharing its rows.
+      const covered = (i: number): boolean => {
+        const image = detail[i]?.image;
+        const rect = this.paletteRect;
+        if (!image || !rect) return false;
+        const top = ROWS_TOP + detailTop + i - image.index - this.detailScroll;
+        return top < rect.top + rect.height && top + image.height > rect.top;
+      };
       // An image draws only when its whole block is on screen; otherwise a note stands in for it.
       const visible = (i: number): boolean => {
         const r = detail[i];
         if (!r?.image) return true;
         const start = i - r.image.index;
-        return start >= this.detailScroll && start + r.image.height <= this.detailScroll + dh;
+        return !covered(i) && start >= this.detailScroll && start + r.image.height <= this.detailScroll + dh;
       };
       const detailText = (i: number): string => {
         const r = detail[i];
         if (!r?.image || visible(i)) return r?.text ?? "";
+        if (covered(i)) return r.image.index === 0 || i === this.detailScroll ? th.fg("dim", "[image hidden by command palette]") : "";
         return r.image.index === 0 || i === this.detailScroll ? r.image.alt : r.text;
       };
       for (let i = 0; i < page; i++) {
@@ -2004,13 +2023,6 @@ export class NotebookView implements Component, Focusable {
     out.push(...dock);
     out.push(...transientRows.map(text => row(th.fg("warning", text))));
     out.push(row(this.footer(f, inner)));
-    // The images this frame draws stay when the painter wipes the transcript's from under the view.
-    const ids = new Set<number>();
-    for (const line of out) if (line.includes("\x1b_G")) for (const m of line.matchAll(/\x1b_G([^;\x1b]*)/gu)) {
-      const id = /(?:^|,)i=(\d+)(?:,|$)/u.exec(m[1]!)?.[1];
-      if (id !== undefined) ids.add(Number(id));
-    }
-    if (!this.actions.docked) Painter.for(this.tui)?.setViewImages(ids);
     return out;
   }
 
@@ -2061,7 +2073,7 @@ export class NotebookView implements Component, Focusable {
     // Dock owns its focused prompt hints; never replace those with a key inventory.
     if (this.dock) return this.theme.fg("dim", "esc closes the prompt");
     const mode = this.commandMode();
-    if (this.palette || this.help) return ""; // Each modal owns its own footer.
+    if (this.help) return ""; // Help owns its own footer.
     const focused = this.part === undefined ? undefined : this.lastParts[this.part];
     const cell = f ? this.cursorCell(f) : undefined;
     const contextual = focused?.kind ?? (cell && this.cellWidgets(cell).length ? "widgets" : cell?.output?.table ? "table" : this.live.rects.length ? "chart" : undefined);
@@ -2143,21 +2155,32 @@ export class NotebookView implements Component, Focusable {
   }
 
   handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
-    if (this.packageConfirmation || this.tui.terminal.rows < CHROME) return { handled: true };
+    if (this.packageConfirmation) return { handled: true };
     if (this.messageView) {
       if (event.type === "wheel") { this.messageView.wheel(event.wheelDelta ?? 0); this.tui.requestRender(); }
       return { handled: true };
     }
     if (this.palette) {
-      if (event.type === "wheel") { this.palette.wheel(event.wheelDelta ?? 0); this.tui.requestRender(); }
-      else if (event.button === "left" && event.type === "press") return { handled: true, render: false };
-      else if (event.button === "left" && event.type === "click") {
-        const command = this.palette.selectAt(event.x - CONTENT_LEFT, event.y - 1);
-        if (command) this.runPaletteCommand(command);
+      if (event.button === "left" && event.type === "press") return { handled: true, render: false };
+      const rect = this.paletteRect;
+      const current = paletteBounds(event.width, this.tui.terminal.rows);
+      // A resize or snapshot transfer must render fresh hit geometry before a click can execute anything.
+      if (!rect || !current || rect.left !== current.left || rect.top !== current.top || rect.width !== current.width || rect.height !== current.height) return { handled: true };
+      const inside = event.x >= rect.left && event.x < rect.left + rect.width && event.y >= rect.top && event.y < rect.top + rect.height;
+      if (event.type === "wheel" && inside) {
+        this.palette.wheel(event.wheelDelta ?? 0);
+        this.tui.requestRender();
+      } else if (event.button === "left" && event.type === "click") {
+        if (!inside) this.palette = undefined;
+        else {
+          const command = this.palette.selectAt(event.x - rect.left, event.y - rect.top);
+          if (command) this.runPaletteCommand(command);
+        }
         this.tui.requestRender();
       }
       return { handled: true };
     }
+    if (this.tui.terminal.rows < CHROME) return { handled: true };
     if (this.help) {
       if (event.type === "wheel") { this.helpView.wheel(event.wheelDelta ?? 0); this.tui.requestRender(); }
       else if (event.button === "left" && event.type === "press") return { handled: true, render: false };
