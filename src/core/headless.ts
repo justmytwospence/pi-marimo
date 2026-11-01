@@ -36,7 +36,7 @@ export class HeadlessSessions {
   /** Messages that arrive on a held session (marimo answers a function call only to the session that made it). */
   onMessage: ((serverUrl: string, file: string, op: string, data: unknown) => void) | undefined;
 
-  constructor(private readonly Socket: SocketCtor | null | undefined = (globalThis as { WebSocket?: SocketCtor }).WebSocket) {}
+  constructor(private readonly Socket?: SocketCtor | null) {}
 
   private static key(serverUrl: string, file: string): string {
     return `${serverUrl.replace(/\/+$/u, "")}\0${file}`;
@@ -54,7 +54,7 @@ export class HeadlessSessions {
     if (known) return Promise.resolve(known.sessionId);
     const pending = this.starting.get(key);
     if (pending) return pending;
-    const Socket = this.Socket;
+    const Socket = this.Socket === undefined ? (globalThis as { WebSocket?: SocketCtor }).WebSocket : this.Socket;
     if (!Socket) return Promise.reject(new Error("this Node has no WebSocket"));
     const sessionId = `s_${randomBytes(4).toString("hex")}`;
     const started = new Promise<string>((resolve, reject) => {
@@ -107,4 +107,19 @@ export class HeadlessSessions {
       this.held.delete(key);
     }
   }
+}
+
+const OWN_HEADLESS = Symbol.for("pi-marimo.headless-sessions.v1");
+
+/** Writable consumers belong to the process, not a chat turn or extension reload. */
+export function ownHeadlessSessions(): HeadlessSessions {
+  const global = globalThis as Record<symbol, HeadlessSessions | undefined>;
+  let sessions = global[OWN_HEADLESS];
+  if (!sessions) {
+    sessions = new HeadlessSessions();
+    global[OWN_HEADLESS] = sessions;
+    const held = sessions;
+    process.once("exit", () => held.closeAll());
+  }
+  return sessions;
 }

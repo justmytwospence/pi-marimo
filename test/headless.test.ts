@@ -1,5 +1,5 @@
-import { expect, test } from "vitest";
-import { HeadlessSessions, socketUrl } from "../src/core/headless.js";
+import { expect, test, vi } from "vitest";
+import { HeadlessSessions, ownHeadlessSessions, socketUrl } from "../src/core/headless.js";
 
 class FakeSocket {
   static all: FakeSocket[] = [];
@@ -70,6 +70,29 @@ test("an unreachable server and a kernel that never starts reject, and leave not
   await h.attach("http://127.0.0.1:3", "/w/a.py");
   FakeSocket.all.at(-1)!.close();
   expect(h.has("http://127.0.0.1:3", "/w/a.py")).toBe(false);
+});
+
+test("process-owned headless consumers survive a keep policy and rebind callbacks without reopening", async () => {
+  const sessions = ownHeadlessSessions();
+  sessions.closeAll();
+  FakeSocket.all = []; FakeSocket.mode = "ready";
+  vi.stubGlobal("WebSocket", FakeSocket);
+  try {
+    const first = vi.fn(), next = vi.fn();
+    sessions.onMessage = first;
+    const id = await sessions.attach("http://external.invalid", "/w/fit.py");
+    expect(ownHeadlessSessions()).toBe(sessions);
+    sessions.closeAll(url => url === "http://external.invalid");
+    expect(FakeSocket.all[0]!.closed).toBe(false);
+    sessions.onMessage = next;
+    expect(await ownHeadlessSessions().attach("http://external.invalid", "/w/fit.py")).toBe(id);
+    expect(FakeSocket.all).toHaveLength(1);
+    FakeSocket.all[0]!.onmessage?.({ data: '{"op":"function-call-result","data":{"function_call_id":"held"}}' });
+    expect(first).not.toHaveBeenCalled();
+    expect(next).toHaveBeenCalledOnce();
+    sessions.closeAll();
+    expect(FakeSocket.all[0]!.closed).toBe(true);
+  } finally { sessions.onMessage = undefined; sessions.closeAll(); vi.unstubAllGlobals(); }
 });
 
 test("without a WebSocket in this Node it says so", async () => {

@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, expect, test } from "vitest";
 import { OwnServers, findNotebookFiles, serverCommand } from "../src/servers.js";
+import { executionCommand } from "../src/index.js";
 
 const fake = fileURLToPath(new URL("./fixtures/fake-marimo.mjs", import.meta.url));
 const servers = new OwnServers();
@@ -15,8 +16,26 @@ test("the marimo command: as configured, else uv in a uv project, else marimo", 
   expect(serverCommand([], "/p", () => false)).toEqual(["marimo"]);
 });
 
+test("execution command precedence preserves the server's startup project without changing explicit overrides", () => {
+  const config = { execution: { command: [] as string[] }, server: { command: ["uvx", "marimo"] } };
+  const server = { command: ["uv", "run", "marimo"], cwd: "/server-project" };
+  expect(executionCommand(config, "/pi-project", server)).toEqual({ command: ["uv", "run", "marimo"], cwd: "/server-project" });
+  config.execution.command = ["python", "-m", "marimo"];
+  const explicit = executionCommand(config, "/pi-project", server);
+  expect(explicit).toEqual({ command: ["python", "-m", "marimo"], cwd: "/pi-project" });
+  explicit.command.push("not shared");
+  expect(config.execution.command).toEqual(["python", "-m", "marimo"]);
+  config.execution.command = [];
+  expect(executionCommand(config, "/pi-project")).toEqual({ command: ["uvx", "marimo"], cwd: "/pi-project" });
+  expect(executionCommand(config, "/pi-project", {})).toEqual({ command: ["uvx", "marimo"], cwd: "/pi-project" });
+});
+
 test("a server Pi starts answers on its port, and stops when asked", async () => {
-  const server = await servers.start({ command: [process.execPath, fake], file: "/w/nb.py", cwd: tmpdir(), timeoutMs: 10_000 });
+  const command = [process.execPath, fake];
+  const server = await servers.start({ command, file: "/w/nb.py", cwd: tmpdir(), timeoutMs: 10_000 });
+  command.push("not inherited by execution clients");
+  expect(server.command).toEqual([process.execPath, fake]);
+  expect(server.cwd).toBe(tmpdir());
   expect(server.url).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/u);
   expect((await fetch(`${server.url}/health`)).ok).toBe(true);
   expect(servers.find(server.url.replace("127.0.0.1", "localhost"))).toBe(server);

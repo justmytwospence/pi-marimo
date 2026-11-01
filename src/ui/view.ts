@@ -134,6 +134,8 @@ export interface ViewActions {
   /** The notebooks followed now. */
   followed(): Followed[];
   interrupt(f: Followed): Promise<void>;
+  /** Native request state includes scratch work that has no document-cell status. */
+  executionActivity?(f: Followed): { running: boolean; detail: string[] };
   openInBrowser(f: Followed): void;
   /** Runs these cells (id and current code) in the notebook's kernel. */
   run?(f: Followed, cells: Array<{ id: string; code: string }>): Promise<void>;
@@ -344,7 +346,7 @@ export class NotebookView implements Component, Focusable {
     this.timer = setInterval(() => {
       if (this.closed) return;
       const f = this.current();
-      const busy = !!f && (!!f.notebook.running() || f.notebook.queued() > 0);
+      const busy = !!f && this.kernelBusy(f);
       if (!busy && ++ticks % 10 !== 0) return;
       this.syncConfirmation();
       this.tui.requestRender();
@@ -464,9 +466,13 @@ export class NotebookView implements Component, Focusable {
     return this.actions.followed().find((f) => notebookKey(f) === this.key);
   }
 
+  private kernelBusy(f: Followed): boolean {
+    return f.connection === "connected" && (!!f.notebook.running() || f.notebook.queued() > 0 || this.actions.executionActivity?.(f).running === true);
+  }
+
   private syncConfirmation(): void {
     const f = this.current();
-    if (!f || f.connection !== "connected" || (!f.notebook.running() && f.notebook.queued() === 0) || interruptKey(f) !== this.armedTarget) this.armedTarget = undefined;
+    if (!f || !this.kernelBusy(f) || interruptKey(f) !== this.armedTarget) this.armedTarget = undefined;
     if (!f || interruptKey(f) !== this.armedStop) this.armedStop = undefined;
     if (!f || f.connection !== "connected" || (this.armedRun && this.armedRun.target !== interruptKey(f))) this.armedRun = undefined;
     if (!f || (this.armedUnmark && !f.notebook.lens.selections().some((s) => s.id === this.armedUnmark!.id))) this.armedUnmark = undefined;
@@ -1364,7 +1370,7 @@ export class NotebookView implements Component, Focusable {
     }
     const page = this.viewport();
     if (command.id === "interrupt") {
-      const busy = f && f.connection === "connected" && (f.notebook.running() || f.notebook.queued() > 0);
+      const busy = f && this.kernelBusy(f);
       this.armedRun = undefined;
       if (!f || !busy) {
         this.armedTarget = undefined;
@@ -1586,7 +1592,8 @@ export class NotebookView implements Component, Focusable {
     if (editor) return truncateToWidth(`Neovim · ${editor.kind}${editor.kind === "python" && f.notebook.cells.has(editor.cellId) && f.notebook.isMarkdown(f.notebook.cells.get(editor.cellId)!) ? " (Python source)" : ""} · ${editor.saving ? "saving" : editor.dirty ? "unsaved" : "saved"}${editor.conflict !== undefined ? " · conflict" : ""}${editor.unavailable ? ` · ${editor.unavailable}` : ""}`, inner);
     const th = this.theme;
     const nb = f.notebook;
-    const busy = nb.running() || nb.queued() > 0;
+    const native = this.actions.executionActivity?.(f);
+    const busy = this.kernelBusy(f);
     const errors = nb.errors().length;
     // What runs, by its title, with the spinner; else the kernel's state.
     const run = nb.running();
@@ -1594,7 +1601,7 @@ export class NotebookView implements Component, Focusable {
     const state = run
       ? [th.bold(th.fg("accent", `${spinner(Date.now())} running ${cellTitle(nb, run.cell)}${run.since ? ` ${elapsed(Date.now() - run.since)}` : ""}`)), queued ? th.fg("accent", `${queued} queued`) : "", errors ? th.fg("error", `${errors} error${errors === 1 ? "" : "s"}`) : "", ...lensParts(f)].filter(Boolean).join(" · ")
       : queued && f.connection === "connected" ? [th.fg("accent", `◌ ${queued} queued`), ...lensParts(f)].join(" · ")
-        : [...kernelStateParts(f), ...lensParts(f)].join(" · ");
+        : [...kernelStateParts(f).filter(part => part !== "idle" || !native?.running), ...lensParts(f)].join(" · ");
     const dot = th.fg("dim", " · ");
     const working = this.actions.agentBusy?.() === true ? `${dot}${th.fg("accent", "agent working")}` : "";
     const servers = this.actions.servers?.(f) ?? [];
@@ -1606,7 +1613,7 @@ export class NotebookView implements Component, Focusable {
     const prefs = this.preferences.snapshot();
     const context = [this.palette ? "palette" : this.help ? "help" : this.commandMode(), this.mode === "variables" ? this.varFilter : this.mode === "packages" ? this.packagePane.state.filter : this.filter].filter(Boolean).join(" · ");
     const visibility = [context, prefs.diagnostics !== "all" ? `diagnostics ${prefs.diagnostics === "none" ? "hidden" : prefs.diagnostics}` : "", !prefs.showOutput ? "output hidden" : ""].filter(Boolean).join(" · ");
-    const left = `${visibility ? `${th.fg("dim", visibility)}${dot}` : ""}${busy ? `${th.fg("accent", "●")} ` : errors ? `${th.fg("error", "✗")} ` : ""}${th.bold(file)}  ${state}${working}${agent}`;
+    const left = `${visibility ? `${th.fg("dim", visibility)}${dot}` : ""}${busy ? `${th.fg("accent", "●")} ` : errors ? `${th.fg("error", "✗")} ` : ""}${th.bold(file)}  ${[state, ...(native?.detail ?? [])].filter(Boolean).join(" · ")}${working}${agent}`;
     const right = th.fg("dim", [this.actions.lastRun?.(f) ?? "", shortWhere(f.attachment.url) ?? "", servers.length ? `server ${servers.join(", ")}` : ""].filter(Boolean).join(" · "));
     const gap = inner - visibleWidth(left) - visibleWidth(right);
     return visibleWidth(right) && gap >= 2 ? `${left}${" ".repeat(gap)}${right}` : left;
@@ -2077,7 +2084,7 @@ export class NotebookView implements Component, Focusable {
     const focused = this.part === undefined ? undefined : this.lastParts[this.part];
     const cell = f ? this.cursorCell(f) : undefined;
     const contextual = focused?.kind ?? (cell && this.cellWidgets(cell).length ? "widgets" : cell?.output?.table ? "table" : this.live.rects.length ? "chart" : undefined);
-    const busy = !!f && (!!f.notebook.running() || f.notebook.queued() > 0);
+    const busy = !!f && this.kernelBusy(f);
     const primary = mode === "editor" ? "editor-f2" : mode === "table" ? "table-row" : mode === "widget" ? "widget-type" : mode === "chart" ? "chart-drag" : mode === "variables" ? "var-detail" : mode === "packages" ? "pkg-detail" : contextual === "table" ? "table" : contextual === "widgets" ? "widget" : contextual === "chart" ? "chart" : this.actions.run && cell && f && !f.notebook.isMarkdown(cell) ? busy ? "interrupt" : "run" : "activate";
     const cells = f ? this.cells(f) : [];
     const at = cells.findIndex(cell => cell.id === this.cursor);

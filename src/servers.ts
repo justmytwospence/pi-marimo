@@ -50,6 +50,9 @@ export interface OwnServer {
   url: string;
   /** The notebook it serves (absolute). */
   file: string;
+  /** Official marimo argv prefix and project directory used to start this server. */
+  command: string[];
+  cwd: string;
   port: number;
   pid: number;
   startedAt: number;
@@ -85,7 +88,7 @@ export class OwnServers {
     const url = `http://127.0.0.1:${port}`;
     const child = spawn(bin, [...pre, "edit", o.file, "--headless", "--no-token", "--skip-update-check", "--port", String(port)], { cwd: o.cwd, detached: true, stdio: ["ignore", "pipe", "pipe"] });
     child.unref();
-    const server: OwnServer = { url, file: o.file, port, pid: child.pid ?? 0, startedAt: Date.now(), log: [] };
+    const server: OwnServer = { url, file: o.file, command: [...o.command], cwd: o.cwd, port, pid: child.pid ?? 0, startedAt: Date.now(), log: [] };
     let failed: Error | undefined;
     const take = (chunk: Buffer) => {
       for (const line of chunk.toString().split(/\r?\n/u)) if (line.trim()) server.log.push(line.trim());

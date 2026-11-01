@@ -89,6 +89,67 @@ test("the notebook producer rechecks connected busy eligibility before interrupt
   expect(interrupt).toHaveBeenCalledOnce();
 });
 
+test("native Python activity keeps standalone rows running and armed without document-cell execution", async () => {
+  const f = followed();
+  const interrupt = vi.fn(async () => {});
+  let activity = { running: true, startedAt: 100, detail: ["executing Python", "resume armed"], failed: false, endedAt: undefined as number | undefined, summary: undefined as string | undefined };
+  const source = new NotebookSource({ followed: () => [f], open: async () => {}, interrupt, changed: () => {}, hostedChanged: () => {}, executionActivity: () => activity });
+  source.update([f], 200);
+  expect(source.section.canStop!(notebookKey(f))).toBe(true);
+  expect(source.entries(200)[0]).toMatchObject({ status: "running", startedAt: 100 });
+  expect(source.entries(200)[0]!.detail).toContain("executing Python · resume armed");
+  expect(source.entries(200)[0]!.detail).not.toContain("idle");
+  expect(source.rows(200)[0]!.line!(theme)).toContain("resume armed");
+  source.section.dismiss!(notebookKey(f));
+  source.seen(300);
+  expect(activity.detail).toContain("resume armed");
+  await source.section.stop!(notebookKey(f));
+  expect(interrupt).toHaveBeenCalledOnce();
+  activity = { ...activity, running: false, detail: [], failed: true, endedAt: 1000, summary: "Python request failed" };
+  source.update([f], 1000);
+  expect(source.entries(1000)[0]!.status).toBe("done"); // Explicit dismissal remains in force.
+  source.seen(1100);
+  source.update([f], 1200);
+  expect(source.entries(1200)[0]!.status).toBe("done");
+  expect(source.section.canStop!(notebookKey(f))).toBe(false);
+});
+
+test("an inline native failure alerts once and a prompt clears its standalone row", () => {
+  const f = followed();
+  const source = new NotebookSource({ followed: () => [f], open: async () => {}, interrupt: async () => {}, changed: () => {}, hostedChanged: () => {}, executionActivity: () => ({ running: false, startedAt: 100, endedAt: 200, failed: true, summary: "Python request failed", detail: [] }) });
+  source.update([f], 300);
+  expect(source.entries(300)[0]!.status).toBe("failed");
+  expect(source.rows(300)[0]!.line!(theme)).toContain("Python request failed");
+  source.seen(400); source.update([f], 500);
+  expect(source.entries(500)[0]!.status).toBe("done");
+});
+
+test("a newer inline success clears a native failure even when terminal timestamps tie", () => {
+  const f = followed();
+  let failed = true;
+  const source = new NotebookSource({ followed: () => [f], open: async () => {}, interrupt: async () => {}, changed: () => {}, hostedChanged: () => {}, executionActivity: () => ({ running: false, startedAt: 100, endedAt: 200, failed, summary: failed ? "Python request failed" : "Python request succeeded", detail: [] }) });
+  source.update([f], 300);
+  expect(source.entries(300)[0]!.status).toBe("failed");
+  failed = false; source.update([f], 301);
+  expect(source.entries(301)[0]!.status).toBe("done");
+  expect(source.rows(301)[0]!.line!(theme)).toContain("Python request succeeded");
+});
+
+test("the notebook view includes native scratch execution in its two-press interrupt gate", () => {
+  const f = followed(); const interrupt = vi.fn(async () => {});
+  let running = true;
+  const v = make(f, { interrupt, run: vi.fn(async () => {}), executionActivity: () => ({ running, detail: running ? ["executing Python", "resume armed"] : [] }) });
+  try {
+    expect(screen(v)).toContain("executing Python");
+    v.handleInput("x"); screen(v);
+    expect(interrupt).not.toHaveBeenCalled();
+    v.handleInput("x");
+    expect(interrupt).toHaveBeenCalledExactlyOnceWith(f);
+    v.handleInput("x"); running = false; screen(v); v.handleInput("x");
+    expect(interrupt).toHaveBeenCalledTimes(1);
+  } finally { v.dispose(); }
+});
+
 test("two servers hosting the same file have distinct stable rows, interrupts and details", async () => {
   const a = followed("http://server-a.invalid");
   const b = followed("http://server-b.invalid");

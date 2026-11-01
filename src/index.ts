@@ -29,7 +29,9 @@ import { busy as kernelBusy, KernelHold } from "./core/hold.js";
 import { ambiguityNote, lensLines, lensStatusText, relativePath, shortWhere, snapshot, STATE_TAG, statusParts, statusText } from "./core/render.js";
 import { basename } from "./core/io.js";
 import { nodeIo } from "./core/node-io.js";
-import { HeadlessSessions } from "./core/headless.js";
+import { HeadlessSessions, ownHeadlessSessions } from "./core/headless.js";
+import { ownExecutions } from "./core/execution.js";
+import { ExecutionSession, normalizeExecutionConfig, registerExecutionTools } from "./executions.js";
 import { EditCellService, pythonJson, type EditorSession, type SaveReceipt, type ScratchExecute } from "./core/edit-cell.js";
 import { PackageClient } from "./core/packages.js";
 import { InlineEditorManager } from "./ui/inline-editor.js";
@@ -103,6 +105,8 @@ export const DEFAULT_CONFIG = {
     /** Dock a notebook beside the chat when the agent starts running its cells. */
     autoSplit: true,
   },
+  execution: { command: [] as string[] },
+  completion: { mode: "subscribed" },
   server: {
     /** How /marimo edit and /marimo new start marimo; [] picks `uv run marimo` when the cwd has uv.lock, else `marimo`. */
     command: [] as string[],
@@ -121,6 +125,9 @@ const SUBCOMMANDS: Array<[string, string]> = [
   ["auto", "follow every notebook open under this directory"],
   ["off", "follow nothing"],
   ["show", "print the state block the model sees"],
+  ["watch", "subscribe to the notebook's currently observed execution wave"],
+  ["unwatch", "unsubscribe from an execution without interrupting Python"],
+  ["executions", "list this session and branch's execution records"],
   ["lens", "print the open Lens selections"],
   ["chart", "show a cell's chart in the transcript"],
   ["inspect", "drive the newest transcript chart from the keyboard"],
@@ -184,15 +191,19 @@ export function insertState<M extends { role?: string; timestamp?: number }>(mes
   return { messages: [...messages.slice(0, at + 1), block, ...messages.slice(at + 1)], anchor };
 }
 
-/** With pi-bg loaded and a notebook running, tell the agent how to wait for it. */
-export function withWaitHint(text: string, running: string[], pi: Pick<ExtensionAPI, "events">): string {
-  if (!running.length) return text;
-  let piBg = false;
-  pi.events?.emit("bg:probe", { reply: () => { piBg = true; } });
-  if (!piBg) return text;
-  const hint = `To wait for a running notebook inside your turn, call bg_wait with its id: ${running.join(", ")}.`;
+/** Native subscriptions leave the conversation free; no companion extension is required. */
+export function withExecutionHint(text: string, runningPaths: string[]): string {
+  if (!runningPaths.length) return text;
+  const hint = `To resume when notebook work finishes, use marimo_watch with its notebook path: ${runningPaths.join(", ")}. Read results with marimo_execution; do not poll a busy kernel with Python.`;
   const close = `</${STATE_TAG}>`;
   return text.endsWith(close) ? `${text.slice(0, -close.length).replace(/\n?$/u, "\n")}${hint}\n${close}` : `${text}\n${hint}`;
+}
+
+/** Execute with the explicit CLI prefix, the server's original project, then normal server-command defaults. */
+export function executionCommand(config: Pick<Config, "execution" | "server">, cwd: string, server?: { command?: string[]; cwd?: string }): { command: string[]; cwd: string } {
+  if (config.execution.command.length) return { command: [...config.execution.command], cwd };
+  if (server?.command?.length) return { command: [...server.command], cwd: server.cwd ?? cwd };
+  return { command: serverCommand(config.server.command, cwd), cwd };
 }
 
 export default function piMarimo(pi: ExtensionAPI): void {
@@ -310,11 +321,29 @@ export default function piMarimo(pi: ExtensionAPI): void {
     return undefined;
   };
   const tokenOpt = process.env.MARIMO_TOKEN ? { token: process.env.MARIMO_TOKEN } : {};
-  const headless = new HeadlessSessions();
+  let headless = new HeadlessSessions();
   // Function-call results come back only to the session that asked: from Pi's own sessions, into the notebook's state.
-  headless.onMessage = (url, file, op, data) => {
+  const onHeadlessMessage: NonNullable<HeadlessSessions["onMessage"]> = (url, file, op, data) => {
     const f = watcher?.followed().find((o) => o.attachment.url === url && o.attachment.path === file);
     f?.notebook.apply(op, data);
+  };
+  const executions = new ExecutionSession(pi, {
+    command: (f, settings, cwd) => executionCommand({ execution: settings.execution, server: config.server }, cwd, ownServers().find(f.attachment.url)),
+    // The official CLI uses the already selected session; do not create/retry a mutation on another kernel.
+    acquireTarget: async (f) => ({ url: f.attachment.url, sessionId: f.attachment.sessionId }),
+    engage: (f) => {
+      if (!watcher) return;
+      const before = watcher.engaged().length;
+      watcher.touch([{ url: f.attachment.url, file: f.attachment.path, session: f.attachment.sessionId }]);
+      if (watcher.engaged().length !== before) pi.appendEntry(ENTRY, { engaged: watcher.engaged() });
+      touchedAt.set(f.attachment.path, prompts);
+    },
+    onChange: () => schedule(),
+  });
+  registerExecutionTools(pi, executions);
+  const executionActivity = (f: Followed) => {
+    const activity = executions.activity(f);
+    return { ...activity, detail: activity.detail.filter(part => part !== "executing Python" || !kernelBusy(f)) };
   };
   /**
    * Runs a kernel action as an editor of the notebook. marimo refuses actions (403, or 500 for a gone
@@ -464,6 +493,7 @@ export default function piMarimo(pi: ExtensionAPI): void {
     },
     followed: () => watcher?.followed() ?? [],
     interrupt: (f) => withEditor(f, (t) => interruptKernel(t, process.env.MARIMO_TOKEN)),
+    executionActivity,
     openInBrowser: (f) => openUrl(`${f.attachment.url}/?file=${encodeURIComponent(f.attachment.path)}`),
     run: (f, cells) => withEditor(f, (t) => runCells(t, cells, process.env.MARIMO_TOKEN)),
     servers: (f) => [...bg.servers(f.attachment.path), ...(ownServers().find(f.attachment.url) ? ["started by Pi"] : [])],
@@ -559,6 +589,7 @@ export default function piMarimo(pi: ExtensionAPI): void {
       ownPill.update();
     },
     hostedChanged: () => bindPill(),
+    executionActivity,
     drivers: (f) => bg.drivers(f.attachment.path),
     servers: (f) => bg.servers(f.attachment.path),
     engaged: () => mine(),
@@ -694,7 +725,11 @@ export default function piMarimo(pi: ExtensionAPI): void {
   const statusLines = (): string[] => {
     if (!watcher) return [];
     const now = Date.now();
-    const lines = mine().map((f) => ({ path: f.attachment.path, text: statusText(statusParts(f.notebook, f.attachment, f.connection, now)) }));
+    const lines = mine().map((f) => {
+      const activity = executionActivity(f);
+      const text = statusText(statusParts(f.notebook, f.attachment, f.connection, now));
+      return { path: f.attachment.path, text: [activity.running && !kernelBusy(f) ? text.replace(" · idle", "") : text, ...activity.detail].join(" · ") };
+    });
     const { mode } = watcher;
     const waiting = watcher.waiting();
     for (const w of waiting) lines.push({ path: w.canonicalPath, text: waitingStatus(w) });
@@ -715,6 +750,7 @@ export default function piMarimo(pi: ExtensionAPI): void {
       void herdr?.apply(change);
     }
     if (watcher && ctxRef) {
+      executions.update(watcher.followed());
       bg.external(watcher.followed(), ctxRef.cwd);
       bg.annotate(watcher.followed(), ctxRef.cwd);
       source.update(watcher.followed());
@@ -734,7 +770,7 @@ export default function piMarimo(pi: ExtensionAPI): void {
     lastStatus = lines;
     lensUpdate();
     // Tick the elapsed time while a cell runs, and while a run waits out a disconnect.
-    const running = (watcher?.followed() ?? []).some((f) => f.connection === "connected" && f.notebook.running()) || bg.needsTick();
+    const running = (watcher?.followed() ?? []).some((f) => f.connection === "connected" && (f.notebook.running() || executionActivity(f).running)) || bg.needsTick();
     if (running && !ticker) ticker = setInterval(render, 1000);
     if (!running && ticker) { clearInterval(ticker); ticker = undefined; }
   };
@@ -800,7 +836,7 @@ export default function piMarimo(pi: ExtensionAPI): void {
     herdr = ctx.mode === "tui" ? new HerdrHold(pi.events) : undefined;
     disposeEditServices();
     await watcher?.stop();
-    config = loadConfig("marimo", DEFAULT_CONFIG, ctx.cwd);
+    config = normalizeExecutionConfig(loadConfig("marimo", DEFAULT_CONFIG, ctx.cwd), message => ctx.ui.notify(message, "warning"));
     preferences.configure(config.view, message => ctx.ui.notify(message, "warning"));
     const maxNotebooks = Math.max(1, Math.min(32, Math.floor(Number(config.maxNotebooks) || DEFAULT_CONFIG.maxNotebooks)));
     watcher = new MarimoWatcher({ io: nodeIo(), cwd: ctx.cwd, token: process.env.MARIMO_TOKEN, maxNotebooks, onChange: schedule });
@@ -809,6 +845,10 @@ export default function piMarimo(pi: ExtensionAPI): void {
     watcher.engage(savedEngaged(branch));
     watcher.include(savedIncluded(branch));
     watcher.start();
+    headless = ownHeadlessSessions();
+    headless.onMessage = onHeadlessMessage;
+    executions.start(ctx, config);
+    executions.update(watcher.followed());
     if (ctx.mode === "tui") {
       ctx.ui.setWidget("pi-marimo-tui", (tui) => { tuiRef = tui; return { render: () => [], invalidate() {} }; });
       split.listen(ctx);
@@ -824,6 +864,8 @@ export default function piMarimo(pi: ExtensionAPI): void {
   });
 
   pi.on("session_shutdown", async () => {
+    executions.shutdown();
+    headless.onMessage = undefined;
     editors.dispose();
     disposeEditServices();
     widgetSender.dispose();
@@ -852,7 +894,7 @@ export default function piMarimo(pi: ExtensionAPI): void {
     ownPill.dispose();
     source.resetHosts();
     // A session on a server Pi started stays open, as the server does: a reload must not end its kernel.
-    headless.closeAll((url) => ownServers().find(url) !== undefined);
+    headless.closeAll((url) => ownServers().find(url) !== undefined || ownExecutions().needsKernel(url));
     await previousWatcher?.stop();
     for (let i = 0; i < lastStatus.length; i++) previousContext?.ui.setStatus(statusKey(i), undefined);
     previousContext?.ui.setStatus(LENS_STATUS_KEY, undefined);
@@ -876,9 +918,12 @@ export default function piMarimo(pi: ExtensionAPI): void {
     // Bring the running list up to date first: a cell may have started within the last render's debounce.
     if (ctxRef) bg.external(watcher.followed(), ctxRef.cwd);
     const note = others.length ? `Other marimo notebooks open under this directory, not used in this session (work in one through marimo-pair to follow it): ${others.join(", ")}` : "";
-    const text = entries.length ? withWaitHint(snapshot(entries, { refresh: "prompt" }), bg.runningIds(), pi) : "";
-    // `context: false` in marimo.json: the view and footer only, nothing in the model's context.
-    turn = config.context !== false && (text || note) ? { text: [text, note].filter(Boolean).join("\n") } : undefined;
+    executions.update(watcher.followed());
+    const activeExecutions = executions.beforeTurn();
+    const runningPaths = watcher.followed().filter(f => kernelBusy(f) || executionActivity(f).running).map(f => f.canonicalPath ?? f.attachment.path);
+    const text = entries.length ? withExecutionHint(snapshot(entries, { refresh: "prompt" }), runningPaths) : "";
+    // `context: false` affects automatic snapshots, not real tool results or completion messages.
+    turn = config.context !== false && (text || note || activeExecutions) ? { text: [text, note, activeExecutions].filter(Boolean).join("\n") } : undefined;
     // The state is taken: the agent's changes and the user's widget values before this prompt are no longer new.
     for (const f of watcher.followed()) f.notebook.markPrompt();
   });
@@ -928,7 +973,10 @@ export default function piMarimo(pi: ExtensionAPI): void {
     schedule();
     void herdr?.apply(hold.end(watcher.followed(), Date.now()));
     bg.noteCovered(hold.paths);
+    executions.settled();
   });
+
+  pi.on("message_end", (event) => executions.messageDelivered(event.message));
 
   // Browser edits made after this point are flagged as new in the next turn.
   pi.on("agent_end", () => {
@@ -985,6 +1033,16 @@ export default function piMarimo(pi: ExtensionAPI): void {
       const word = arg.split(/\s+/u)[0] ?? "";
       if (word && !SUBCOMMANDS.some(([name]) => name === word)) {
         ctx.ui.notify(`marimo: unknown subcommand "${word}". Use one of: ${SUBCOMMANDS.map(([name]) => name).join(", ")}, or /marimo alone to pick notebooks.`, "warning");
+        return;
+      }
+      if (word === "watch" || word === "unwatch" || word === "executions") {
+        const ref = arg.slice(word.length).trim();
+        try {
+          executions.update(watcher.followed());
+          if (word === "unwatch" && !ref) { ctx.ui.notify("marimo: /marimo unwatch <execution id>", "info"); return; }
+          const result = word === "watch" ? await executions.watch(ref ? { notebook: ref } : {}) : word === "unwatch" ? executions.unsubscribe(ref) : executions.status();
+          pi.sendMessage({ customType: "pi-marimo-executions", content: result.content.map(part => part.text).join("\n"), display: true, details: result.details }, { triggerTurn: false });
+        } catch (error) { ctx.ui.notify(`marimo: ${error instanceof Error ? error.message : String(error)}`, "warning"); }
         return;
       }
       if (word === "chart") {

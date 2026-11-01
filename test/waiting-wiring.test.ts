@@ -44,6 +44,7 @@ async function until(cond: () => boolean, ms = 3000): Promise<void> {
 function setup(select?: (title: string, options: string[]) => string | undefined, mode = "rpc") {
   const handlers = new Map<string, Array<(e: unknown, c: unknown) => unknown>>();
   let command: { handler: (args: string, ctx: unknown) => Promise<void> } | undefined;
+  const entries: Array<{ id: string; type: "custom"; customType: string; data: unknown }> = [];
   const statuses = new Map<string, string | undefined>();
   const notes: string[] = [];
   let offered: any;
@@ -52,9 +53,10 @@ function setup(select?: (title: string, options: string[]) => string | undefined
     events: { on: () => undefined, emit: (ch: string, d: any) => void (ch === "activity:section" && (offered = d.section)) },
     registerCommand: (_name: string, c: typeof command) => void (command = c),
     registerEntryRenderer: () => undefined,
+    registerMessageRenderer: () => undefined,
     registerTool: () => undefined,
-    appendEntry: () => undefined,
-    appendEntry: () => undefined,
+    sendMessage: () => undefined,
+    appendEntry: (customType: string, data: unknown) => void entries.push({ id: `entry-${entries.length}`, type: "custom", customType, data }),
   };
   const ui = {
     setStatus: (key: string, text: string | undefined) => void statuses.set(key, text),
@@ -64,7 +66,7 @@ function setup(select?: (title: string, options: string[]) => string | undefined
     onTerminalInput: () => () => undefined,
     getEditorText: () => "",
   };
-  const ctx = { cwd: "/w", mode, isIdle: () => true, ui, sessionManager: { getBranch: () => [] } };
+  const ctx = { cwd: "/w", mode, isIdle: () => true, ui, sessionManager: { getSessionId: () => "waiting-session", getBranch: () => entries, getLeafId: () => entries.at(-1)?.id ?? null } };
   piMarimo(pi as never);
   const fire = async (name: string, event: unknown = {}) => { for (const h of handlers.get(name) ?? []) await h(event, ctx); };
   const live = () => [...statuses].filter(([k, v]) => v !== undefined && k.startsWith("marimo") && k !== "marimo-lens").sort(([a], [b]) => a.localeCompare(b)).map(([, v]) => v);

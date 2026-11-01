@@ -38,7 +38,9 @@ vi.mock("../src/core/node-io.js", () => ({
 }));
 
 const { default: piMarimo } = await import("../src/index.js");
-const { HeadlessSessions } = await import("../src/core/headless.js");
+const { HeadlessSessions, ownHeadlessSessions } = await import("../src/core/headless.js");
+const { ExecutionHost } = await import("../src/core/execution.js");
+const { ExecutionSession } = await import("../src/executions.js");
 const { EditCellService } = await import("../src/core/edit-cell.js");
 
 test("inline services acquire a writable target first, never replay a failed mutation, and dispose", async () => {
@@ -159,8 +161,10 @@ function setup(branch: unknown[] = [], mode = "tui") {
   const listeners = new Map<string, Array<(d: unknown) => void>>();
   const sent: Array<[string, any]> = [];
   const entries: Array<{ type: string; customType: string; data: any }> = [];
+  const getBranch = () => [...branch, ...entries].map((entry, index) => ({ ...(entry as object), id: (entry as { id?: string }).id ?? `entry-${index}` }));
   const statuses = new Map<string, string | undefined>();
   const commands = new Map<string, { handler: (args: string, ctx: unknown) => Promise<void> }>();
+  const tools = new Map<string, any>();
   const notes: Array<[string, string | undefined]> = [];
   const pi = {
     on: (name: string, h: (e: unknown, c: unknown) => unknown) => void handlers.set(name, [...(handlers.get(name) ?? []), h]),
@@ -173,7 +177,9 @@ function setup(branch: unknown[] = [], mode = "tui") {
     },
     registerCommand: (name: string, spec: { handler: (args: string, ctx: unknown) => Promise<void> }) => void commands.set(name, spec),
     registerEntryRenderer: () => undefined,
-    registerTool: () => undefined,
+    registerMessageRenderer: () => undefined,
+    registerTool: (tool: { name: string }) => void tools.set(tool.name, tool),
+    sendMessage: (message: unknown, options: unknown) => void sent.push(["message", { message, options }]),
     appendEntry: () => undefined,
     appendEntry: (customType: string, data: unknown) => void entries.push({ type: "custom", customType, data }),
   };
@@ -191,7 +197,7 @@ function setup(branch: unknown[] = [], mode = "tui") {
       return Promise.resolve();
     },
   };
-  const ctx = { cwd: CWD, mode, isIdle: () => true, ui, sessionManager: { getBranch: () => branch } };
+  const ctx = { cwd: CWD, mode, isIdle: () => true, ui, sessionManager: { getSessionId: () => "wiring-session", getBranch, getLeafId: () => getBranch().at(-1)?.id ?? null } };
   piMarimo(pi as never);
   const fire = async (name: string, event: unknown = {}) => {
     for (const h of handlers.get(name) ?? []) await h(event, ctx);
@@ -204,7 +210,7 @@ function setup(branch: unknown[] = [], mode = "tui") {
   };
   /** Runs `/name args` as pi would. */
   const command = (name: string, args: string) => commands.get(name)!.handler(args, ctx);
-  return { pi, fire, sent, of, widgets, customs, pillText, ui, entries, statuses, handlers, command, notes };
+  return { pi, fire, sent, of, widgets, customs, pillText, ui, entries, statuses, handlers, command, notes, tools };
 }
 
 const pair = `bash .agents/skills/marimo-pair/scripts/execute-code.sh --url ${SERVER} --file nb.py - <<'PY'\nfit()\nPY`;
@@ -231,6 +237,60 @@ async function startRun(x: ReturnType<typeof setup>) {
   x.pi.events.emit("bg:tasks", { tasks: [job("running"), serverTask] });
   await x.fire("agent_settled");
 }
+
+test("native tools register and slash commands display results without starting an agent turn", async () => {
+  const x = setup([], "rpc");
+  const answer = { content: [{ type: "text" as const, text: "native subscription" }], details: { id: "execution-1" } };
+  const watch = vi.spyOn(ExecutionSession.prototype, "watch").mockResolvedValue(answer);
+  const status = vi.spyOn(ExecutionSession.prototype, "status").mockReturnValue(answer);
+  const unsubscribe = vi.spyOn(ExecutionSession.prototype, "unsubscribe").mockReturnValue(answer);
+  try {
+    expect([...x.tools.keys()]).toEqual(expect.arrayContaining(["marimo_execute", "marimo_watch", "marimo_execution", "marimo_chart"]));
+    await x.fire("session_start");
+    await x.command("marimo", "watch nb.py");
+    expect(watch).toHaveBeenCalledWith({ notebook: "nb.py" });
+    await x.command("marimo", "executions");
+    expect(status).toHaveBeenCalledOnce();
+    await x.command("marimo", "unwatch execution-1");
+    expect(unsubscribe).toHaveBeenCalledWith("execution-1");
+    const messages = x.of("message");
+    expect(messages).toHaveLength(3);
+    expect(messages.every(item => item.message.customType === "pi-marimo-executions" && item.options.triggerTurn === false)).toBe(true);
+    await x.command("marimo", "unwatch");
+    expect(x.notes.at(-1)?.[0]).toContain("/marimo unwatch <execution id>");
+  } finally {
+    await x.fire("session_shutdown");
+    watch.mockRestore(); status.mockRestore(); unsubscribe.mockRestore();
+  }
+});
+
+test("session shutdown retains an external headless consumer required by native background work", async () => {
+  const sockets: Array<{ closed: boolean }> = [];
+  class Socket {
+    onopen: ((event: unknown) => void) | null = null;
+    onmessage: ((event: { data: unknown }) => void) | null = null;
+    onerror: ((event: unknown) => void) | null = null;
+    onclose: ((event: unknown) => void) | null = null;
+    closed = false;
+    constructor(_url: string) { sockets.push(this); queueMicrotask(() => this.onmessage?.({ data: '{"op":"kernel-ready","data":{}}' })); }
+    close() { this.closed = true; this.onclose?.({}); }
+  }
+  vi.stubGlobal("WebSocket", Socket);
+  const needed = vi.spyOn(ExecutionHost.prototype, "needsKernel").mockReturnValue(true);
+  const x = setup();
+  try {
+    await x.fire("session_start");
+    await ownHeadlessSessions().attach(SERVER, `${CWD}/nb.py`);
+    await x.fire("session_shutdown");
+    expect(needed).toHaveBeenCalledWith(SERVER);
+    expect(sockets).toHaveLength(1);
+    expect(sockets[0]!.closed).toBe(false);
+    expect(ownHeadlessSessions().onMessage).toBeUndefined();
+  } finally {
+    needed.mockRestore(); ownHeadlessSessions().closeAll(); vi.unstubAllGlobals();
+    await x.fire("session_shutdown");
+  }
+});
 
 test("a run a waking pi-bg job drives: held in herdr, reported as outside work, tasks annotated, no second notice", async () => {
   const x = setup();

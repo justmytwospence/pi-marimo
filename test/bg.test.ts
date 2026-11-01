@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 import { BgBridge, DISCONNECT_GRACE_MS } from "../src/bg.js";
-import { withWaitHint } from "../src/index.js";
+import { withExecutionHint } from "../src/index.js";
 
 function bus() {
   const sent: Array<[string, any]> = [];
@@ -111,16 +111,16 @@ describe("pi-bg: no second notice for a run a waking job drives", () => {
   });
 });
 
-describe("the bg_wait hint in the state block", () => {
+describe("native execution hints in the state block", () => {
   const block = "<marimo_notebook_state notebooks=\"1\">\nstate\n</marimo_notebook_state>";
-  test("only with pi-bg loaded and a notebook running", () => {
-    const listening = { events: { emit: (_c: string, d: any) => d?.reply?.() } } as any;
-    const silent = { events: { emit: () => {} } } as any;
-    expect(withWaitHint(block, ["marimo:fit.py"], listening)).toBe(
-      "<marimo_notebook_state notebooks=\"1\">\nstate\nTo wait for a running notebook inside your turn, call bg_wait with its id: marimo:fit.py.\n</marimo_notebook_state>",
-    );
-    expect(withWaitHint(block, ["marimo:fit.py"], silent)).toBe(block);
-    expect(withWaitHint(block, [], listening)).toBe(block);
+  test("busy notebooks recommend standalone subscriptions without probing a companion", () => {
+    const result = withExecutionHint(block, ["/w/fit.py"]);
+    expect(result).toContain("use marimo_watch with its notebook path: /w/fit.py");
+    expect(result).toContain("Read results with marimo_execution");
+    expect(result).toContain("do not poll a busy kernel with Python");
+    expect(result).toMatch(/marimo_execution[^]*<\/marimo_notebook_state>$/u);
+    expect(result).not.toContain("bg_wait");
+    expect(withExecutionHint(block, [])).toBe(block);
   });
 });
 

@@ -9,6 +9,7 @@ What you get:
 - **The notebook beside the chat.** `ctrl+'` docks a notebook view next to the conversation: an outline of sections and cells, and the selected cell's output, error and code.
 - **Real outputs in the terminal.** Tables you can page, sort, search and filter. Matplotlib, Vega-Lite and live Plotly charts on Kitty-graphics terminals. Widgets you drive with keys or the mouse.
 - **What runs, as it runs.** A spinner and elapsed time on the running cell, the queue, and errors with their tracebacks.
+- **Chat while a fit runs.** Native background supervision of the official `marimo pair execute` CLI, with completion subscriptions that resume Pi without blocking the conversation or requiring another extension.
 - **The agent knows the notebook.** Each prompt carries the notebook's current state (cells, what they define, what is stale or broken), so the agent does not have to go and look.
 - **What the agent changed.** Cells it changed since your last message are marked, with a diff.
 
@@ -232,6 +233,34 @@ Every notebook this session uses is a row under Pi's prompt:
 
 `↓` at the bottom of the prompt selects them; Enter opens the notebook, `x` twice interrupts it. A row shows `✗` after a run broke cells, until your next message. Outside the TUI (RPC, print) the same appears as footer lines under the status keys `marimo`, `marimo-2`, and so on.
 
+## Background execution and completion
+
+pi-marimo supervises the official `marimo pair execute` CLI; marimo remains responsible for Python execution and code mode. This works standalone, without pi-bg or Herdr, and requires a compatible marimo CLI (verified with 0.25.0). The marimo-pair workflow still applies: inspect `help(cm)` first, use its scratchpad for exploration, and make durable notebook changes through code mode rather than editing the `.py` file.
+
+| tool | purpose |
+|---|---|
+| `marimo_execute` | run Python through the official CLI; return a result within the foreground window or a background execution handle |
+| `marimo_watch` | subscribe to the currently observed notebook execution wave, including its queued descendants; executes no Python |
+| `marimo_execution` | list execution records, inspect one result, or unsubscribe without interrupting Python |
+
+A typical workflow is: ask Pi to start a fit, receive a subscribed execution handle, chat about something else, then receive a completion follow-up when the execution finishes. Pi queues that follow-up if it is already answering you; it does not overwrite your draft or interrupt the response.
+
+`marimo_execute` defaults to a 1000 ms foreground window (`yield_ms`, range 0–1000) and subscribes by default. Short results return inline without a redundant wake-up. Long execution stays owned by pi-marimo after the tool returns or its wait is interrupted. `subscribe:false` disables continuation for that execution even in `all` mode. A busy kernel rejects additional native Python requests: use `marimo_watch` or the status tool instead of queueing an inspection behind a fit. Notebook selection must be unambiguous; the optional `url` distinguishes the same file on different servers.
+
+| `completion.mode` | behavior |
+|---|---|
+| `subscribed` (default) | resume Pi for subscribed native executions and explicit watches; ordinary notebook exploration stays quiet |
+| `all` | additionally resume Pi after observed execution waves in notebooks this session uses, including runs started in the notebook UI |
+| `off` | retain execution tracking and results, but never automatically continue the agent |
+
+Use `/marimo watch [file]` to subscribe, `/marimo executions` to inspect records, and `/marimo unwatch <id>` to stop watching. Sending chat messages, unsubscribing, dismissing a notebook row, and changing completion mode do not interrupt Python. These controls prevent future notifications; a completion already accepted into Pi's follow-up queue is not withdrawn. The existing two-press interrupt controls remain separate.
+
+Native execution clients and subscriptions survive `/reload` and switching away from the originating Pi session. Results belong to their original session and branch; they wait there rather than waking another conversation. A full Pi process exit is different: closing the official execution client can interrupt scratch execution. This package is not a durable execution daemon, and after a restart it reports unconfirmed work as `unknown`, never silently rerunning it.
+
+Passive watches require a real completion boundary, not merely a briefly idle cell list. Disconnects, session replacement, and missed completion events can make an outcome unknown; inspect the notebook before continuing in that case. Native CLI success confirms the Python request, not that every notebook cell it triggered succeeded; newly observed notebook errors are reported separately. Output tails are bounded and indicate truncation.
+
+The CLI command is selected from `execution.command`, then a Pi-owned server's remembered command and project directory, then `server.command` with its normal uv/PATH fallback. Source goes on stdin; authentication stays in the inherited environment. Unsupported CLI capabilities fail before submitting code; pi-marimo neither installs marimo nor falls back to a private execution API.
+
 ## What the agent sees
 
 When you send a prompt, pi-marimo places the state of the notebooks this session uses right after it, for every model request of that turn:
@@ -255,6 +284,9 @@ The block is never stored in the session and stays in the same place during the 
 | `/marimo open` | open a notebook that waits in no browser, in the browser |
 | `/marimo auto`, `/marimo off` | follow every notebook under the working directory (default); follow none |
 | `/marimo show` | print what the agent sees |
+| `/marimo watch [file]` | subscribe to the notebook's currently observed execution wave |
+| `/marimo executions` | list this session/branch's execution records |
+| `/marimo unwatch <id>` | unsubscribe without interrupting Python |
 | `/marimo lens` | open and recently addressed Lens selections |
 | `/marimo chart <cell>`, `/marimo inspect` | a cell's chart in the chat; drive the newest one |
 
@@ -277,7 +309,9 @@ A server Pi starts keeps running across `/reload` and stops when Pi exits, with 
       "options": { "tabstop": 4, "shiftwidth": 4, "expandtab": true, "ignorecase": true, "smartcase": true, "scrolloff": 3 }
     }
   },
-  "server": { "command": [] }
+  "server": { "command": [] },
+  "execution": { "command": [] },
+  "completion": { "mode": "subscribed" }
 }
 ```
 
@@ -296,6 +330,8 @@ A server Pi starts keeps running across `/reload` and stops when Pi exits, with 
 | `view.editor.command` | `"nvim"` | Neovim executable as one nonempty string, not a shell command |
 | `view.editor.options` | see above | native allowlist only: `tabstop` and `shiftwidth` integers 1–16, `scrolloff` 0–20, and booleans `expandtab`, `ignorecase`, `smartcase` |
 | `server.command` | `[]` | how Pi starts marimo; empty means `uv run marimo` in a uv project, else `marimo` |
+| `execution.command` | `[]` | argv prefix for official CLI execution; empty reuses a Pi-owned server's command/directory, then the server-command fallback |
+| `completion.mode` | `"subscribed"` | `"subscribed"`, `"all"` or `"off"`; changed on session start/reload, without stopping computation |
 
 Live line-number, diagnostics and output toggles last for the Pi session and do not write the config file. `view.outputs` selects section view; it does not control output visibility. Invalid semantic settings use defaults and generate an aggregated warning; wrong-type values ignored during config merging remain silent.
 
@@ -311,7 +347,7 @@ Live line-number, diagnostics and output toggles last for the Pi session and do 
 
 ## Integrations
 
-Each is optional and talks over Pi's event bus. Without the other package nothing changes.
+Each is optional and talks over Pi's event bus. Native execution supervision, completion subscriptions, notebook rows and agent continuation work without any of these packages.
 
 - [pi-bg](https://pi-plugins.vercel.app/plugins/pi-bg/): notebooks are listed in `/tasks`, and `bg_wait` can wait on `marimo:<path>` until the notebook's cells finish. A marimo server pi-bg runs is shown with its notebook's state, and stopping a marimo-pair job interrupts the cells it started. Independent services such as sleep prevention remain separate tasks; their count is not duplicated notebook work.
 - [pi-subagents](https://pi-plugins.vercel.app/plugins/pi-subagents/): the notebook rows join its panel under the prompt.

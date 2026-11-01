@@ -54,6 +54,8 @@ export interface SourceActions {
   drivers?(f: Followed): string[];
   /** The pi-bg servers standing for this notebook. */
   servers?(f: Followed): string[];
+  /** Native execution activity supplements document-cell state without requiring a companion package. */
+  executionActivity?(f: Followed): { running: boolean; startedAt?: number; detail: string[]; failed?: boolean; endedAt?: number; summary?: string };
   /** The followed notebooks this session uses, which the rows under the prompt list (default: all followed). */
   engaged?(): Followed[];
   /** Opens a URL in the browser. */
@@ -110,11 +112,11 @@ export class NotebookSource {
       },
       canStop: (key) => {
         const f = this.actions.followed().find((o) => notebookKey(o) === key);
-        return !!f && f.connection === "connected" && busy(f);
+        return !!f && f.connection === "connected" && this.busy(f);
       },
       stop: (key) => {
         const f = this.actions.followed().find((o) => notebookKey(o) === key);
-        if (f && f.connection === "connected" && busy(f)) return this.actions.interrupt(f);
+        if (f && f.connection === "connected" && this.busy(f)) return this.actions.interrupt(f);
       },
       dismiss: (key) => {
         this.dismissed.add(key);
@@ -148,23 +150,35 @@ export class NotebookSource {
     this.actions.changed();
   }
 
+  private busy(f: Followed): boolean {
+    return busy(f) || this.actions.executionActivity?.(f).running === true;
+  }
+
   /** Tracks each notebook's runs from the latest state; tells the hosts when anything shown changed. */
   update(followed: Followed[], now = Date.now()): void {
     const paths = new Set(followed.map(notebookKey));
     for (const f of followed) {
       const path = notebookKey(f);
       const run = this.runs.get(path);
-      if (busy(f)) {
+      const native = this.actions.executionActivity?.(f);
+      if (this.busy(f)) {
         if (!run) {
-          this.runs.set(path, { since: now, startErrors: new Set(f.notebook.errors().map((c) => c.id)) });
+          this.runs.set(path, { since: native?.startedAt ?? now, startErrors: new Set(f.notebook.errors().map((c) => c.id)) });
           this.dismissed.delete(path);
         }
         continue;
       }
+      // Even an inline request can fail before the next row render observes it running.
+      const previous = this.ended.get(path);
+      if (native?.endedAt !== undefined && native.summary && (native.endedAt > (previous?.at ?? -Infinity)
+        || (native.endedAt === previous?.at && (native.summary !== previous.summary || (native.failed === true) !== previous.failed)))) {
+        this.ended.set(path, { at: native.endedAt, ms: Math.max(0, native.endedAt - (native.startedAt ?? native.endedAt)), failed: native.failed === true, summary: native.summary });
+      }
       if (!run || f.connection !== "connected") continue;
       this.runs.delete(path);
       const broke = f.notebook.errors().filter((c) => !run.startErrors.has(c.id)).length;
-      this.ended.set(path, { at: now, ms: now - run.since, failed: broke > 0, summary: `ran ${elapsed(now - run.since)}${broke ? ` · ${broke} error${broke === 1 ? "" : "s"}` : ""}` });
+      const at = native?.endedAt ?? now;
+      this.ended.set(path, { at, ms: Math.max(0, at - run.since), failed: native?.failed === true || broke > 0, summary: native?.summary ?? `ran ${elapsed(now - run.since)}${broke ? ` · ${broke} error${broke === 1 ? "" : "s"}` : ""}` });
     }
     for (const p of [...this.runs.keys(), ...this.ended.keys()]) if (!paths.has(p)) { this.runs.delete(p); this.ended.delete(p); }
     const open = new Set<string>();
@@ -182,7 +196,7 @@ export class NotebookSource {
       const f = followed.find((o) => notebookKey(o) === path);
       if (!open.has(key) && (!f || f.connection === "connected")) this.lensSince.delete(key);
     }
-    const key = JSON.stringify([followed.map((f) => [notebookKey(f), f.connection, busy(f), kernelStateParts(f), lensParts(f)]), this.pill(now)]);
+    const key = JSON.stringify([followed.map((f) => [notebookKey(f), f.connection, this.busy(f), kernelStateParts(f), lensParts(f), this.actions.executionActivity?.(f)]), this.pill(now)]);
     if (key !== this.lastKey) {
       this.lastKey = key;
       this.actions.changed();
@@ -206,13 +220,15 @@ export class NotebookSource {
       const path = notebookKey(f);
       const run = this.runs.get(path);
       const ended = this.ended.get(path);
+      const native = this.actions.executionActivity?.(f);
+      const state = kernelStateParts(f).filter(part => part !== "idle" || !native?.running);
       const status: ActivityEntry["status"] = run ? "running" : this.alerting(path) ? "failed" : "done";
       const stats = run ? elapsed(now - run.since) : ended ? `${ended.summary} · ${elapsed(now - ended.at)} ago` : f.connection === "connected" ? "idle" : f.connection;
       return {
         key: path,
         stopToken: interruptKey(f),
         label: basename(f.attachment.path),
-        detail: [...kernelStateParts(f), ...lensParts(f), ...(run ? (this.actions.drivers?.(f) ?? []).map((name) => `bg ${name}`) : []), ...(this.actions.servers?.(f) ?? []).map((name) => `server ${name}`)].join(" · "),
+        detail: [...state, ...(native?.detail ?? []), ...lensParts(f), ...(run ? (this.actions.drivers?.(f) ?? []).map((name) => `bg ${name}`) : []), ...(this.actions.servers?.(f) ?? []).map((name) => `server ${name}`)].join(" · "),
         status,
         stats,
         startedAt: run?.since ?? (ended ? ended.at - ended.ms : f.notebook.lastActivity),
@@ -234,14 +250,15 @@ export class NotebookSource {
       const stats = e.stats === "idle" || e.stats === f.connection ? "" : e.stats;
       const sp = statusParts(f.notebook, f.attachment, f.connection, now);
       const ended = this.ended.get(notebookKey(f));
-      const extras = [...lensParts(f), ...(this.runs.has(notebookKey(f)) ? (this.actions.drivers?.(f) ?? []).map((n) => `bg ${n}`) : []), ...(this.actions.servers?.(f) ?? []).map((n) => `server ${n}`)];
+      const native = this.actions.executionActivity?.(f);
+      const extras = [...(native?.detail ?? []), ...lensParts(f), ...(this.runs.has(notebookKey(f)) ? (this.actions.drivers?.(f) ?? []).map((n) => `bg ${n}`) : []), ...(this.actions.servers?.(f) ?? []).map((n) => `server ${n}`)];
       const line = footerLine(sp.notebook, where, (th) => [
         sp.connection !== "connected" ? th.fg("warning", sp.connection) : "",
         sp.running ? `${th.fg("warning", "running")} ${sp.running.section || `cell ${sp.running.cell}`}${sp.running.elapsed ? th.fg("dim", ` ${sp.running.elapsed}`) : ""}` : "",
         sp.queued ? th.fg("muted", `${sp.queued} queued`) : "",
         sp.errors ? `${th.fg("error", `${sp.errors} error${sp.errors === 1 ? "" : "s"}`)}${sp.firstError ? `${th.fg("dim", ":")} ${th.fg("muted", sp.firstError)}${sp.errors > 1 ? th.fg("muted", ` +${sp.errors - 1}`) : ""}` : ""}` : "",
         ...extras.map((x) => th.fg("dim", x)),
-        ...(!sp.running && ended ? [th.fg("dim", `${ended.summary} · ${elapsed(now - ended.at)} ago`)] : []),
+        ...(!sp.running && !native?.running && ended ? [th.fg("dim", `${ended.summary} · ${elapsed(now - ended.at)} ago`)] : []),
       ]);
       return { path: f.attachment.path, entry: { ...e, detail: [where, e.detail].filter(Boolean).join(" · "), stats, line } };
     });
