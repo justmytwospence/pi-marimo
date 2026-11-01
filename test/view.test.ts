@@ -2049,7 +2049,7 @@ test("STEP6 package help cannot refresh, mutate, confirm, or change the selected
     for (const key of ["j", "G", "\t", "a", "u", "x", "r", "\r", "P"]) v.handleInput(key);
     for (const spy of [reconcile, mutate, dependencyTree, confirm]) expect(spy).not.toHaveBeenCalled();
     expect(v.snapshot().help).toBeDefined();
-    v.handleInput("?"); expect(v.snapshot()).toEqual(before);
+    v.handleInput("?"); expect(v.snapshot()).toMatchObject(before);
   } finally { v.dispose(); }
 });
 
@@ -2193,7 +2193,7 @@ test.each([
     moved = make(f, { initial: v.snapshot() });
     expect(screen(moved)).toContain("Keyboard shortcuts");
     moved.handleInput("?"); screen(moved);
-    expect(moved.snapshot()).toEqual(before);
+    expect(moved.snapshot()).toMatchObject(before);
   } finally { v.dispose(); moved?.dispose(); }
 });
 
@@ -2228,6 +2228,27 @@ test("help navigation moves categories in a fitted tall pane and scrolls in a sh
   } finally { v.dispose(); }
 });
 
+test("help reopens at its last category and scroll after closing or moving the view", () => {
+  const f = followed();
+  const actions = { followed: () => [f], interrupt: async () => {}, openInBrowser: () => {} };
+  const v = new NotebookView(shortTui() as any, theme, notebookKey(f), actions, () => {});
+  let moved: NotebookView | undefined;
+  try {
+    v.render(46); v.handleInput("?"); v.render(46);
+    v.handleInput("\t"); v.render(46);
+    v.handleInput("j");
+    expect(v.snapshot().help).toMatchObject({ group: "Display", scroll: 1 });
+    v.handleInput("?");
+    expect(v.snapshot()).toMatchObject({ lastHelp: { group: "Display", query: "", typing: false, scroll: 1 } });
+    v.handleInput("v"); v.handleInput("?"); v.render(46);
+    expect(v.snapshot().help).toMatchObject({ group: "Display", scroll: 1 });
+    v.handleInput("?");
+    moved = new NotebookView(shortTui() as any, theme, notebookKey(f), { ...actions, initial: v.snapshot() }, () => {});
+    moved.render(46); moved.handleInput("?"); moved.render(46);
+    expect(moved.snapshot().help).toMatchObject({ group: "Display", scroll: 1 });
+  } finally { v.dispose(); moved?.dispose(); }
+});
+
 test("help rail clicks select categories without changing the notebook; closing help exposes Variables and Packages", () => {
   const f = followed();
   const tui = { requestRender: vi.fn(), terminal: { rows: 90 } };
@@ -2253,7 +2274,7 @@ test("help rail clicks select categories without changing the notebook; closing 
     expect(tui.requestRender).toHaveBeenCalled();
     expect(v.snapshot().cursor).toBe(before.cursor);
     v.handleInput("?");
-    expect(v.snapshot()).toEqual(before);
+    expect(v.snapshot()).toMatchObject(before);
     v.handleInput("v"); expect(v.snapshot().mode).toBe("variables");
     v.handleInput("P"); expect(v.snapshot().mode).toBe("packages");
   } finally { v.dispose(); }
@@ -2315,7 +2336,7 @@ test("STEP6 ? is literal while searching help; typing state transfers and ordina
     }
     expect(moved.snapshot().cursor).toBe(before.cursor);
     moved.handleInput("?");
-    expect(moved.snapshot()).toEqual(before);
+    expect(moved.snapshot()).toMatchObject(before);
   } finally { v.dispose(); moved?.dispose(); }
 });
 
@@ -2329,7 +2350,7 @@ test("STEP6 help blocks notebook mutations, navigation and mouse activation", ()
     for (const type of ["press", "click", "drag", "release"]) v.handleMouse(helpMouse(type, { clickCount: 2 }));
     expect(v.snapshot().help).toBeDefined();
     for (const spy of [run, interrupt, stopServers, openInBrowser, ask, dock]) expect(spy).not.toHaveBeenCalled();
-    v.handleInput("?"); expect(v.snapshot()).toEqual(before);
+    v.handleInput("?"); expect(v.snapshot()).toMatchObject(before);
   } finally { v.dispose(); }
 });
 
@@ -2344,7 +2365,7 @@ test.each(["t", "w"])("STEP6 %s help prevents table/widget mutations and navigat
     for (const data of ["j", "l", " ", "s", "S", "]", "+", "x", "r", "\r"]) v.handleInput(data);
     v.handleMouse(helpMouse("click")); v.handleMouse(helpMouse("wheel", { wheelDelta: 1 }));
     expect(call).not.toHaveBeenCalled(); expect(setWidget).not.toHaveBeenCalled(); expect(setTableSelection).not.toHaveBeenCalled();
-    v.handleInput("?"); expect(v.snapshot()).toEqual(before);
+    v.handleInput("?"); expect(v.snapshot()).toMatchObject(before);
   } finally { v.dispose(); }
 });
 

@@ -52,10 +52,32 @@ test.each([
   ["table", "Tables"], ["widget", "Widgets"], ["chart", "Charts"],
   ["cells", "Navigation"], ["unknown", "Navigation"],
 ])("opening %s selects %s and resets transient state", (mode, group) => {
-  const help = new Help({ group: "Execution", query: "old", typing: true, scroll: 25 });
+  const help = new Help();
+  Object.assign(help.state, { group: "Execution", query: "old", typing: true, scroll: 25 });
   help.open(mode);
   expect(help.state).toEqual({ group, query: "", typing: false, scroll: 0 });
   expect(help.render(46, 12, theme)[1]).toContain(group);
+});
+
+test("reopening help remembers its category and scroll, but not transient search", () => {
+  const help = new Help();
+  expect(help.lastPage()).toBeUndefined();
+  help.open("cells");
+  help.render(46, 12, theme);
+  help.handleInput("\t", 1);
+  help.render(46, 12, theme);
+  help.handleInput("j", 1);
+  expect(help.state).toMatchObject({ group: "Display", scroll: 1 });
+  expect(help.lastPage()).toEqual({ group: "Display", query: "", typing: false, scroll: 1 });
+  help.open("packages");
+  expect(help.state).toMatchObject({ group: "Display", scroll: 1 });
+  help.render(46, 12, theme);
+  enterSearch(help, "Description");
+  help.render(46, 12, theme);
+  help.handleInput("j", 1);
+  help.open("editor");
+  expect(help.state).toEqual({ group: "Display", query: "", typing: false, scroll: 1 });
+  expect(help.render(46, 12, theme).at(-1)).toContain("2–");
 });
 
 test("snapshot restoration copies state rather than mutating the saved snapshot", () => {

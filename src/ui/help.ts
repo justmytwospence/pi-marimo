@@ -65,16 +65,30 @@ export class Help {
   private page = 1;
   private lastViewport?: { width: number; height: number; theme: FrameTheme };
   private rail?: { start: number; top: number; page: number };
+  private opened: boolean;
+  private categoryScroll: number;
 
   constructor(state?: HelpState) {
+    this.opened = !!state;
+    this.categoryScroll = state?.scroll ?? 0;
     this.state = state ? { ...state } : { group: "Navigation", query: "", typing: false, scroll: 0 };
     if (!GROUPS.some((group) => group === this.state.group)) this.state.group = "Navigation";
   }
 
   open(mode: string): void {
-    Object.assign(this.state, { group: CONTEXT[mode] ?? "Navigation", query: "", typing: false, scroll: 0 });
+    if (!this.opened) this.state.group = CONTEXT[mode] ?? "Navigation";
+    if (!this.opened) this.state.scroll = 0;
+    else if (this.state.query || this.state.typing) this.state.scroll = this.categoryScroll;
+    this.state.query = "";
+    this.state.typing = false;
+    this.opened = true;
     this.maxScroll = Number.MAX_SAFE_INTEGER;
     this.rail = undefined;
+  }
+
+  /** Keep the last category and its position when the view moves while help is closed. */
+  lastPage(): HelpState | undefined {
+    return this.opened ? { group: this.state.group, query: "", typing: false, scroll: this.state.query || this.state.typing ? this.categoryScroll : this.state.scroll } : undefined;
   }
 
   /** Positive deltas move down; render owns the actual viewport's bounds. */
@@ -115,7 +129,7 @@ export class Help {
       return true;
     }
     if (command?.id === "help-close") return false;
-    if (command?.id === "help-search") { s.typing = true; return true; }
+    if (command?.id === "help-search") { if (!s.query && !s.typing) this.categoryScroll = s.scroll; s.typing = true; return true; }
     if (command?.id === "help-top") s.scroll = 0;
     else if (command?.id === "help-bottom") s.scroll = this.maxScroll;
     else if (command?.id === "help-down" || command?.id === "help-up") {
@@ -201,6 +215,7 @@ export class Help {
     this.state.group = group;
     this.state.query = "";
     this.state.typing = false;
+    this.categoryScroll = 0;
     this.resetScroll();
     // Recompute the next category's bounds before another key or click arrives; TUI paints asynchronously.
     if (this.lastViewport) this.render(this.lastViewport.width, this.lastViewport.height, this.lastViewport.theme);

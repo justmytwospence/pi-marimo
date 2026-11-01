@@ -109,6 +109,7 @@ export interface ViewState {
   preferences?: ViewPreferences;
   timing?: boolean;
   help?: HelpState;
+  lastHelp?: HelpState;
   message?: MessageState;
   note?: string;
   table?: { cell: string; objectId: string };
@@ -352,6 +353,7 @@ export class NotebookView implements Component, Focusable {
   }
 
   snapshot(): ViewState {
+    const lastHelp = this.help ? undefined : this.helpView.lastPage();
     return {
       ...(this.cursor !== undefined ? { cursor: this.cursor } : {}),
       follow: this.follow,
@@ -379,7 +381,7 @@ export class NotebookView implements Component, Focusable {
       sectionCodeFolded: [...this.sectionCodeFolded],
       preferences: this.preferences.snapshot(),
       timing: this.timing,
-      ...(this.help ? { help: { ...this.helpView.state } } : {}),
+      ...(this.help ? { help: { ...this.helpView.state } } : lastHelp ? { lastHelp } : {}),
       ...(this.messageView ? { message: { ...this.messageView.state } } : {}),
       ...(this.note ? { note: this.note } : {}),
       ...(this.table ? { table: { ...this.table } } : {}),
@@ -394,7 +396,7 @@ export class NotebookView implements Component, Focusable {
     this.messageView = s.message ? new MessageView(s.message) : undefined;
     this.note = s.note;
     this.help = !!s.help;
-    this.helpView = new Help(s.help);
+    this.helpView = new Help(s.help ?? s.lastHelp);
     this.table = s.table ? { ...s.table } : undefined;
     this.widget = s.widget ? { ...s.widget } : undefined;
     this.cursor = s.cursor;

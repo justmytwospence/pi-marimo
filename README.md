@@ -82,7 +82,7 @@ From 100 columns the outline and detail sit side by side. Narrower, as when dock
 | `ctrl+'` | dock or close |
 | Esc | back to the chat |
 
-The `?` cheat sheet shows all categories. On a wide view, click a category in its left rail; Tab/Shift+Tab move between categories at any width. When every command in the category fits, `j`/`k` and the arrows also move between categories; when it overflows, they scroll its commands. To open the actual Variables or Packages view, close help with `?` or Esc, then press `v` or capital `P` (Shift+P) in the notebook.
+The `?` cheat sheet shows all categories. On a wide view, click a category in its left rail; Tab/Shift+Tab move between categories at any width. When every command in the category fits, `j`/`k` and the arrows also move between categories; when it overflows, they scroll its commands. Reopening help returns to the last category and scroll position; a search is cleared. To open the actual Variables or Packages view, close help with `?` or Esc, then press `v` or capital `P` (Shift+P) in the notebook.
 
 <details>
 <summary>Every key</summary>
