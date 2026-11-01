@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 import { visibleWidth } from "@earendil-works/pi-tui";
-import { COMMANDS, GROUPS, commandFor, commandToken, footerTokens, type CommandMode } from "../src/ui/keys.js";
+import { COMMANDS, GROUPS, commandFor, commandToken, footerTokens, paletteCommands, paletteInput, type CommandMode } from "../src/ui/keys.js";
 import { helpLines, Help, formatHelpKey } from "../src/ui/help.js";
 
 const theme = { fg: (_: string, text: string) => text, bold: (text: string) => text };
@@ -97,7 +97,7 @@ for (const width of [46, 80, 100, 120, 180]) describe(`width ${width}`, () => {
       expect(visibleWidth(footer)).toBeLessThanOrEqual(width);
       expect(footer.startsWith(commandToken(command.id))).toBe(true);
       expect(footer).not.toMatch(/…|\.\.\./u);
-      expect(footer.split(" · ").every(token => [editor ? "f1 help" : "? help", commandToken(command.id), ...(editor ? [] : ["123/456"])].includes(token))).toBe(true);
+      expect(footer.split(" · ").every(token => [editor ? "f1 help" : "? help", commandToken(command.id), ...(editor ? [] : ["123/456", "ctrl+p command palette"])].includes(token))).toBe(true);
     }
   });
   test("every command is searchable and reaches the viewport", () => {
@@ -115,6 +115,33 @@ for (const width of [46, 80, 100, 120, 180]) describe(`width ${width}`, () => {
       for (const key of command.keys) expect(compact, command.id).toContain(formatHelpKey(key).replace(/\s/gu, ""));
     }
   });
+});
+
+test("Ctrl+P belongs to notebook reading modes, never the editor or help", () => {
+  for (const mode of ["notebook", "variables", "packages", "table", "widget", "chart"] as const) {
+    expect(commandFor(mode, "\x10")?.id).toBe("palette");
+    expect(commandFor(mode, "\x1b[112;5:3u")).toBeUndefined(); // Kitty key release
+  }
+  for (const mode of ["editor", "help", "message"] as const) expect(commandFor(mode, "\x10")).toBeUndefined();
+});
+
+test("palette exposes only the current mode's safe registry commands and every one round-trips", () => {
+  for (const mode of modes) {
+    const offered = paletteCommands(mode);
+    for (const command of offered) {
+      expect(command.modes).toContain(mode);
+      const input = paletteInput(command, mode);
+      expect(input, `${mode}: ${command.id}`).toBeDefined();
+      expect(commandFor(mode, input!)?.id).toBe(command.id);
+    }
+    expect(offered.map(command => command.id)).not.toContain("palette");
+  }
+  expect(paletteCommands("notebook").map(command => command.id)).toEqual(expect.arrayContaining(["run", "run-all", "run-stale", "interrupt", "stop", "variables", "packages"]));
+  expect(paletteCommands("packages").map(command => command.id)).toEqual(expect.arrayContaining(["pkg-add", "pkg-upgrade", "pkg-remove"]));
+  expect(paletteCommands("table").map(command => command.id)).not.toContain("table-csv");
+  expect(paletteCommands("widget").map(command => command.id)).not.toContain("widget-inc");
+  expect(paletteCommands("chart").map(command => command.id)).not.toContain("chart-zoom-in");
+  expect(paletteInput(COMMANDS.find(c => c.id === "table-csv")!, "notebook")).toBeUndefined();
 });
 
 test.each([
@@ -137,7 +164,7 @@ test.each([
 test("footer prioritizes whole action, help, location, and optional display hints", () => {
   const preferences = { diagnostics: "all" as const, showOutput: true, lineNumbers: false };
   const cell = { mode: "notebook" as const, position: "1/2", section: false, preferences };
-  expect(footerTokens(100, "edit", cell)).toBe("b edit source · ? help · O cell · 1/2 · ! diagnostics · \\ output · # lines");
+  expect(footerTokens(100, "edit", cell)).toBe("b edit source · ? help · O cell · 1/2 · ! diagnostics · \\ output · # lines · ctrl+p command palette");
   expect(footerTokens(100, "edit", { ...cell, section: true })).toContain("O section · 1/2");
   expect(footerTokens(29, "edit", cell)).toBe("b edit source · ? help · 1/2");
   expect(footerTokens(1, "edit", cell)).toBe("");
@@ -151,7 +178,7 @@ test("footer prioritizes whole action, help, location, and optional display hint
 test("nondefault visibility outranks location without duplicating its toggle", () => {
   const preferences = { diagnostics: "errors" as const, showOutput: false, lineNumbers: false };
   const cell = { mode: "notebook" as const, position: "2/12", section: false, preferences };
-  expect(footerTokens(120, "run", cell)).toBe("r run cell · ? help · ! errors · \\ output off · O cell · 2/12 · # lines");
+  expect(footerTokens(120, "run", cell)).toBe("r run cell · ? help · ! errors · \\ output off · O cell · 2/12 · # lines · ctrl+p command palette");
   for (const [diagnostics, label] of [["warnings", "! warnings"], ["none", "! hidden"]] as const) {
     expect(footerTokens(80, "run", { ...cell, preferences: { ...preferences, diagnostics } })).toContain(label);
   }
@@ -161,15 +188,15 @@ test("nondefault visibility outranks location without duplicating its toggle", (
 test("mode permissions and width fitting do not advertise unavailable controls", () => {
   const preferences = { diagnostics: "all" as const, showOutput: true, lineNumbers: false };
   expect(footerTokens(120, "editor-f2", { mode: "editor", preferences })).toBe("f2 save · f1 help");
-  expect(footerTokens(120, "table-row", { mode: "table", preferences })).toBe("enter row detail · ? help · ! diagnostics · \\ output");
-  expect(footerTokens(120, "table-row", { mode: "table", preferences: { ...preferences, diagnostics: "none", showOutput: false } })).toBe("enter row detail · ? help · ! hidden · \\ output off");
+  expect(footerTokens(120, "table-row", { mode: "table", preferences })).toBe("enter row detail · ? help · ! diagnostics · \\ output · ctrl+p command palette");
+  expect(footerTokens(120, "table-row", { mode: "table", preferences: { ...preferences, diagnostics: "none", showOutput: false } })).toBe("enter row detail · ? help · ! hidden · \\ output off · ctrl+p command palette");
   expect(footerTokens(120, "help", { mode: "help", preferences })).toBe("? help · ? help");
   expect(footerTokens(120, "message-close", { mode: "message", preferences })).toBe("escape back · ? help");
   for (const width of [0, 1, 6, 22, 29, 30, 46, 80, 100, 120, 180]) {
     const value = footerTokens(width, "edit", { mode: "notebook", section: false, position: "123/456", preferences });
     expect(visibleWidth(value)).toBeLessThanOrEqual(width);
     expect(value).not.toMatch(/…|\.\.\./u);
-    expect(value.split(" · ").every(token => ["b edit source", "? help", "O cell", "123/456", "! diagnostics", "\\ output", "# lines", ""].includes(token))).toBe(true);
+    expect(value.split(" · ").every(token => ["b edit source", "? help", "O cell", "123/456", "! diagnostics", "\\ output", "# lines", "ctrl+p command palette", ""].includes(token))).toBe(true);
     const exact = "b edit source · ? help";
     if (width === visibleWidth(exact)) expect(value).toContain(exact);
   }

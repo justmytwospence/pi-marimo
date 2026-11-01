@@ -2034,6 +2034,146 @@ test("STEP3 T shows exact local timezone start/end and duration without inventin
   } finally { v.dispose(); }
 });
 
+// --- Notebook command palette: registry actions through the existing input and safety gates ---
+const paletteSearch = (v: NotebookView, query: string) => {
+  v.handleInput("\x10");
+  for (const ch of query) v.handleInput(ch);
+};
+
+test("palette fuzzy search holds notebook focus and runs only the chosen command", () => {
+  const f = dataflow(); const run = vi.fn(async () => {}); const v = make(f, { run });
+  try {
+    screen(v); const before = v.snapshot();
+    paletteSearch(v, "run cell");
+    expect(v[INPUT_CONTEXT]()).toBe("filter");
+    expect(v.snapshot().palette?.query).toBe("run cell");
+    expect(screen(v)).toContain("Command palette");
+    expect(v.snapshot().cursor).toBe(before.cursor);
+    expect(v.render(100).join("\n")).toContain("› run cell");
+    expect(run).not.toHaveBeenCalled();
+    v.handleInput("\r");
+    expect(v.snapshot().palette).toBeUndefined();
+    expect(run).toHaveBeenCalledExactlyOnceWith(f, [{ id: "a", code: "x = 1" }]);
+    paletteSearch(v, "no-matches-unique");
+    v.handleInput("\r");
+    expect(v.snapshot().palette).toBeDefined();
+    expect(run).toHaveBeenCalledTimes(1);
+    v.handleInput("\x1b");
+    expect(v.snapshot().palette).toBeUndefined();
+  } finally { v.dispose(); }
+});
+
+test("palette selection keeps two-press run-all, stop and interrupt gates, and F8 suspends the palette", () => {
+  const f = dataflow(); const run = vi.fn(async () => {}), interrupt = vi.fn(async () => {}), stopServers = vi.fn(() => 1);
+  const v = make(f, { run, interrupt, stopServers, servers: () => ["marimo nb.py"] });
+  try {
+    screen(v);
+    paletteSearch(v, "run all"); v.handleInput("\r");
+    expect(run).not.toHaveBeenCalled();
+    expect(screen(v)).toContain("A again to run all cells");
+    paletteSearch(v, "stop server"); v.handleInput("\r");
+    expect(stopServers).not.toHaveBeenCalled();
+    expect(screen(v)).toContain("S again to stop the server");
+    paletteSearch(v, "variables");
+    v.handleInput("\x1b[19~");
+    expect(screen(v)).toContain("message");
+    v.handleInput("\x1b");
+    expect(v.snapshot().palette?.query).toBe("variables");
+    v.handleInput("\x1b");
+    expect(v.snapshot().palette).toBeUndefined();
+    f.notebook.apply("cell-op", { cell_id: "a", status: "running" });
+    paletteSearch(v, "interrupt"); v.handleInput("\r");
+    expect(interrupt).not.toHaveBeenCalled();
+    expect(screen(v)).toContain("x again to interrupt");
+    v.handleInput("x");
+    expect(interrupt).toHaveBeenCalledExactlyOnceWith(f);
+  } finally { v.dispose(); }
+});
+
+test("palette works in Variables and Packages, while package mutations still request confirmation", async () => {
+  const f = dataflow();
+  const fingerprint = { filename: "/w/nb.py", executable: "/env/python", pid: 42, manager: "uv", version: "0.25.0", capabilities: {} };
+  const question: PackageConfirmation = { action: "remove", spec: "numpy", fingerprint, warning: "Shared environment", defaultChoice: "cancel" };
+  const confirm = vi.fn(async () => "Cancel");
+  const mutate = vi.fn(async (_action, _spec, approve) => ({ status: await approve(question) ? "succeeded" : "cancelled" }));
+  const client = { reconcile: async () => ({ fingerprint, packages: [{ name: "numpy", version: "1" }] }), mutate } as unknown as PackageClient;
+  const v = make(f, { packages: async () => client, confirm });
+  try {
+    screen(v); v.handleInput("v"); screen(v);
+    paletteSearch(v, "sort");
+    expect(v.snapshot().palette?.mode).toBe("variables");
+    v.handleInput("\r");
+    expect(v.snapshot().varSort).not.toBe("name");
+    v.handleInput("P"); await editorReady(); await editorReady(); screen(v);
+    paletteSearch(v, "remove");
+    expect(v.snapshot().palette?.mode).toBe("packages");
+    expect(mutate).not.toHaveBeenCalled();
+    v.handleInput("\r"); await editorReady(); await editorReady();
+    expect(mutate).toHaveBeenCalledExactlyOnceWith("remove", "numpy", expect.any(Function));
+    expect(confirm).toHaveBeenCalledWith(expect.stringContaining("/env/python"), ["Cancel", "Confirm"]);
+  } finally { v.dispose(); }
+});
+
+test("table palette exposes sorting but not unsupervised CSV export", () => {
+  const f = nbWith([{ id: "a", code: "df" }]);
+  f.notebook.apply("cell-op", { cell_id: "a", output: { channel: "output", mimetype: "text/html", data: tableHtml() } });
+  const call = vi.fn(async () => ({}));
+  const v = make(f, { table: { call, file: async () => "[]" } });
+  try {
+    v.render(100); v.handleInput("t"); v.render(100);
+    paletteSearch(v, "sort column");
+    expect(v.snapshot().palette?.mode).toBe("table");
+    expect(v.render(100).join("\n")).toContain("› sort column");
+    v.handleInput("\r");
+    expect(v.snapshot().palette).toBeUndefined();
+    expect(v.snapshot().table).toBeDefined();
+    expect(call).toHaveBeenCalled();
+  } finally { v.dispose(); }
+});
+
+test("palette does not steal literal filters, Neovim, or the docked prompt", async () => {
+  const f = dataflow(); const fake = fakeEditors(); const v = make(f, { editors: fake.editors, ask: vi.fn() });
+  try {
+    screen(v);
+    v.handleInput("/"); v.handleInput("\x10");
+    expect(v.snapshot().palette).toBeUndefined();
+    v.handleInput("\x1b");
+    v.handleInput("a"); v.handleInput("\x10");
+    expect(v.snapshot().palette).toBeUndefined();
+    v.handleInput("\x1b");
+    v.handleInput("b"); await editorReady();
+    fake.session.input.mockClear();
+    v.handleInput("\x10");
+    expect(v.snapshot().palette).toBeUndefined();
+    expect(fake.session.input).toHaveBeenCalledWith("\x10");
+  } finally { v.dispose(); fake.editors.dispose(); }
+});
+
+test("palette snapshot, focused dock and mouse click select a command without leaking into widgets", () => {
+  const f = nbWith([{ id: "a", code: "x = 1" }]);
+  f.notebook.apply("cell-op", { cell_id: "a", status: "idle", output: { channel: "output", mimetype: "text/html", data: widgetHtml } });
+  const setWidget = vi.fn();
+  const actions = { followed: () => [f], interrupt: async () => {}, openInBrowser: () => {}, setWidget, docked: { focused: () => true, focusMain: () => {} } };
+  const localTui = { requestRender: vi.fn(), terminal: { rows: 28 } };
+  const v = new NotebookView(localTui as any, theme, notebookKey(f), actions, () => {});
+  let moved: NotebookView | undefined;
+  try {
+    v.render(100); v.handleInput("w"); v.render(100);
+    paletteSearch(v, "diagnostics");
+    const saved = v.snapshot();
+    moved = new NotebookView(localTui as any, theme, notebookKey(f), { ...actions, initial: saved }, () => {});
+    const lines = moved.render(100);
+    expect(lines.join("\n")).toContain("Command palette");
+    expect(moved.snapshot().palette).toEqual(saved.palette);
+    const click = (type: string, x = 3, y = 3) => moved!.handleMouse(helpMouse(type, { x, y, width: 100, height: 28 }));
+    expect(click("press")).toEqual({ handled: true, render: false });
+    click("wheel"); moved.render(100);
+    click("click");
+    expect(moved.snapshot().palette).toBeUndefined();
+    expect(setWidget).not.toHaveBeenCalled();
+  } finally { v.dispose(); moved?.dispose(); }
+});
+
 // --- STEP6: compact contextual chrome and modal, searchable registry help ---
 test("STEP6 package help cannot refresh, mutate, confirm, or change the selected package", async () => {
   const f = dataflow();
@@ -2078,7 +2218,7 @@ test.each([46, 80, 100, 120, 180].flatMap(width => ["t", "w"].map(key => ({ widt
       const lines = v.render(width);
       expect(lines).toHaveLength(12);
       expect(lines.every(line => visibleWidth(line) === width)).toBe(true);
-      expect(footerText(lines)).toBe(key === "t" ? width === 46 ? "enter row detail · ? help · ! diagnostics" : "enter row detail · ? help · ! diagnostics · \\ output" : width === 46 ? "Tab next · ←/→ adjust · Enter value" : "Tab next · ←/→ adjust · Enter value · Esc done");
+      expect(footerText(lines)).toBe(key === "t" ? width === 46 ? "enter row detail · ? help · ! diagnostics" : "enter row detail · ? help · ! diagnostics · \\ output · ctrl+p command palette" : width === 46 ? "Tab next · ←/→ adjust · Enter value" : "Tab next · ←/→ adjust · Enter value · Esc done");
       v.handleInput("?");
       const help = v.render(width);
       expect(help).toHaveLength(12);
@@ -2133,12 +2273,12 @@ test("footer immediately elevates hidden diagnostics and output while keeping co
   }, () => {});
   try {
     const foot = (width = 120) => footerText(v.render(width));
-    expect(foot()).toBe("r run cell · ? help · O cell · 1/3 · ! diagnostics · \\ output · # lines");
+    expect(foot()).toBe("r run cell · ? help · O cell · 1/3 · ! diagnostics · \\ output · # lines · ctrl+p command palette");
     v.handleInput("!");
-    expect(foot()).toBe("r run cell · ? help · ! errors · O cell · 1/3 · \\ output · # lines");
+    expect(foot()).toBe("r run cell · ? help · ! errors · O cell · 1/3 · \\ output · # lines · ctrl+p command palette");
     expect(v.render(120).join("\n")).toContain("diagnostics errors");
     v.handleInput("\\");
-    expect(foot()).toBe("r run cell · ? help · ! errors · \\ output off · O cell · 1/3 · # lines");
+    expect(foot()).toBe("r run cell · ? help · ! errors · \\ output off · O cell · 1/3 · # lines · ctrl+p command palette");
     expect(v.render(120).join("\n")).toContain("output hidden");
     v.handleInput("#");
     expect(foot()).toContain("# lines on");

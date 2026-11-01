@@ -30,9 +30,10 @@ import type { EditorFactoryFn } from "../editor-contract.ts";
 import { Dock, type DockSpec } from "./dock.js";
 import { type Part, detailRows } from "./detail.js";
 import { Help, type HelpState } from "./help.js";
+import { Palette, type PaletteState } from "./palette.js";
 import { MessageView, messagePreview, type MessageState } from "./message.js";
 import { clean, oneLine } from "./text.js";
-import { commandFor, commandKey, footerTokens, type CommandMode } from "./keys.js";
+import { commandFor, commandKey, footerTokens, paletteInput, type Command, type CommandMode } from "./keys.js";
 import { type PaneTheme, outlineRows, spinner } from "./outline.js";
 import { MAX_WIDGETS, type Row, type RowOptions, firstLine, foldedCells, selectableCells } from "./rows.js";
 import { cellTitle } from "./titles.js";
@@ -110,6 +111,7 @@ export interface ViewState {
   timing?: boolean;
   help?: HelpState;
   lastHelp?: HelpState;
+  palette?: PaletteState;
   message?: MessageState;
   note?: string;
   table?: { cell: string; objectId: string };
@@ -279,6 +281,7 @@ export class NotebookView implements Component, Focusable {
   private dragging: { cell: string; index: number } | undefined;
   private help = false;
   private helpView = new Help();
+  private palette?: Palette;
   private lastTransient = 0;
   private messageView?: MessageView;
   private messageOverflow = false;
@@ -382,6 +385,7 @@ export class NotebookView implements Component, Focusable {
       preferences: this.preferences.snapshot(),
       timing: this.timing,
       ...(this.help ? { help: { ...this.helpView.state } } : lastHelp ? { lastHelp } : {}),
+      ...(this.palette ? { palette: { ...this.palette.state } } : {}),
       ...(this.messageView ? { message: { ...this.messageView.state } } : {}),
       ...(this.note ? { note: this.note } : {}),
       ...(this.table ? { table: { ...this.table } } : {}),
@@ -397,6 +401,7 @@ export class NotebookView implements Component, Focusable {
     this.note = s.note;
     this.help = !!s.help;
     this.helpView = new Help(s.help ?? s.lastHelp);
+    this.palette = s.palette ? new Palette(s.palette.mode, s.palette) : undefined;
     this.table = s.table ? { ...s.table } : undefined;
     this.widget = s.widget ? { ...s.widget } : undefined;
     this.cursor = s.cursor;
@@ -472,7 +477,7 @@ export class NotebookView implements Component, Focusable {
 
   /** Read-only scrolling content: global listeners leave its keys alone (a filter or a docked prompt takes them). */
   [INPUT_CONTEXT](): "viewer" | "filter" | "editor" {
-    return this.messageView ? "viewer" : this.help ? (this.helpView.state.typing ? "filter" : "viewer") : this.editors.active || this.dock ? "editor" : this.typing || this.packagePane.typing ? "filter" : "viewer";
+    return this.messageView ? "viewer" : this.palette ? "filter" : this.help ? (this.helpView.state.typing ? "filter" : "viewer") : this.editors.active || this.dock ? "editor" : this.typing || this.packagePane.typing ? "filter" : "viewer";
   }
 
   private cells(f: Followed): Cell[] {
@@ -1185,6 +1190,13 @@ export class NotebookView implements Component, Focusable {
       this.tui.requestRender();
       return;
     }
+    if (this.palette) {
+      const result = this.palette.input(data);
+      if (result?.kind === "cancel") this.palette = undefined;
+      else if (result?.kind === "execute") this.runPaletteCommand(result.command);
+      this.tui.requestRender();
+      return;
+    }
     if (this.help) {
       this.help = this.helpView.handleInput(data, this.lastPage);
       this.tui.requestRender();
@@ -1220,6 +1232,10 @@ export class NotebookView implements Component, Focusable {
       this.timing = false;
       this.tui.requestRender();
       return;
+    }
+    if (command.id === "palette") {
+      this.palette = new Palette(this.commandMode());
+      this.tui.requestRender(); return;
     }
     if (command.id === "help") {
       this.openHelp(); this.tui.requestRender(); return;
@@ -1587,7 +1603,7 @@ export class NotebookView implements Component, Focusable {
     const removed = changes.filter((c) => c.kind === "deleted").length;
     const agent = changes.length ? `${dot}${th.fg("accent", `agent: ${[edited ? `${edited} changed` : "", created ? `${created} new` : "", removed ? `${removed} removed` : ""].filter(Boolean).join(" · ")}`)}` : "";
     const prefs = this.preferences.snapshot();
-    const context = [this.help ? "help" : this.commandMode(), this.mode === "variables" ? this.varFilter : this.mode === "packages" ? this.packagePane.state.filter : this.filter].filter(Boolean).join(" · ");
+    const context = [this.palette ? "palette" : this.help ? "help" : this.commandMode(), this.mode === "variables" ? this.varFilter : this.mode === "packages" ? this.packagePane.state.filter : this.filter].filter(Boolean).join(" · ");
     const visibility = [context, prefs.diagnostics !== "all" ? `diagnostics ${prefs.diagnostics === "none" ? "hidden" : prefs.diagnostics}` : "", !prefs.showOutput ? "output hidden" : ""].filter(Boolean).join(" · ");
     const left = `${visibility ? `${th.fg("dim", visibility)}${dot}` : ""}${busy ? `${th.fg("accent", "●")} ` : errors ? `${th.fg("error", "✗")} ` : ""}${th.bold(file)}  ${state}${working}${agent}`;
     const right = th.fg("dim", [this.actions.lastRun?.(f) ?? "", shortWhere(f.attachment.url) ?? "", servers.length ? `server ${servers.join(", ")}` : ""].filter(Boolean).join(" · "));
@@ -1681,10 +1697,11 @@ export class NotebookView implements Component, Focusable {
     const height = Math.max(0, this.tui.terminal.rows);
     const dock = this.messageView ? [] : this.dockRows(width, height <= CHROME ? height : height - CHROME);
     this.lastDock = dock.length;
-    const transient = this.messageView ? undefined : this.transientMessage();
+    const transient = this.messageView || this.palette ? undefined : this.transientMessage();
     const transientRows = messagePreview(transient, inner, Math.max(0, height - CHROME - dock.length));
     this.messageOverflow = !!transient && wrapTextWithAnsi(clean(transient), inner).length > transientRows.length;
     this.lastTransient = transientRows.length;
+    if (this.palette && !this.messageView && height < CHROME) return this.palette.render(inner, height, th, this.focused).map(row);
     if (this.help && !this.messageView && height < CHROME) return this.helpView.render(inner, height, th).map(row);
     if (height < CHROME || (height === CHROME && dock.length)) {
       if (this.messageView) {
@@ -1697,6 +1714,14 @@ export class NotebookView implements Component, Focusable {
       const compact = height === 1 ? [row(this.footer(f, inner))] : [row(file), ...transientRows.map(row)];
       if (height > 1) compact.push(row(this.footer(f, inner)));
       return compact.slice(0, height);
+    }
+    if (this.palette && !this.messageView) {
+      const rows = this.palette.render(inner, height - 1, th, this.focused);
+      this.lastPage = height - 1;
+      this.lastRows = rows.map(text => ({ text }));
+      this.lastOutline = [];
+      this.lastDetail = [];
+      return [...out, ...rows.map(row)];
     }
     if (this.help && !this.messageView) {
       const rows = this.helpView.render(inner, height - 1, th);
@@ -2005,6 +2030,18 @@ export class NotebookView implements Component, Focusable {
     this.note = undefined;
   }
 
+  /** Dispatch exactly the selected registry command through its existing key and safety gates. */
+  private runPaletteCommand(command: Command): void {
+    const mode = this.commandMode();
+    this.palette = undefined;
+    const input = paletteInput(command, mode);
+    if (!input) {
+      this.note = "Command unavailable in this view.";
+      return;
+    }
+    this.handleInput(input);
+  }
+
   private transientMessage(includeHidden = false): string | undefined {
     if (this.help && !includeHidden) return undefined;
     if (this.armedRun) return `${commandKey(this.armedRun.what === "all" ? "run-all" : "run-stale")} again to run ${this.armedRun.what} cells`;
@@ -2024,7 +2061,7 @@ export class NotebookView implements Component, Focusable {
     // Dock owns its focused prompt hints; never replace those with a key inventory.
     if (this.dock) return this.theme.fg("dim", "esc closes the prompt");
     const mode = this.commandMode();
-    if (this.help) return ""; // Help owns its single navigation footer.
+    if (this.palette || this.help) return ""; // Each modal owns its own footer.
     const focused = this.part === undefined ? undefined : this.lastParts[this.part];
     const cell = f ? this.cursorCell(f) : undefined;
     const contextual = focused?.kind ?? (cell && this.cellWidgets(cell).length ? "widgets" : cell?.output?.table ? "table" : this.live.rects.length ? "chart" : undefined);
@@ -2109,6 +2146,16 @@ export class NotebookView implements Component, Focusable {
     if (this.packageConfirmation || this.tui.terminal.rows < CHROME) return { handled: true };
     if (this.messageView) {
       if (event.type === "wheel") { this.messageView.wheel(event.wheelDelta ?? 0); this.tui.requestRender(); }
+      return { handled: true };
+    }
+    if (this.palette) {
+      if (event.type === "wheel") { this.palette.wheel(event.wheelDelta ?? 0); this.tui.requestRender(); }
+      else if (event.button === "left" && event.type === "press") return { handled: true, render: false };
+      else if (event.button === "left" && event.type === "click") {
+        const command = this.palette.selectAt(event.x - CONTENT_LEFT, event.y - 1);
+        if (command) this.runPaletteCommand(command);
+        this.tui.requestRender();
+      }
       return { handled: true };
     }
     if (this.help) {

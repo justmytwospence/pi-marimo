@@ -77,12 +77,15 @@ From 100 columns the outline and detail sit side by side. Narrower, as when dock
 | `t` | drive the cell's table |
 | `w` | drive the cell's widgets |
 | `v`, `P` | the kernel's variables; packages |
+| `ctrl+p` | fuzzy command palette for actions available in this view |
 | `a` | ask the agent about this cell |
 | `ctrl+]` | docked: switch between chat and notebook |
 | `ctrl+'` | dock or close |
 | Esc | back to the chat |
 
 The `?` cheat sheet shows all categories. On a wide view, click a category in its left rail; Tab/Shift+Tab move between categories at any width. When every command in the category fits, `j`/`k` and the arrows also move between categories; when it overflows, they scroll its commands. Reopening help returns to the last category and scroll position; a search is cleared. To open the actual Variables or Packages view, close help with `?` or Esc, then press `v` or capital `P` (Shift+P) in the notebook.
+
+With the notebook focused, `ctrl+p` opens its command palette. Type to fuzzy-search the available actions by name, group, description or shortcut; arrows or Tab select a result, Enter or a click runs it, and Esc cancels. Running all cells, interrupting, stopping a server and changing packages retain their normal confirmations; selecting one does not bypass them. Low-level widget/chart motions and file export are not palette actions. With Pi chat focused, `ctrl+p` still cycles models.
 
 <details>
 <summary>Every key</summary>

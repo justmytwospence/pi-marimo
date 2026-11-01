@@ -31,6 +31,7 @@ export const COMMANDS: readonly Command[] = [
   command("message-top", ["message"], ["g", "home"], "Navigation", "message top"),
   command("message-bottom", ["message"], ["G", "end"], "Navigation", "message bottom"),
   command("help", reading, ["?"], "Navigation", "help", "Open searchable context help"),
+  command("palette", reading, ["ctrl+p"], "Navigation", "command palette", "Fuzzy-find actions available in this view"),
   command("editor-help", E, ["f1"], "Editing", "help", "Open help; other Vim keys remain native"),
   command("help-close", ["help"], ["?", "f1"], "Navigation", "close help", "Close when not typing a search"),
   command("help-back", ["help"], ["escape"], "Navigation", "clear / close", "Clear search first, then close help"),
@@ -202,6 +203,27 @@ export function commandFor(mode: CommandMode, data: string): Command | undefined
   printable ??= data;
   return COMMANDS.find(command => command.modes.includes(mode) && command.keys.some(key => key.length === 1 ? printable === key : matchesKey(data, key as Parameters<typeof matchesKey>[1])));
 }
+export function paletteCommands(mode: CommandMode): Command[] {
+  if (["editor", "help", "message"].includes(mode)) return [];
+  return COMMANDS.filter((command) => command.modes.includes(mode) && command.id !== "palette" && command.id !== "table-csv"
+    && (!command.id.startsWith("widget-") || command.id === "widget-close")
+    && (!command.id.startsWith("chart-") || command.id === "chart-close"));
+}
+
+/** The first registered key as terminal input; validate that it resolves back to this exact action. */
+export function paletteInput(command: Command, mode: CommandMode): string | undefined {
+  const key = command.keys[0];
+  if (!key) return undefined;
+  const named: Record<string, string> = {
+    escape: "\x1b", enter: "\r", tab: "\t", "shift+tab": "\x1b[Z", space: " ",
+    up: "\x1b[A", down: "\x1b[B", right: "\x1b[C", left: "\x1b[D",
+    pageUp: "\x1b[5~", pageDown: "\x1b[6~", home: "\x1b[H", end: "\x1b[F",
+    f7: "\x1b[18~", f8: "\x1b[19~",
+  };
+  const input = key.length === 1 ? key : /^ctrl\+[a-z]$/u.test(key) ? String.fromCharCode(key.charCodeAt(5) - 96) : named[key];
+  return input && commandFor(mode, input)?.id === command.id ? input : undefined;
+}
+
 function entryFor(id: string): Command {
   const entry = COMMANDS.find(command => command.id === id);
   if (!entry) throw new Error(`Unknown notebook command: ${id}`);
@@ -237,6 +259,7 @@ export function footerTokens(width: number, primary: string, options: FooterOpti
     if (preferences.showOutput) tokens.push(`${commandKey("output")} output`);
     if (mode === "notebook") tokens.push(`${commandKey("numbers")} lines${preferences.lineNumbers ? " on" : ""}`);
   }
+  if (reading) tokens.push(commandToken("palette"));
   const kept: string[] = [];
   for (const token of tokens) {
     if (visibleWidth([...kept, token].join(" · ")) <= Math.max(0, width)) kept.push(token);
