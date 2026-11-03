@@ -22,11 +22,11 @@ These files are copies shared with Pi Plugins (`~/Projects/pi-plugins/packages/.
 
 ## Completion and rollout
 
-Finishing a change means check, a conventional commit, and a push. Then set `git:github.com/justmytwospence/pi-marimo@<full sha>` in `~/Projects/dotfiles/home/private_dot_pi/private_agent/settings.managed.json`, commit and push only that. Then `chezmoi apply`, then `ssh spencer@nuc '~/.local/bin/chezmoi update --no-tty'`, and verify with `git -C ~/.pi/agent/git/github.com/justmytwospence/pi-marimo rev-parse HEAD` on both machines. Read `~/Projects/dotfiles/AGENTS.md` first.
+Finishing a change means check, a conventional commit, and a push. Then cut a rollout tag: bump the patch `version` (package.json + lock as in Releases), rename `## Unreleased` in `CHANGELOG.md` to `## <version>` (with a fresh `## Unreleased` above it), commit `chore: release <version>`, `git tag v<version>`, `git push origin main v<version>`. Then, in a dotfiles worktree, set `git:github.com/justmytwospence/pi-marimo@v<version>` in `~/Projects/dotfiles/home/private_dot_pi/private_agent/settings.managed.json` and its commit (`git rev-parse v<version>^{commit}`) in `home/.chezmoidata/pi_tag_commits.json`, commit only those, and `bin/land` (it applies and syncs the NUC). Verify with `git -C ~/.pi/agent/git/github.com/justmytwospence/pi-marimo rev-parse HEAD` equal to the tag's commit on both machines. Read `~/Projects/dotfiles/AGENTS.md` first.
 
 ## Releases
 
-Bump `version` in `package.json` (and the lock with `npm install --package-lock-only --ignore-scripts`), add a `## <version>` section to `CHANGELOG.md`, commit, push, then `gh release create v<version> --title v<version> --notes-file <(awk '/^## <version>/{f=1;next} /^## /{f=0} f' CHANGELOG.md)`. The release workflow publishes to npm with provenance. Never `npm publish` by hand after 0.2.0.
+Bump `version` in `package.json` (and the lock with `npm install --package-lock-only --ignore-scripts`), add a `## <version>` section to `CHANGELOG.md`, commit, push, then `gh release create v<version> --title v<version> --notes-file <(awk '/^## <version>/{f=1;next} /^## /{f=0} f' CHANGELOG.md)`. The release workflow publishes to npm with provenance. Never `npm publish` by hand after 0.2.0. A rollout tag is a plain `git tag`; it does not publish. To publish an already-tagged version, run the `gh release create v<version> ...` command above, which reuses the existing tag.
 
 ## Remote clients
 
