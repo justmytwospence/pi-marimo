@@ -1046,7 +1046,7 @@ test("v lists variables; Enter previews repr, Escape returns to list and d jumps
     v.handleInput("\x1b");
     expect(v.snapshot().mode).toBe("variables");
     v.handleInput("d");
-    expect(screen(v)).toMatch(/▌  y/u);
+    expect(screen(v)).toMatch(/▌  [●│├┌└ ] y/u);
     expect(v.snapshot().mode).toBe("cells");
   } finally { v.dispose(); }
 });
@@ -1122,13 +1122,13 @@ test("< and > follow the dataflow up and down", () => {
   try {
     v.handleInput("G");
     v.handleInput("<");
-    expect(screen(v)).toMatch(/▌  y/u);
+    expect(screen(v)).toMatch(/▌  [●│├┌└ ] y/u);
     v.handleInput("<");
-    expect(screen(v)).toMatch(/▌  load/u);
+    expect(screen(v)).toMatch(/▌  [●│├┌└ ] load/u);
     v.handleInput("<");
     expect(screen(v)).toContain("No upstream cell.");
     v.handleInput(">");
-    expect(screen(v)).toMatch(/▌  y/u);
+    expect(screen(v)).toMatch(/▌  [●│├┌└ ] y/u);
   } finally { v.dispose(); }
 });
 
@@ -1377,7 +1377,7 @@ test("wide, the outline and the detail sit side by side, every line exactly as w
       const text = lines.join("\n");
       // The title is where its markdown cell is, after the imports cell, and the cells are titled by what they are.
       expect(text).toMatch(/imports[\s\S]*Coffee sales[\s\S]*daily[\s\S]*model[\s\S]*chart/u);
-      expect(text).toMatch(/▌ ?  imports\s{3,}imports/u);
+      expect(text).toMatch(/▌ ?  [●│├┌└ ] imports\s{3,}imports/u);
       expect(text).not.toContain(" │ ");
       expect(lines.some(line => /^\s*[─━]{10,}\s*$/u.test(plain(line)))).toBe(false);
       for (const id of ["Zx1a", "Hd2b", "Ld3c", "Bm4d", "Ch5e"]) expect(text).not.toContain(id);
@@ -1385,7 +1385,7 @@ test("wide, the outline and the detail sit side by side, every line exactly as w
     v.handleInput("j");
     v.handleInput("j");
     const detail = screen(v);
-    expect(detail).toMatch(/▌ {2}  daily/u);
+    expect(detail).toMatch(/▌ {2}  [●│├┌└ ] daily/u);
         expect(detail).not.toContain("<Series object");
     expect(detail).toContain("used by model, chart");
   } finally { v.dispose(); }
@@ -1406,12 +1406,12 @@ test("narrow, a few outline rows around the cursor sit above the detail, and the
     const lines = v.render(80);
     const text = lines.join("\n");
     // A single blank gap separates the outline from the detail, not a decorative rule.
-    expect(text).toMatch(/daily[\s\S]*▌ {2}✗ model +\[ err\][\s\S]*chart[\s\S]*Traceback \(most recent call last\)/u);
+    expect(text).toMatch(/daily[\s\S]*▌ {2}✗ [●│├┌└ ] model +\[ err\][\s\S]*chart[\s\S]*Traceback \(most recent call last\)/u);
     expect(text).toContain("enter edit");
     const rule = 2 + (v as any).panes.detailTop - 1;
     expect(plain(lines[rule]!).trim()).toBe("");
     // As many outline rows above the cursor as below it.
-    const cursorRow = lines.findIndex((l) => l.includes("▌  ✗ model"));
+    const cursorRow = lines.findIndex((l) => /▌ {2}✗ [●│├┌└ ] model/u.test(l));
     expect(cursorRow - 2).toBe(rule - 1 - cursorRow);
     expect(rule).toBeGreaterThan(3);
     expect(rule).toBeLessThan(12);
@@ -1421,7 +1421,7 @@ test("narrow, a few outline rows around the cursor sit above the detail, and the
     // A click on an outline row selects it; a click on the detail's code starts inline editing.
     const row = v.render(80).findIndex((l) => l.includes("  chart"));
     v.handleMouse(ev("click", row, { clickCount: 1 }));
-    expect(v.render(80).join("\n")).toMatch(/▌ {2}  chart/u);
+    expect(v.render(80).join("\n")).toMatch(/▌ {2}  [●│├┌└ ] chart/u);
     v.handleInput("k");
     const code = v.render(80).findIndex((l) => l.includes(" model = boom(daily)"));
     v.handleMouse(ev("click", code));
@@ -1432,7 +1432,7 @@ test("narrow, a few outline rows around the cursor sit above the detail, and the
     await fake.editors.close();
     // The wheel over the outline moves the cursor.
     v.handleMouse(ev("wheel", 4, { wheelDelta: 1 }));
-    expect(v.render(80).join("\n")).toMatch(/▌ {2}  chart/u);
+    expect(v.render(80).join("\n")).toMatch(/▌ {2}  [●│├┌└ ] chart/u);
     v.handleInput("\x1b");
     expect(closed).toBe(true);
   } finally { v.dispose(); fake.editors.dispose(); }
@@ -1445,7 +1445,7 @@ test("the detail of a failed cell shows its error, traceback and source", async 
   try {
     v.handleInput("e");
     const text = screen(v);
-    expect(text).toMatch(/▌ {2}✗ model +\[ err\]/u);
+    expect(text).toMatch(/▌ {2}✗ [●│├┌└ ] model +\[ err\]/u);
     expect(text).toContain("KeyError: 'revenue'");
     expect(text).toContain("Traceback (most recent call last)");
     expect(text).toContain("  model = boom(daily)");
@@ -3333,4 +3333,35 @@ test("STEP6 dirty-editor confirmation owns keys and mouse ahead of help and nati
     v.handleInput("\x1bOP");
     expect(v.snapshot().help?.group).toBe("Editing");
   } finally { v.dispose(); fake.editors.dispose(); }
+});
+
+// --- the dataflow gutter and run-chain marking ---
+const tagged = { fg: (c: string, t: string) => `<${c}>${t}</${c}>`, bold: (t: string) => t };
+
+test("the gutter joins the selected cell to its direct inputs and dependents", () => {
+  const f = dataflow();
+  const lines = notebookLines(f.notebook, theme2, 0, { cursor: "b" }).lines.map(plain);
+  expect(lines).toHaveLength(3);
+  expect(lines[0]).toContain("┌");
+  expect(lines[1]).toContain("●");
+  expect(lines[2]).toContain("└");
+});
+
+test("a notebook without a known dataflow graph keeps its row format", () => {
+  const f = nbWith([{ id: "a", code: "x = 1", name: "load" }, { id: "b", code: "y = 2", name: "next" }]);
+  const lines = notebookLines(f.notebook, theme2, 0, { cursor: "a" }).lines.map(plain);
+  expect(lines[0]).toMatch(/^▌ {2}load/u);
+  expect(lines[1]).toMatch(/^ {3}next/u);
+});
+
+test("during a run, cells outside it are dimmed and finished cells show a check", () => {
+  const f = dataflow();
+  f.notebook.apply("cell-op", { cell_id: "b", status: "queued", timestamp: 1 });
+  f.notebook.apply("cell-op", { cell_id: "c", status: "queued", timestamp: 1 });
+  f.notebook.apply("cell-op", { cell_id: "b", status: "running", timestamp: 2 });
+  let lines = notebookLines(f.notebook, tagged, 0, { cursor: "c" }).lines;
+  expect(lines.find(l => l.includes("load"))).toContain("<dim>load</dim>");
+  f.notebook.apply("cell-op", { cell_id: "b", status: "idle", timestamp: 3 });
+  lines = notebookLines(f.notebook, tagged, 0, { cursor: "c" }).lines;
+  expect(lines.some(l => l.includes("<success>✓</success>"))).toBe(true);
 });

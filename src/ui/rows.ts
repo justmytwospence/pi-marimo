@@ -142,7 +142,12 @@ export function selectableCells(nb: NotebookState, filter = "", o: { folded?: Re
   return nb.ordered().filter((c) => {
     if (hidden.has(c.id)) return false;
     if (nb.isMarkdown(c) && !q && !nb.headings(c).length && c.id !== o.reveal) return false;
-    if (!q) return true;
-    return [c.name, c.id, ...(nb.defs.get(c.id) ?? []), c.code, c.error ?? ""].some((t) => t.toLowerCase().includes(q));
+    return matchesFilter(nb, c, q);
   });
+}
+
+/** Whether a cell matches a find query (name, id, variables, code, error). `q` is lowercased and trimmed; empty matches everything. */
+export function matchesFilter(nb: NotebookState, c: Cell, q: string): boolean {
+  if (!q) return true;
+  return [c.name, c.id, ...(nb.defs.get(c.id) ?? []), c.code, c.error ?? ""].some((t) => t.toLowerCase().includes(q));
 }

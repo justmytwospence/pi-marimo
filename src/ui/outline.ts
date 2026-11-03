@@ -7,6 +7,7 @@ import { truncate } from "../core/notebook.js";
 import type { FrameTheme } from "../frame.ts";
 import { type Row, firstLine, foldedCells, selectableCells } from "./rows.js";
 import { cellTitle, outputShape } from "./titles.js";
+import { gutterMarks, gutterText, hasGraph } from "./gutter.js";
 import { cellBadges, fitBadges, spinner } from "./status.js";
 export { SPINNER, spinner } from "./status.js";
 
@@ -20,6 +21,9 @@ export interface OutlineOptions {
   /** The width the outline draws at. */
   width: number;
 }
+
+/** The mark of a cell that finished in the current run. */
+export const CHAIN_DONE = "✓";
 
 export const headingText = (theme: FrameTheme, h: { level: number; text: string }): string =>
   h.level === 1 ? theme.bold(theme.fg("accent", h.text)) : h.level === 2 ? theme.bold(h.text) : theme.fg("muted", h.text);
@@ -44,6 +48,10 @@ export function outlineRows(nb: NotebookState, theme: PaneTheme, now: number, o:
   const width = Math.max(8, o.width);
   const hidden = filtering ? new Map<string, string>() : foldedCells(nb, o.folded);
   const shown = new Set(selectableCells(nb, o.filter, { folded: o.folded, reveal: o.cursor }).map((c) => c.id));
+  const graph = hasGraph(nb);
+  const codeIds = nb.ordered().filter((c) => !hidden.has(c.id) && shown.has(c.id) && !nb.isMarkdown(c)).map((c) => c.id);
+  const gutters = gutterMarks(nb, o.cursor, codeIds);
+  const chain = nb.chain.active() ? nb.chain.current : undefined;
   const rows: Row[] = [];
   const cellRows = new Map<string, number>();
   let running: number | undefined;
@@ -96,8 +104,11 @@ export function outlineRows(nb: NotebookState, theme: PaneTheme, now: number, o:
     if (!shown.has(cell.id)) continue;
     const marked = marks.get(cell.id);
     const tags = marked ? ` ${theme.fg("warning", marked.join(" "))}` : "";
-    const title = cellTitle(nb, cell);
-    const left = `${bar(here)}${underHeading ? "  " : ""}${cellGlyph(nb, theme, cell, now)} ${here ? theme.bold(title) : title}${tags}`;
+    const plainTitle = cellTitle(nb, cell);
+    const title = chain && !chain.members.includes(cell.id) && !here ? theme.fg("dim", plainTitle) : plainTitle;
+    const glyph = chain?.steps.has(cell.id) && cell.status === "idle" && !cell.error && !cell.blocked ? theme.fg("success", CHAIN_DONE) : cellGlyph(nb, theme, cell, now);
+    const gutter = graph ? `${gutterText(theme, gutters.get(cell.id), cell.id === o.cursor)} ` : "";
+    const left = `${bar(here)}${underHeading ? "  " : ""}${glyph} ${gutter}${here ? theme.bold(title) : title}${tags}`;
     const badges = cellBadges(nb, cell, now);
     // Reserve a readable title before admitting chips; never let finish chop a chip.
     const budget = Math.max(0, width - Math.min(visibleWidth(left), 12) - 1);
