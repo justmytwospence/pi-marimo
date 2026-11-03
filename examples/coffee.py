@@ -622,6 +622,82 @@ def interrupt_dependent(long_result):
     return
 
 
+@app.cell
+def roast_heading(mo):
+    mo.md(r"""
+    ## Roast pipeline
+
+    A longer dataflow chain for watching a run: green beans feed a roast, which splits into grind and aroma, then joins into a blend and a brew report. Each step takes about 1.5 seconds after you press the button, so the whole chain takes about ten; later reruns of any step stay slow. The tasting notes cell sits above the steps it depends on, so its run step lands out of file order. In the Pi view press `@` to see only this run and `~` to switch between file and run order.
+    """)
+    return
+
+
+@app.cell
+def roast_run_control(mo):
+    roast_run = mo.ui.run_button(label="Run roast pipeline (~10s)")
+    roast_run
+    return (roast_run,)
+
+
+@app.cell
+def green_beans(roast_run, sales, time):
+    roast_delay = 1.5 if roast_run.value else 0.0
+    time.sleep(roast_delay)
+    beans = sales.groupby("drink")["cups"].sum()
+    print(f"green beans for {len(beans)} drinks", flush=True)
+    beans
+    return beans, roast_delay
+
+
+@app.cell
+def tasting_notes(blend, roast_delay, time):
+    time.sleep(roast_delay)
+    tasting_notes = blend.assign(note=["bright" if _a > 0.7 else "mellow" for _a in blend["aroma"]])
+    tasting_notes
+    return
+
+
+@app.cell
+def roast_profile(beans, roast_delay, time):
+    time.sleep(roast_delay)
+    roasted = (beans * 0.85).rename("roasted")
+    print("roasted", flush=True)
+    roasted
+    return (roasted,)
+
+
+@app.cell
+def grind(roast_delay, roasted, time):
+    time.sleep(roast_delay)
+    ground = roasted.round().astype(int).rename("ground")
+    ground
+    return (ground,)
+
+
+@app.cell
+def aroma_profile(roast_delay, roasted, time):
+    time.sleep(roast_delay)
+    aroma = (roasted / roasted.max()).round(2).rename("aroma")
+    aroma
+    return (aroma,)
+
+
+@app.cell
+def blend_beans(aroma, ground, pd, roast_delay, time):
+    time.sleep(roast_delay)
+    blend = pd.concat([ground, aroma], axis=1)
+    blend
+    return (blend,)
+
+
+@app.cell
+def brew_report_cell(blend, mo, roast_delay, time):
+    time.sleep(roast_delay)
+    brew_report = mo.md(f"**Brew report**: {int(blend['ground'].sum())} grams across {len(blend)} drinks; strongest aroma: **{blend['aroma'].idxmax()}**.")
+    brew_report
+    return
+
+
 @app.cell(hide_code=True)
 def diagnostics_heading(mo):
     mo.md(r"""
