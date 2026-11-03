@@ -4,6 +4,7 @@
 // (variables). Only what an agent needs is kept; outputs are dropped.
 
 import { LensTracker } from "./lens.js";
+import { ChainTracker } from "./chain.js";
 import { EnvironmentState } from "./packages.js";
 import { CellConsole } from "./console.js";
 import { progressFromText, type ProgressTask } from "./progress.js";
@@ -150,6 +151,8 @@ export class NotebookState {
   lastActivity = 0;
   /** marimo-lens selections (lens.ts), from widget model messages. */
   lens = new LensTracker();
+  /** The latest run's cells, for the view only (never agent-visible). */
+  readonly chain = new ChainTracker();
   private readyAt = 0;
   private headingCache = new Map<string, Heading[]>();
 
@@ -205,6 +208,7 @@ export class NotebookState {
     this.readyAt = 0;
     this.headingCache.clear();
     this.lens.reset();
+    this.chain.reset();
   }
 
   private ensure(id: string): Cell {
@@ -439,12 +443,12 @@ export class NotebookState {
     if (!id || isInternal(id) || !this.cells.has(id)) return false;
     const cell = this.ensure(id);
     let changed = false;
+    const at = typeof data.timestamp === "number" && Number.isFinite(data.timestamp) ? data.timestamp * 1000 : undefined;
     if (typeof data.status === "string" && typeof data.timestamp === "number" && Number.isFinite(data.timestamp)) {
       this.lastActivity = Math.max(this.lastActivity, data.timestamp * 1000);
     }
     if (typeof data.status === "string" && data.status !== cell.status) {
       const was = cell.status;
-      const at = typeof data.timestamp === "number" && Number.isFinite(data.timestamp) ? data.timestamp * 1000 : undefined;
       if (was === "running" && data.status === "idle" && cell.runningSince !== undefined && at !== undefined) {
         cell.lastRunStartedAt = cell.runningSince;
         cell.lastRunEndedAt = at;
@@ -471,10 +475,12 @@ export class NotebookState {
       }
       changed = true;
     }
+    if (typeof data.status === "string") this.chain.status(id, data.status, at ?? Date.now(), m => { const s = this.cells.get(m)?.status; return s === "queued" || s === "running"; });
     if (typeof data.stale_inputs === "boolean" && data.stale_inputs !== cell.stale) {
       cell.stale = data.stale_inputs;
       changed = true;
     }
+    if (typeof data.stale_inputs === "boolean") this.chain.markStale(id, data.stale_inputs);
     // Outputs and console lines are for the view: they never mark the state changed.
     if ("console" in data) {
       if (Array.isArray(data.console) && !data.console.length) {

@@ -563,6 +563,29 @@ describe("what the view shows beyond the agent's snapshot", () => {
     expect(nb.values.has("z")).toBe(false);
   });
 
+  test("the run chain follows cell-op statuses without changing what apply reports", () => {
+    const nb = new NotebookState();
+    ready(nb);
+    nb.cells.get("a")!.status = "queued"; // as the view marks it locally
+    nb.apply("cell-op", { cell_id: "a", status: "queued", timestamp: 1 });
+    nb.apply("cell-op", { cell_id: "b", status: "queued", timestamp: 1 });
+    nb.apply("cell-op", { cell_id: "a", status: "running", timestamp: 2 });
+    nb.apply("cell-op", { cell_id: "c", stale_inputs: true });
+    nb.apply("cell-op", { cell_id: "a", status: "idle", timestamp: 3 });
+    nb.apply("cell-op", { cell_id: "b", status: "running", timestamp: 4 });
+    nb.apply("cell-op", { cell_id: "b", status: "idle", timestamp: 5 });
+    const chain = nb.chain.current!;
+    expect(chain.members).toEqual(["a", "b"]);
+    expect([...chain.steps]).toEqual([["a", 1], ["b", 2]]);
+    expect(chain.endedAt).toBe(5000);
+    expect(nb.apply("cell-op", { cell_id: "a", status: "idle", timestamp: 6 })).toBe(false);
+    const n2 = new NotebookState();
+    ready(n2);
+    n2.apply("cell-op", { cell_id: "a", status: "queued", timestamp: 1 });
+    n2.apply("cell-op", { cell_id: "c", stale_inputs: true });
+    expect([...n2.chain.current!.stale]).toEqual(["c"]);
+  });
+
   test("the agent's code-mode changes since the last prompt, live only; browser edits are not the agent's", () => {
     vi.useFakeTimers();
     try {
