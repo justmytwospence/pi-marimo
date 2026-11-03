@@ -21,7 +21,7 @@ The agent edits through the [marimo-pair](https://github.com/marimo-team/marimo-
 pi install npm:pi-marimo
 ```
 
-Or pin the repository: `pi install git:github.com/justmytwospence/pi-marimo@<commit>`.
+Pin a version with `pi install npm:pi-marimo@<version>`. Releases are published from GitHub Actions with npm provenance.
 
 You need:
 
@@ -400,6 +400,12 @@ npm ci && npm run check
 
 - Live tests (need `marimo` on PATH): `PI_MARIMO_LIVE_TEST=1 npx vitest run test/e2e.test.ts test/e2e-actions.test.ts`
 - To start the demo server from scratch with its dependencies: `uvx --with pandas,numpy,matplotlib,plotly,altair,vl-convert-python,rich,tqdm,marimo-lens marimo edit --no-token examples/coffee.py`. If it is already running, `/marimo edit examples/coffee.py` opens its Pi view using that server without a browser or another server.
+- To try changes in Pi before releasing them, add a project `.pi/settings.json` to the checkout that turns off the installed package and loads the checkout, then start Pi there and `/reload` after edits:
+
+  ```json
+  { "packages": [{ "source": "npm:pi-marimo", "extensions": [] }, "../"] }
+  ```
+
 - Releases and rollout: `AGENTS.md`.
 - Table design references (interaction ideas, not copied implementations): [Textual DataTable](https://textual.textualize.io/widgets/data_table/) for pinned headers and focus, [Harlequin](https://harlequin.sh/docs/bindings) for column navigation and full values, [VisiData](https://www.visidata.org/docs/columns/) for sizing and feedback, and [Ratatui table](https://ratatui.rs/examples/apps/table/) for position indicators.
 

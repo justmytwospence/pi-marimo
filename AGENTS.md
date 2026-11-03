@@ -20,13 +20,23 @@ These files are copies shared with Pi Plugins (`~/Projects/pi-plugins/packages/.
 - `src/config.ts`: pi-tool-gate and others.
 - `src/editor-contract.ts`: pi-plan-mode, pi-compact-plan.
 
+## Developing in Pi
+
+Test changes in the Pi session that makes them, before any release. A project `.pi/settings.json` (kept out of Git through `.git/info/exclude`) turns off the installed package and loads this checkout:
+
+```json
+{ "packages": [{ "source": "npm:pi-marimo", "extensions": [] }, "../"] }
+```
+
+Pi identifies an npm package by its name, and a project entry replaces the personal one, so a session started in this repo or one of its worktrees runs that checkout's code. `/reload` picks up edits; nothing needs committing, releasing or deploying first. A new worktree needs its own copy of the file. When the global pin's source changes (for example from `git:` to `npm:`), change `source` here to match, or both copies load.
+
 ## Completion and rollout
 
-Finishing a change means check, a conventional commit, and a push. Then cut a rollout tag: bump the patch `version` (package.json + lock as in Releases), rename `## Unreleased` in `CHANGELOG.md` to `## <version>` (with a fresh `## Unreleased` above it), commit `chore: release <version>`, `git tag v<version>`, `git push origin main v<version>`. Then, in a dotfiles worktree, set `git:github.com/justmytwospence/pi-marimo@v<version>` in `~/Projects/dotfiles/home/private_dot_pi/private_agent/settings.managed.json` and its commit (`git rev-parse v<version>^{commit}`) in `home/.chezmoidata/pi_tag_commits.json`, commit only those, and `bin/land` (it applies and syncs the NUC). Verify with `git -C ~/.pi/agent/git/github.com/justmytwospence/pi-marimo rev-parse HEAD` equal to the tag's commit on both machines. Read `~/Projects/dotfiles/AGENTS.md` first.
+Finishing a change means check, a conventional commit, and a push. Rolling it out means a release (below), then pinning it: in a dotfiles worktree, set `npm:pi-marimo@<version>` in `~/Projects/dotfiles/home/private_dot_pi/private_agent/settings.managed.json`, add `"pi-marimo@<version>"` to `cooldownAllow` in `home/.chezmoidata/cooldown.json` (a release younger than seven days is otherwise held back), commit only those, and `bin/land` (it applies and syncs the NUC). Verify with `grep '"version"' ~/.pi/agent/npm/node_modules/pi-marimo/package.json` on both machines. Read `~/Projects/dotfiles/AGENTS.md` first.
 
 ## Releases
 
-Bump `version` in `package.json` (and the lock with `npm install --package-lock-only --ignore-scripts`), add a `## <version>` section to `CHANGELOG.md`, commit, push, then `gh release create v<version> --title v<version> --notes-file <(awk '/^## <version>/{f=1;next} /^## /{f=0} f' CHANGELOG.md)`. The release workflow publishes to npm with provenance. Never `npm publish` by hand after 0.2.0. A rollout tag is a plain `git tag`; it does not publish. To publish an already-tagged version, run the `gh release create v<version> ...` command above, which reuses the existing tag.
+Bump `version` in `package.json` (and the lock with `npm install --package-lock-only --ignore-scripts`), rename `## Unreleased` in `CHANGELOG.md` to `## <version>` (with a fresh `## Unreleased` above it when there is more to come), commit `chore: release <version>`, push, then `gh release create v<version> --title v<version> --notes-file <(awk '/^## <version>/{f=1;next} /^## /{f=0} f' CHANGELOG.md)`. Publishing the release runs `.github/workflows/release.yml`, which checks, verifies the tag names the version and publishes to npm with provenance through npm trusted publishing (OIDC; no token). The trusted publisher is configured on npmjs.com under pi-marimo's settings: GitHub Actions, repository `justmytwospence/pi-marimo`, workflow `release.yml`. If the publish step fails with a 404, that configuration is missing or wrong: fix it there and rerun the workflow (`gh run rerun <id>`); the workflow skips a version already on npm. Never `npm publish` by hand (0.3.0, the first npm release, was the one exception, made to create the package).
 
 ## Remote clients
 
