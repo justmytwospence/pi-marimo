@@ -35,6 +35,7 @@ import { MessageView, messagePreview, type MessageState } from "./message.js";
 import { clean, oneLine } from "./text.js";
 import { commandFor, commandKey, footerTokens, paletteInput, type Command, type CommandMode } from "./keys.js";
 import { type PaneTheme, outlineRows, spinner } from "./outline.js";
+import { chainCells } from "./chain-outline.js";
 import { MAX_WIDGETS, type Row, type RowOptions, firstLine, foldedCells, selectableCells } from "./rows.js";
 import { cellTitle } from "./titles.js";
 import type { ScratchEvent, ScratchResult } from "./scratch.js";
@@ -89,6 +90,8 @@ export interface ViewState {
   diffs: string[];
   section: boolean;
   filter: string;
+  chain?: boolean;
+  chainOrder?: "file" | "run";
   typing?: boolean;
   findFrom?: string;
   packageTyping?: boolean;
@@ -163,6 +166,9 @@ export interface ViewActions {
   outputs?: boolean;
   /** Cells' code open (default) or folded to its preview; B flips one cell. */
   code?: "open" | "folded";
+  /** The run chain view's order (default file), and whether a run turns it on while following. */
+  chainOrder?: "file" | "run";
+  chainFollow?: "manual" | "wave";
   /** A marimo table's kernel functions (search, summaries...), for driving tables. */
   table?: TableRpc;
   /** Writes a table's selection to the kernel as the browser does. */
@@ -242,6 +248,13 @@ export class NotebookView implements Component, Focusable {
    */
   private panes: { lw: number; detailLeft: number; detailTop: number; outlineHeight: number; shows: "both" | "stacked" } = { lw: 28, detailLeft: 0, detailTop: 0, outlineHeight: 0, shows: "both" };
   private filter = "";
+  /** The outline shows only the latest run's cells. */
+  private chainView = false;
+  private chainOrder: "file" | "run";
+  /** Where the cursor row sat in the pane before the order flipped, so it stays put. */
+  private keepRow: number | undefined;
+  private lastCellRows = new Map<string, number>();
+  private lastChainId: number | undefined;
   /** Typing a filter: keys go to it. */
   private typing = false;
   /** Where the cursor was when `/` started, for Esc. */
@@ -337,6 +350,7 @@ export class NotebookView implements Component, Focusable {
     this.vega = vega;
     this.plotly = plotly;
     this.section = sectionMode ?? actions.outputs ?? false;
+    this.chainOrder = actions.chainOrder ?? "file";
     if (actions.initial) this.restore(actions.initial);
     this.live = live ?? new LiveCharts(() => { if (!this.closed) this.tui.requestRender(); }, undefined, undefined, undefined, () => Painter.for(this.tui), actions.docked ? "base" : "overlay");
     if (!actions.docked) Painter.for(this.tui)?.setExclusive(true);
@@ -370,6 +384,8 @@ export class NotebookView implements Component, Focusable {
       diffs: [...this.diffs],
       section: this.section,
       filter: this.filter,
+      chain: this.chainView,
+      chainOrder: this.chainOrder,
       typing: this.typing,
       ...(this.findFrom ? { findFrom: this.findFrom } : {}),
       packageTyping: this.packagePane.typing,
@@ -416,6 +432,8 @@ export class NotebookView implements Component, Focusable {
     this.diffs = new Set(s.diffs);
     this.section = s.section;
     this.filter = s.filter;
+    this.chainView = s.chain ?? false;
+    this.chainOrder = s.chainOrder ?? this.chainOrder;
     this.typing = s.typing ?? false;
     this.findFrom = s.findFrom;
     this.mode = s.mode;
@@ -488,7 +506,7 @@ export class NotebookView implements Component, Focusable {
   }
 
   private cells(f: Followed): Cell[] {
-    return selectableCells(f.notebook, this.filter, { folded: this.folded, reveal: this.cursor });
+    return this.chainView ? chainCells(f.notebook, this.chainOrder, this.filter) : selectableCells(f.notebook, this.filter, { folded: this.folded, reveal: this.cursor });
   }
 
   /** Move the cursor to the next/previous selectable cell that passes `want` (wrapping). */
@@ -517,6 +535,10 @@ export class NotebookView implements Component, Focusable {
   private goTo(f: Followed, id: string): void {
     let head: string | undefined;
     while ((head = foldedCells(f.notebook, this.folded).get(id)) !== undefined) this.folded.delete(head);
+    if (this.chainView && !chainCells(f.notebook, this.chainOrder, "").some((c) => c.id === id)) {
+      this.chainView = false;
+      this.note = "Left the run chain: that cell is not in it.";
+    }
     this.filter = "";
     this.mode = "cells";
     this.table = undefined;
@@ -640,6 +662,7 @@ export class NotebookView implements Component, Focusable {
     this.scroll = 0;
     this.follow = true;
     this.cursor = undefined;
+    this.chainView = false;
     this.filter = "";
     this.varFilter = "";
     this.varCursor = undefined;
@@ -1334,6 +1357,12 @@ export class NotebookView implements Component, Focusable {
       this.tui.requestRender();
       return;
     }
+    if (matchesKey(data, "escape") && this.chainView) {
+      this.chainView = false;
+      this.reveal = true;
+      this.tui.requestRender();
+      return;
+    }
     if (this.actions.docked && data === "q") {
       this.close();
       return;
@@ -1565,7 +1594,16 @@ export class NotebookView implements Component, Focusable {
       else this.note = "No cell selected.";
     } else if (f && command.id === "error-next") this.step(f, 1, (c) => !!c.error);
     else if (f && command.id === "error-previous") this.step(f, -1, (c) => !!c.error);
-    else if (command.id === "follow") {
+    else if (f && command.id === "chain") {
+      this.chainView = !this.chainView;
+      if (!this.cells(f).some((c) => c.id === this.cursor)) this.cursor = undefined;
+      this.reveal = true;
+      this.note = undefined;
+    } else if (command.id === "chain-order") {
+      if (this.chainView && this.cursor !== undefined && this.lastCellRows.has(this.cursor)) this.keepRow = this.lastCellRows.get(this.cursor)! - this.scroll;
+      this.chainOrder = this.chainOrder === "file" ? "run" : "file";
+      this.note = `${this.chainOrder === "run" ? "Run" : "File"} order.${this.chainView ? "" : " Press @ to show the run chain."}`;
+    } else if (command.id === "follow") {
       this.follow = true;
       this.reveal = true;
     } else if (command.id === "jump-running") this.jumpToRunning();
@@ -1622,8 +1660,10 @@ export class NotebookView implements Component, Focusable {
     // What runs, by its title, with the spinner; else the kernel's state.
     const run = nb.running();
     const queued = nb.queued();
+    const chain = nb.chain.active() ? nb.chain.current : undefined;
+    const chainTotal = chain ? chain.members.filter((id) => { const c = nb.cells.get(id); return c && !nb.isMarkdown(c); }).length : 0;
     const state = run
-      ? [th.bold(th.fg("accent", `${spinner(Date.now())} running ${cellTitle(nb, run.cell)}${run.since ? ` ${elapsed(Date.now() - run.since)}` : ""}`)), queued ? th.fg("accent", `${queued} queued`) : "", errors ? th.fg("error", `${errors} error${errors === 1 ? "" : "s"}`) : "", ...lensParts(f)].filter(Boolean).join(" · ")
+      ? [th.bold(th.fg("accent", `${spinner(Date.now())} running ${cellTitle(nb, run.cell)}${run.since ? ` ${elapsed(Date.now() - run.since)}` : ""}`)), chain ? th.fg("accent", `step ${chain.steps.size}/${chainTotal}`) : "", queued ? th.fg("accent", `${queued} queued`) : "", errors ? th.fg("error", `${errors} error${errors === 1 ? "" : "s"}`) : "", ...lensParts(f)].filter(Boolean).join(" · ")
       : queued && f.connection === "connected" ? [th.fg("accent", `◌ ${queued} queued`), ...lensParts(f)].join(" · ")
         : [...kernelStateParts(f).filter(part => part !== "idle" || !native?.running), ...lensParts(f)].join(" · ");
     const dot = th.fg("dim", " · ");
@@ -1635,7 +1675,7 @@ export class NotebookView implements Component, Focusable {
     const removed = changes.filter((c) => c.kind === "deleted").length;
     const agent = changes.length ? `${dot}${th.fg("accent", `agent: ${[edited ? `${edited} changed` : "", created ? `${created} new` : "", removed ? `${removed} removed` : ""].filter(Boolean).join(" · ")}`)}` : "";
     const prefs = this.preferences.snapshot();
-    const context = [this.palette ? "palette" : this.help ? "help" : this.commandMode(), this.mode === "variables" ? this.varFilter : this.mode === "packages" ? this.packagePane.state.filter : this.filter].filter(Boolean).join(" · ");
+    const context = [this.palette ? "palette" : this.help ? "help" : this.commandMode(), this.chainView && this.mode === "cells" ? `chain · ${this.chainOrder} order` : "", this.mode === "variables" ? this.varFilter : this.mode === "packages" ? this.packagePane.state.filter : this.filter].filter(Boolean).join(" · ");
     const visibility = [context, prefs.diagnostics !== "all" ? `diagnostics ${prefs.diagnostics === "none" ? "hidden" : prefs.diagnostics}` : "", !prefs.showOutput ? "output hidden" : ""].filter(Boolean).join(" · ");
     const left = `${visibility ? `${th.fg("dim", visibility)}${dot}` : ""}${busy ? `${th.fg("accent", "●")} ` : errors ? `${th.fg("error", "✗")} ` : ""}${th.bold(file)}  ${[state, ...(native?.detail ?? [])].filter(Boolean).join(" · ")}${working}${agent}`;
     const right = th.fg("dim", [this.actions.lastRun?.(f) ?? "", shortWhere(f.attachment.url) ?? "", servers.length ? `server ${servers.join(", ")}` : ""].filter(Boolean).join(" · "));
@@ -1828,6 +1868,11 @@ export class NotebookView implements Component, Focusable {
     } else {
       out.push(row(this.header(f, file, inner)));
       const nb = f.notebook;
+      const chain = nb.chain.current;
+      if (chain && nb.chain.active() && chain.id !== this.lastChainId) {
+        this.lastChainId = chain.id;
+        if (this.actions.chainFollow === "wave" && this.follow) this.chainView = true;
+      }
       const cells = this.cells(f);
       const running = nb.running();
       if (this.editors.active) {
@@ -1836,7 +1881,7 @@ export class NotebookView implements Component, Focusable {
       }
       // Following: the cursor stays on the running cell, or on the fold that hides it.
       if (this.follow && running) {
-        const head = this.filter ? undefined : foldedCells(nb, this.folded).get(running.cell.id);
+        const head = this.filter || this.chainView ? undefined : foldedCells(nb, this.folded).get(running.cell.id);
         const target = head ?? running.cell.id;
         if (cells.some((c) => c.id === target)) this.cursor = target;
       }
@@ -1852,13 +1897,18 @@ export class NotebookView implements Component, Focusable {
       const detailTop = split || !oh ? 0 : oh + 1;
       const dh = split ? page : page - detailTop;
       this.panes = { lw, detailLeft: split ? CONTENT_LEFT + lw + SEPARATOR_WIDTH : CONTENT_LEFT, detailTop, outlineHeight: oh, shows };
-      const outline = (): ReturnType<typeof outlineRows> => outlineRows(nb, th as PaneTheme, Date.now(), { cursor: this.cursor, folded: this.folded, filter: this.filter, width: lw });
+      const outline = (): ReturnType<typeof outlineRows> => outlineRows(nb, th as PaneTheme, Date.now(), { cursor: this.cursor, folded: this.folded, filter: this.filter, width: lw, chain: this.chainView ? { order: this.chainOrder } : undefined });
       let built = outline();
       const at = this.cursor !== undefined ? built.cellRows.get(this.cursor) : undefined;
       if (!split) {
         // Stacked: the cursor's neighbours, the cursor in the middle.
         const centre = this.follow && running && built.running !== undefined ? built.running : at;
         if (centre !== undefined) this.scroll = Math.max(0, Math.min(centre - Math.floor((oh - 1) / 2), built.rows.length - oh));
+        this.reveal = false;
+        this.keepRow = undefined;
+      } else if (this.keepRow !== undefined && at !== undefined) {
+        this.scroll = Math.max(0, Math.min(at - this.keepRow, built.rows.length - page));
+        this.keepRow = undefined;
         this.reveal = false;
       } else if (this.follow && running && built.running !== undefined) {
         this.scroll = Math.min(Math.max(0, built.rows.length - page), Math.max(0, built.running - Math.floor(page / 3)));
@@ -1874,6 +1924,7 @@ export class NotebookView implements Component, Focusable {
         }
       }
       this.lastOutline = built.rows;
+      this.lastCellRows = built.cellRows;
       // The detail: the cursor's cell (or its section), at its own scroll.
       this.live.beginFrame();
       const cell = cells.find((c) => c.id === this.cursor);

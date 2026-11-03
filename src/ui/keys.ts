@@ -82,6 +82,8 @@ export const COMMANDS: readonly Command[] = [
   command("run-stale", N, ["R"], "Execution", "run stale", "Press twice to run stale cells"),
   command("run-all", N, ["A"], "Execution", "run all", "Press twice to run all cells"),
   command("interrupt", N, ["x"], "Execution", "interrupt", "Press twice to interrupt the kernel"),
+  command("chain", N, ["@"], "Navigation", "run chain", "Show only the cells in the latest run, with their run steps; @ or Escape shows all"),
+  command("chain-order", N, ["~"], "Navigation", "chain order", "Switch the run chain between file order and run order"),
   command("scratch", N, [":"], "Execution", "kernel Python", "Open a docked Python prompt"),
   command("ask", N, ["a"], "Execution", "ask agent"),
   command("mark", N, ["m"], "Execution", "Lens mark"),

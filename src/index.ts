@@ -105,6 +105,8 @@ export const DEFAULT_CONFIG = {
     split: false,
     /** Dock a notebook beside the chat when the agent starts running its cells. */
     autoSplit: true,
+    /** The run chain view (@): "file" or "run" order; "wave" turns it on when a run starts while following. */
+    chain: { order: "file", follow: "manual" },
   },
   execution: { command: [] as string[] },
   completion: { mode: "subscribed" },
@@ -554,6 +556,8 @@ export default function piMarimo(pi: ExtensionAPI): void {
       liveCharts: config.liveCharts,
       outputs: config.view.outputs,
       code: config.view.code === "folded" ? "folded" : "open",
+      chainOrder: config.view.chain.order === "run" ? "run" : "file",
+      chainFollow: config.view.chain.follow === "wave" ? "wave" : "manual",
       keybindings: keys,
       ...(suite ? { editorFactory: suite.factory } : {}),
       // Docking waits for the overlay to close, or Pi's focus restore takes focus back from the docked view.

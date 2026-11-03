@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- The outline draws the selected cell's direct inputs and dependents in a gutter, and marks the cells of the current run. `@` shows only the latest run's cells, in file order with run steps or in run order with file position (`~`, `view.chain.order`); `view.chain.follow: "wave"` shows it automatically.
 - Expanded source and fenced code remain complete and scroll horizontally, with optional line numbers; Markdown prose uses the available width. Mermaid diagrams render inline or show their complete source and a reason when unavailable.
 - Edit Python and eligible literal Markdown in an isolated Neovim 0.10+ buffer. Save without running, save and run, or revert explicitly; conflicting changes are not overwritten and unexpected editor exits retain an in-memory draft.
 - Filter diagnostics independently of output, and display native marimo, PyMC, Rich and tqdm progress where supported. Console redraws show the current display rather than a lossless log.

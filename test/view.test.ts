@@ -3365,3 +3365,91 @@ test("during a run, cells outside it are dimmed and finished cells show a check"
   lines = notebookLines(f.notebook, tagged, 0, { cursor: "c" }).lines;
   expect(lines.some(l => l.includes("<success>✓</success>"))).toBe(true);
 });
+
+function chainNb(): Followed {
+  const f = nbWith([
+    { id: "a", code: "x = 1", name: "load" },
+    { id: "b", code: "y = x + 1", name: "fit" },
+    { id: "m", code: "unrelated = 0", name: "bystander" },
+    { id: "c", code: "z = y * x", name: "chart" },
+  ]);
+  f.notebook.apply("variables", { variables: [{ name: "x", declared_by: ["a"], used_by: ["b", "c"] }, { name: "y", declared_by: ["b"], used_by: ["c"] }, { name: "z", declared_by: ["c"], used_by: [] }, { name: "unrelated", declared_by: ["m"], used_by: [] }] });
+  return f;
+}
+const runChain = (f: Followed) => {
+  f.notebook.apply("cell-op", { cell_id: "a", status: "queued", timestamp: 1 });
+  f.notebook.apply("cell-op", { cell_id: "c", status: "queued", timestamp: 1 });
+  f.notebook.apply("cell-op", { cell_id: "a", status: "running", timestamp: 2 });
+};
+
+test("@ shows only the run's cells with steps and a gap row; j/k skip the gap; Esc leaves the view, not the notebook", () => {
+  const f = chainNb(); runChain(f);
+  let closed = false;
+  const v = new NotebookView(tui as any, theme2, notebookKey(f), { followed: () => [f], interrupt: async () => {}, openInBrowser: () => {} }, () => { closed = true; });
+  try {
+    v.handleInput("@");
+    const text = plain(screen(v));
+    expect(text).toContain("chain · 1/2");
+    expect(text).toContain("⋯ 2 cells");
+    expect((v as any).lastOutline.map((r: any) => plain(r.text)).join("\n")).not.toContain("bystander");
+    expect(v.snapshot().chain).toBe(true);
+    v.handleInput("j");
+    expect(v.snapshot().cursor).toBe("c");
+    v.handleInput("\x1b");
+    expect(closed).toBe(false);
+    expect(v.snapshot().chain).toBe(false);
+    expect(plain(screen(v))).toContain("bystander");
+  } finally { v.dispose(); }
+});
+
+test("~ reorders by run step, shows the file-position strip, and keeps the cursor cell; a backwards step is tinted", () => {
+  const f = chainNb();
+  // fit runs before load in this run: a backwards step in file order.
+  f.notebook.apply("cell-op", { cell_id: "b", status: "queued", timestamp: 1 });
+  f.notebook.apply("cell-op", { cell_id: "a", status: "queued", timestamp: 1 });
+  f.notebook.apply("cell-op", { cell_id: "b", status: "running", timestamp: 2 });
+  f.notebook.apply("cell-op", { cell_id: "b", status: "idle", timestamp: 3 });
+  f.notebook.apply("cell-op", { cell_id: "a", status: "running", timestamp: 4 });
+  f.notebook.apply("cell-op", { cell_id: "a", status: "idle", timestamp: 5 });
+  const wide = outlineRows(f.notebook, tagged, 0, { folded: new Set(), filter: "", width: 300, chain: { order: "file" } }).rows.map(r => r.text);
+  expect(wide.find(l => l.includes("load"))).toMatch(/<warning>\s*2<\/warning>/u);
+  const v = new NotebookView(tui as any, theme2, notebookKey(f), { followed: () => [f], interrupt: async () => {}, openInBrowser: () => {} }, () => {});
+  try {
+    v.handleInput("@");
+    screen(v);
+    const cursor = v.snapshot().cursor;
+    v.handleInput("~");
+    const run = plain(screen(v));
+    expect(v.snapshot()).toMatchObject({ chain: true, chainOrder: "run", cursor });
+    expect(run).toContain("run order");
+    expect(run).toMatch(/[▏▎▍▌▋▊▉█][\s\S]*[▏▎▍▌▋▊▉█]/u);
+    const order = outlineRows(f.notebook, theme2, 0, { folded: new Set(), filter: "", width: 100, chain: { order: "run" } }).rows.map(r => r.cell).filter(Boolean);
+    expect(order).toEqual(["b", "a"]);
+  } finally { v.dispose(); }
+});
+
+test("chainFollow wave turns the chain view on at the first run while following; manual does not", () => {
+  for (const [mode, expected] of [["wave", true], ["manual", false]] as const) {
+    const f = chainNb();
+    const v = make(f, { chainFollow: mode });
+    try {
+      screen(v);
+      f.notebook.apply("cell-op", { cell_id: "b", status: "queued", timestamp: 1 });
+      screen(v);
+      expect(v.snapshot().chain).toBe(expected);
+    } finally { v.dispose(); }
+  }
+});
+
+test("< to a cell outside the chain leaves the chain view", () => {
+  const f = chainNb(); runChain(f);
+  const v = make(f);
+  try {
+    v.handleInput("@");
+    screen(v);
+    v.handleInput("j");
+    v.handleInput("<");
+    expect(screen(v)).toContain("Left the run chain");
+    expect(v.snapshot().chain).toBe(false);
+  } finally { v.dispose(); }
+});

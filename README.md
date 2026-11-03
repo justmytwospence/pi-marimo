@@ -59,6 +59,8 @@ Status chips can show execution state and agent changes together. With a Nerd Fo
 
 Mermaid fences and `mo.mermaid` render as diagrams when image support is available. If rendering or images are unavailable, the view explains why and shows the complete diagram source; `s` switches a focused diagram to or from source.
 
+With a dataflow graph, a one-column gutter joins the selected cell to its direct neighbours: `●` is the selected cell, `┌├└` are the cells it uses (accent) and the cells that use it (green), and `│` marks the span between them. While a run is active, cells outside it are dimmed, finished ones show `✓`, and the header shows `step 3/6`.
+
 From 100 columns the outline and detail sit side by side. Narrower, as when docked, they stack like a mail app: a few outline rows centered on the selected cell, the detail below.
 
 ### Essential keys
@@ -73,6 +75,7 @@ From 100 columns the outline and detail sit side by side. Narrower, as when dock
 | `!`, `\` | cycle diagnostics; toggle output independently |
 | `r` | run the cell (`R` stale cells, `A` all, each twice) |
 | `x` twice | interrupt the kernel |
+| `@` / `~` | show only the latest run (the run chain) / switch it between file order and run order |
 | `/` | find a cell: type, `ctrl+d`/`ctrl+u` or arrows through matches, Enter goes there |
 | Tab / Shift+Tab | fold the section / fold all |
 | `t` | drive the cell's table |
@@ -110,6 +113,7 @@ With the notebook focused, `ctrl+p` opens a compact floating command palette wit
 | `c`/`C` | next or previous cell the agent changed |
 | `d` | the agent's change as a diff |
 | `<` / `>` | a cell this one uses / one that uses it |
+| `@`, `~` | the run chain: only the latest run's cells; flip between file and run order |
 | `v`, `P` | variables; packages |
 | `/` | find a cell or variable by name, variable, code or error; Enter goes there, Esc goes back |
 | `f` | follow the running cell and subsequent execution |
@@ -139,6 +143,19 @@ With the notebook focused, `ctrl+p` opens a compact floating command palette wit
 The mouse works too: the wheel scrolls the pane under it, a click selects a cell or part, and a double click acts on it. Help starts in the current mode, with aligned keys and actions and a category rail when there is room. `j`/`k` and ↑/↓ scroll one row when a category overflows; when it fits they select the adjacent category (stopping at the ends). PgUp/PgDn, `g`/`G` and the wheel scroll; `/` searches keys, actions and descriptions across categories; Tab/Shift+Tab wraps through categories; Esc clears search then closes, and `?` or F1 closes when not typing. The footer prioritizes the contextual action, `? help`, nondefault visibility (`! errors`/`! warnings`/`! hidden`, `\ output off`), then `O cell`/`O section` and position. With room left, it adds `! diagnostics`, `\ output` and `# lines` (`# lines on` when enabled). Hints are always whole; a longer hint that does not fit can yield to a shorter one. Editor, widget, prompt and help footers keep their own context-specific controls.
 
 Transient messages preview in up to three rows, reserving four body rows when possible. When there is room, an overflowing preview shows `F8 more` and the number of hidden lines; F8 opens the full captured message in a read-only view. Scroll with `j`/`k` or arrows, PgUp/PgDn, `g`/`G` or Home/End, or the mouse wheel; Esc or F8 returns to the prior view and scroll position. Editor and prompt drafts are retained, and ordinary keys keep their normal behavior outside the message view.
+
+### The run chain
+
+The kernel announces every cell it will run before it runs any, so the outline can show the latest run. `@` filters the outline to those cells; Esc or `@` shows everything again. The view stays after the run ends, so you can review what ran and what broke, until the next run replaces it. A cell outside the chain that you jump to (for example with `<`) leaves the view.
+
+`~` switches the order, and each order shows the other as a column:
+
+- **File order** (default): rows follow the notebook, with each cell's run step on the left. Finished steps are plain, the running one is accented, and predicted steps are dim; a step that runs after a cell placed below it is tinted as a warning. `⋯ 3 cells` stands in for cells outside the chain. Predictions assume marimo's rule (dependencies first, ties broken by notebook order) and are replaced by the real step as each cell starts.
+- **Run order**: rows follow the run, with a strip `▏▎▍▌▋▊▉█` showing how far into the file each cell is (a dip means the run went back up the file) and the section name on the right.
+
+In a lazy runtime, cells that went stale but are not in the run are listed at the end under `stale · not in this run`. The header shows `chain · 3/6 · 0:42`, then the cell count and total time once it ends.
+
+`view.chain.order` sets the starting order and `view.chain.follow: "wave"` turns the view on when a run starts while you are following it.
 
 ### Docked beside the chat
 
@@ -308,6 +325,7 @@ A server Pi starts keeps running across `/reload` and stops when Pi exits, with 
   "liveCharts": true,
   "view": {
     "code": "open", "outputs": false, "split": false, "autoSplit": true,
+    "chain": { "order": "file", "follow": "manual" },
     "lineNumbers": false, "diagnostics": "all", "showOutput": true,
     "editor": {
       "command": "nvim",
@@ -329,6 +347,8 @@ A server Pi starts keeps running across `/reload` and stops when Pi exits, with 
 | `view.outputs` | `false` | start with the whole section in the detail |
 | `view.split` | `false` | open the view docked instead of full screen |
 | `view.autoSplit` | `true` | dock a notebook when the agent starts running it |
+| `view.chain.order` | `"file"` | the run chain's starting order: `"file"` or `"run"` |
+| `view.chain.follow` | `"manual"` | `"wave"` shows the run chain when a run starts while you are following |
 | `view.lineNumbers` | `false` | line numbers in source, fenced code and editor |
 | `view.diagnostics` | `"all"` | `"all"`, `"errors"`, `"warnings"` or `"none"` |
 | `view.showOutput` | `true` | show stdout and results; independent of diagnostics and `view.outputs` |

@@ -7,6 +7,7 @@ import { truncate } from "../core/notebook.js";
 import type { FrameTheme } from "../frame.ts";
 import { type Row, firstLine, foldedCells, selectableCells } from "./rows.js";
 import { cellTitle, outputShape } from "./titles.js";
+import { chainRows } from "./chain-outline.js";
 import { gutterMarks, gutterText, hasGraph } from "./gutter.js";
 import { cellBadges, fitBadges, spinner } from "./status.js";
 export { SPINNER, spinner } from "./status.js";
@@ -20,6 +21,8 @@ export interface OutlineOptions {
   filter: string;
   /** The width the outline draws at. */
   width: number;
+  /** Show the run chain instead of the notebook. */
+  chain?: { order: "file" | "run" } | undefined;
 }
 
 /** The mark of a cell that finished in the current run. */
@@ -44,6 +47,7 @@ export function cellGlyph(nb: NotebookState, theme: FrameTheme, c: Cell, now = D
 
 /** The notebook as outline rows, in notebook order. */
 export function outlineRows(nb: NotebookState, theme: PaneTheme, now: number, o: OutlineOptions): { rows: Row[]; cellRows: Map<string, number>; running?: number } {
+  if (o.chain) return chainRows(nb, theme, now, { cursor: o.cursor, filter: o.filter, width: o.width, order: o.chain.order });
   const filtering = !!o.filter.trim();
   const width = Math.max(8, o.width);
   const hidden = filtering ? new Map<string, string>() : foldedCells(nb, o.folded);
