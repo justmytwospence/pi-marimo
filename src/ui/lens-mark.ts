@@ -7,7 +7,7 @@ import { LENS_REQUEST_PREFIX, type LensImage, lensDeleteCommand, lensMarkCommand
 import type { Cell, NotebookState } from "../core/notebook.js";
 import { truncate } from "../core/notebook.js";
 import type { Followed } from "../core/watcher.js";
-import { setModelValue } from "./interrupt.js";
+import { setModelValue } from "../core/kernel.js";
 import { firstLine } from "./rows.js";
 import { cellTitle } from "./titles.js";
 

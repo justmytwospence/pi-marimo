@@ -14,9 +14,9 @@ import type { CellOutput } from "../src/core/output.js";
 import { callFunction, fileText } from "../src/core/table-rpc.js";
 import { MarimoWatcher } from "../src/core/watcher.js";
 import { OwnServers } from "../src/servers.js";
-import { runCells, setUiValues } from "../src/ui/interrupt.js";
+import { runCells, setUiValues } from "../src/core/kernel.js";
 import { markCell, unmarkSelection } from "../src/ui/lens-mark.js";
-import { runScratch, type ScratchEvent } from "../src/ui/scratch.js";
+import { runScratch, type ScratchEvent } from "../src/core/kernel.js";
 import { notebookKey } from "../src/ui/identity.js";
 import { NotebookView } from "../src/ui/view.js";
 

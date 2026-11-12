@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { runScratch } from "../src/ui/scratch.js";
+import { runScratch } from "../src/core/kernel.js";
 
 const enc = new TextEncoder();
 function body(chunks: string[]): AsyncIterable<Uint8Array> {

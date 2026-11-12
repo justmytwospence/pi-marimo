@@ -9,7 +9,7 @@ import { NotebookState } from "../src/core/notebook.js";
 import { CellConsole } from "../src/core/console.js";
 import { htmlToText, summarizeOutput } from "../src/core/output.js";
 import { snapshot } from "../src/core/render.js";
-import { runCells } from "../src/ui/interrupt.js";
+import { runCells } from "../src/core/kernel.js";
 import { mermaidRows, outputRows } from "../src/ui/outputs.js";
 import { detailRows } from "../src/ui/detail.js";
 import { diagnosticPanelRows } from "../src/ui/diagnostics.js";

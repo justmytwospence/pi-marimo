@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { describe, expect, test, vi } from "vitest";
 import { EditCellService, pythonJson, type ScratchExecute } from "../src/core/edit-cell.js";
 import { NotebookState } from "../src/core/notebook.js";
-import type { ScratchEvent, ScratchResult } from "../src/ui/scratch.js";
+import type { ScratchEvent, ScratchResult } from "../src/core/kernel.js";
 
 function fixture() {
   const nb = new NotebookState();

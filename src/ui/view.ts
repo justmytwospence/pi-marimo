@@ -38,7 +38,7 @@ import { type PaneTheme, outlineRows, spinner } from "./outline.js";
 import { chainCells } from "./chain-outline.js";
 import { MAX_WIDGETS, type Row, type RowOptions, firstLine, foldedCells, selectableCells } from "./rows.js";
 import { cellTitle } from "./titles.js";
-import type { ScratchEvent, ScratchResult } from "./scratch.js";
+import type { ScratchEvent, ScratchResult } from "../core/kernel.js";
 import { columnCard, rowCard, tableLines, tableViewport, orderedColumns } from "./table.js";
 import { type TableRpc, type TableSession, parseFilter, tableSession } from "./table-session.js";
 import { variableList, variableRows, variableDetailRows, type VariableSort } from "./variables.js";

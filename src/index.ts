@@ -41,8 +41,7 @@ import { MarimoWatcher, type Mode, type Waiting, parseMode } from "./core/watche
 import { HerdrHold } from "./herdr.js";
 import { ACTIVITY_CHANGED, ACTIVITY_GONE, ACTIVITY_HOST, ACTIVITY_SECTION, stoppable } from "./activity.js";
 import { FULL_SCREEN } from "./frame.ts";
-import { interruptKernel, runCells, setUiValues } from "./ui/interrupt.js";
-import { runScratch } from "./ui/scratch.js";
+import { interruptKernel, runCells, runScratch, setUiValues } from "./core/kernel.js";
 import { callFunction, downloadCsv, fileText } from "./core/table-rpc.js";
 import { cellTitle } from "./ui/titles.js";
 import { WidgetSender } from "./ui/widgets.js";
