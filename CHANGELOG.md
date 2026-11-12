@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.4.0
+
+- Works with marimo's upcoming host protocol as well as 0.25.x. Notebooks are followed on marimo main, and run and interrupt go through `/api/marimo/v1` when the server publishes a host record.
+- Pi attaches to host-capable notebooks as an agent: marimo shows it in the notebook footer, and notebook agent messages arrive as prompts (`pair.inbox`, `/marimo attach`).
+- `u` reverts the agent's change to a cell, or deletes a cell it created, after a confirmation that names the downstream cells it affects. The diff (`d`) shows the same.
+- Section view shows output above code. Cells with hidden code start folded. Hub cells no longer draw a dataflow bar through the whole outline. Help starts with navigation. The palette lists common actions first. The agent's snapshot keeps every cell up to 150.
+- Mermaid downloads and is verified on first use instead of being installed, saving about 120 MB.
+- New documentation site, a 60-second quickstart notebook (`examples/quickstart.py`), and Node 22.19+.
+
 ## 0.3.1
 
 - Published from GitHub Actions with npm provenance. The coffee demo gains a roast pipeline section, a longer, slower dataflow chain for trying the run chain view.
