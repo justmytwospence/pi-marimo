@@ -937,48 +937,7 @@ export class NotebookView implements Component, Focusable {
   handleInput(data: string): void {
     if (this.closed || this.confirming) return;
     this.syncConfirmation();
-    if (this.messageView) {
-      if (!this.messageView.input(data, this.lastPage)) this.messageView = undefined;
-      this.tui.requestRender();
-      return;
-    }
-    if (matchesKey(data, "f8")) {
-      const text = this.transientMessage(true);
-      if (text) {
-        this.messageView = new MessageView({ text, scroll: 0 });
-        this.armed.clear();
-      }
-      this.tui.requestRender();
-      return;
-    }
-    if (this.palette) {
-      const result = this.palette.input(data);
-      if (result?.kind === "cancel") this.palette = undefined;
-      else if (result?.kind === "execute") this.runPaletteCommand(result.command);
-      this.tui.requestRender();
-      return;
-    }
-    if (this.help) {
-      this.help = this.helpView.handleInput(data, this.lastPage);
-      this.tui.requestRender();
-      return;
-    }
-    if (this.editors.active) {
-      this.editors.updateCurrent(this.current());
-      this.editors.handleInput(data);
-      this.tui.requestRender();
-      return;
-    }
-    if (this.dock) {
-      if (this.tui.terminal.rows > 0) this.dock.handleInput(data);
-      this.tui.requestRender();
-      return;
-    }
-    // Text owners bypass the command registry: punctuation must remain literal.
-    if (this.typing) return this.typeFilter(data);
-    if (this.mode === "packages" && this.packages.typing) {
-      this.packages.key(this.current(), data); this.tui.requestRender(); return;
-    }
+    if (this.ownerInput(data)) return;
     const command = commandFor(this.commandMode(), data);
     if (!command) {
       // Unknown notebook input still cancels a pending two-press action, as before.
@@ -991,12 +950,65 @@ export class NotebookView implements Component, Focusable {
       this.tui.requestRender();
       return;
     }
+    if (this.sharedInput(command, data)) return;
+    this.notebookCommand(command, data);
+  }
+
+  /** Whatever owns the keyboard (the message, palette, help, editor, dock or a text box) takes the key. */
+  private ownerInput(data: string): boolean {
+    if (this.messageView) {
+      if (!this.messageView.input(data, this.lastPage)) this.messageView = undefined;
+      this.tui.requestRender();
+      return true;
+    }
+    if (matchesKey(data, "f8")) {
+      const text = this.transientMessage(true);
+      if (text) {
+        this.messageView = new MessageView({ text, scroll: 0 });
+        this.armed.clear();
+      }
+      this.tui.requestRender();
+      return true;
+    }
+    if (this.palette) {
+      const result = this.palette.input(data);
+      if (result?.kind === "cancel") this.palette = undefined;
+      else if (result?.kind === "execute") this.runPaletteCommand(result.command);
+      this.tui.requestRender();
+      return true;
+    }
+    if (this.help) {
+      this.help = this.helpView.handleInput(data, this.lastPage);
+      this.tui.requestRender();
+      return true;
+    }
+    if (this.editors.active) {
+      this.editors.updateCurrent(this.current());
+      this.editors.handleInput(data);
+      this.tui.requestRender();
+      return true;
+    }
+    if (this.dock) {
+      if (this.tui.terminal.rows > 0) this.dock.handleInput(data);
+      this.tui.requestRender();
+      return true;
+    }
+    // Text owners bypass the command registry: punctuation must remain literal.
+    if (this.typing) { this.typeFilter(data); return true; }
+    if (this.mode === "packages" && this.packages.typing) {
+      this.packages.key(this.current(), data); this.tui.requestRender(); return true;
+    }
+    return false;
+  }
+
+  /** Keys every mode shares, then the mode that is open (widgets, table, packages, variables). */
+  private sharedInput(command: Command, data: string): boolean {
     if (command.id === "palette") {
       this.palette = new Palette(this.commandMode());
-      this.tui.requestRender(); return;
+      this.tui.requestRender(); return true;
     }
     if (command.id === "help") {
-      this.openHelp(); this.tui.requestRender(); return;
+      this.openHelp(); this.tui.requestRender(); return true;
     }
     if (command.id === "diagnostics" || command.id === "output") {
       const current = this.preferences.snapshot();
@@ -1009,53 +1021,59 @@ export class NotebookView implements Component, Focusable {
       const hidesOutput = !this.preferences.snapshot().showOutput && (!!this.widgets.active || !!this.tables.active || this.live.inspecting || (focused && ["printed", "output", "table", "chart", "widgets"].includes(focused.kind)));
       if (hidesOutput || (command.id === "diagnostics" && focused?.kind === "error")) this.focusSource();
       this.tui.requestRender();
-      return;
+      return true;
     }
     if (this.timing) {
       this.timing = false;
       this.tui.requestRender();
-      return;
+      return true;
     }
     if (this.live.inspecting && command.id.startsWith("chart-")) {
       // LiveCharts owns the pointer protocol; registry aliases map to its canonical input.
       const key = command.keys[0]!;
       this.live.key(key === "escape" ? "\x1b" : key === "space" ? " " : key);
       this.tui.requestRender();
-      return;
+      return true;
     }
-    if (this.typing) return this.typeFilter(data);
+    if (this.typing) { this.typeFilter(data); return true; }
     const f = this.current();
     if (this.widgets.active) {
       this.widgets.key(f, data);
       this.tui.requestRender();
-      return;
+      return true;
     }
     if (this.tables.active && this.mode === "cells") {
       this.tables.key(f, data);
       this.tui.requestRender();
-      return;
+      return true;
     }
     if (command.id === "dock") {
       this.toggleDock();
       this.tui.requestRender();
-      return;
+      return true;
     }
     if (this.mode === "packages") {
       this.packages.key(f, data);
       this.tui.requestRender();
-      return;
+      return true;
     }
     if (command.id === "packages") {
       this.mode = "packages";
       this.packages.open(f);
       this.tui.requestRender();
-      return;
+      return true;
     }
     if (this.mode === "variables") {
       this.variables.key(f, data);
       this.tui.requestRender();
-      return;
+      return true;
     }
+    return false;
+  }
+
+  /** The notebook list's own commands. */
+  private notebookCommand(command: Command, data: string): void {
+    const f = this.current();
     if (matchesKey(data, "escape") && this.filter) {
       this.filter = "";
       this.cursor = undefined;
