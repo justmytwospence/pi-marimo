@@ -37,7 +37,9 @@
     "check": "npm run typecheck && npm test",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "prepublishOnly": "npm run check"
+    "prepublishOnly": "npm run check",
+    "docs": "uvx --from 'mkdocs>=1.6,<2' --with 'mkdocs-material>=9.6,<10' mkdocs serve",
+    "docs:build": "uvx --from 'mkdocs>=1.6,<2' --with 'mkdocs-material>=9.6,<10' mkdocs build --strict"
   },
   "peerDependencies": {
     "@earendil-works/pi-agent-core": "*",
@@ -58,7 +60,7 @@
     "type": "git",
     "url": "git+https://github.com/justmytwospence/pi-marimo.git"
   },
-  "homepage": "https://github.com/justmytwospence/pi-marimo#readme",
+  "homepage": "https://justmytwospence.github.io/pi-marimo/",
   "bugs": {
     "url": "https://github.com/justmytwospence/pi-marimo/issues"
   },

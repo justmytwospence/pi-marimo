@@ -1,0 +1,76 @@
+site_name: pi-marimo
+site_description: The marimo notebook your agent is editing, live in your terminal beside the chat.
+site_url: https://justmytwospence.github.io/pi-marimo/
+repo_url: https://github.com/justmytwospence/pi-marimo
+repo_name: justmytwospence/pi-marimo
+edit_uri: edit/main/docs/
+theme:
+  name: material
+  font:
+    text: PT Sans
+    code: Fira Mono
+  features:
+    - content.code.copy
+    - navigation.sections
+    - navigation.instant
+    - navigation.footer
+    - search.suggest
+    - toc.follow
+  palette:
+    - media: "(prefers-color-scheme)"
+      toggle:
+        icon: material/brightness-auto
+        name: Switch to light mode
+    - media: "(prefers-color-scheme: light)"
+      primary: white
+      accent: teal
+      scheme: default
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      primary: black
+      accent: teal
+      scheme: slate
+      toggle:
+        icon: material/brightness-4
+        name: Switch to system preference
+markdown_extensions:
+  - admonition
+  - attr_list
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.details
+  - pymdownx.highlight
+  - pymdownx.inlinehilite
+  - pymdownx.keys
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.snippets:
+      base_path: ["."]
+      check_paths: true
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+nav:
+  - Home: index.md
+  - Getting started: getting-started.md
+  - Guide:
+      - The notebook view: guide/notebook-view.md
+      - Tables, widgets and charts: guide/data.md
+      - Editing cells: guide/editing.md
+      - Working with the agent: guide/agent.md
+      - Background execution: guide/execution.md
+  - Reference:
+      - Keys: reference/keys.md
+      - Commands and tools: reference/commands.md
+      - Configuration: reference/configuration.md
+  - Compatibility: compatibility.md
+  - How it works: how-it-works.md
+  - Troubleshooting: troubleshooting.md
+  - Development: development.md
+  - Changelog: changelog.md
