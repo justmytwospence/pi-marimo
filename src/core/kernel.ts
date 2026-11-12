@@ -2,11 +2,17 @@
 // buttons and controls do: POST /api/kernel/interrupt, /run, /set_ui_element_value and
 // /set_model_value for the session. marimo checks a server token on every API call (it is in the
 // page marimo serves, `data-token="..."`) besides the access token of a protected server.
+import { randomUUID } from "node:crypto";
+import { type HostRecord, findHost } from "./hosts.js";
 import { authHeaders } from "./registry.js";
 import { htmlToText } from "./output.js";
 import { SseParser } from "./sse.js";
 
 type Fetch = (url: string, init?: { method?: string; headers?: Record<string, string>; body?: string; signal?: AbortSignal }) => Promise<{ ok: boolean; status: number; text(): Promise<string> }>;
+
+/** A notebook session on a server; `notebookId` (marimo main) lets run and interrupt use the host API. */
+export interface KernelTarget { url: string; sessionId: string; notebookId?: string }
+type HostLookup = (url: string) => Promise<HostRecord | undefined>;
 
 const serverTokens = new Map<string, string>();
 
@@ -41,13 +47,28 @@ export async function kernelPost(target: { url: string; sessionId: string }, end
   if (!res.ok) throw new Error(`marimo answered ${res.status}`);
 }
 
+/** POSTs to marimo's host API (bearer token, idempotency key); never retried. */
+export async function hostPost(host: HostRecord, path: string, body: unknown, fetchImpl: Fetch = fetch as unknown as Fetch): Promise<void> {
+  const res = await fetchImpl(`${host.url}${path}`, {
+    method: "POST",
+    signal: AbortSignal.timeout(15_000),
+    headers: { Authorization: `Bearer ${host.token}`, "Idempotency-Key": randomUUID(), ...(body !== undefined ? { "Content-Type": "application/json" } : {}) },
+    ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+  });
+  if (!res.ok) throw new Error(`marimo answered ${res.status}`);
+}
+
 /** Stops whatever the session's kernel runs (the running cell; the queue behind it is dropped). */
-export function interruptKernel(target: { url: string; sessionId: string }, token?: string, fetchImpl: Fetch = fetch as unknown as Fetch): Promise<void> {
+export async function interruptKernel(target: KernelTarget, token?: string, fetchImpl: Fetch = fetch as unknown as Fetch, hosts: HostLookup = findHost): Promise<void> {
+  const host = target.notebookId ? await hosts(target.url) : undefined;
+  if (host) return hostPost(host, `/notebooks/${encodeURIComponent(target.notebookId!)}/runtime/interrupt`, undefined, fetchImpl);
   return kernelPost(target, "interrupt", {}, token, fetchImpl);
 }
 
-/** Runs cells as the browser's run button does: POST /api/kernel/run with each cell's id and code. */
-export function runCells(target: { url: string; sessionId: string }, cells: Array<{ id: string; code: string }>, token?: string, fetchImpl: Fetch = fetch as unknown as Fetch): Promise<void> {
+/** Runs cells as the browser's run button does (marimo main: the host API runs them by id). */
+export async function runCells(target: KernelTarget, cells: Array<{ id: string; code: string }>, token?: string, fetchImpl: Fetch = fetch as unknown as Fetch, hosts: HostLookup = findHost): Promise<void> {
+  const host = target.notebookId ? await hosts(target.url) : undefined;
+  if (host) return hostPost(host, `/notebooks/${encodeURIComponent(target.notebookId!)}/runtime/runs`, { cells: cells.map((c) => ({ id: c.id })) }, fetchImpl);
   return kernelPost(target, "run", { cellIds: cells.map((c) => c.id), codes: cells.map((c) => c.code) }, token, fetchImpl);
 }
 

@@ -5,17 +5,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, expect, test } from "vitest";
 import { nodeIo } from "../src/core/node-io.js";
+import { MARIMO, marimoAvailable } from "./live-marimo.js";
 import { MarimoWatcher } from "../src/core/watcher.js";
 
-const hasMarimo = (() => {
-  if (process.env.PI_MARIMO_LIVE_TEST !== "1") return false;
-  try {
-    execFileSync("marimo", ["--version"], { stdio: "ignore" });
-    return true;
-  } catch {
-    return false;
-  }
-})();
+const hasMarimo = marimoAvailable();
 
 const NOTEBOOK = `import marimo
 
@@ -84,7 +77,7 @@ function openInBrowser(url: string, file: string, id: string): void {
 }
 
 function runAll(url: string, file: string): void {
-  const run = spawn("marimo", ["pair", "execute", "--url", url, "--file", file, "--code-file", "-"], { stdio: ["pipe", "ignore", "ignore"] });
+  const run = spawn(MARIMO[0]!, [...MARIMO.slice(1), "pair", "execute", "--url", url, "--file", file, "--code-file", "-"], { stdio: ["pipe", "ignore", "ignore"] });
   run.stdin!.end("import marimo._code_mode as cm\nasync with cm.get_context() as ctx:\n    for c in ctx.cells:\n        ctx.run_cell(c.id)\n");
 }
 
@@ -97,7 +90,7 @@ test.skipIf(!hasMarimo)("follows the notebooks open under the cwd, the most rece
   writeFileSync(other, NOTEBOOK.replace("## Slow step", "## Other step"));
   mkdirSync(join(dir, ".worktrees", "branch"), { recursive: true });
   writeFileSync(hidden, NOTEBOOK);
-  server = spawn("marimo", ["edit", dir, "--no-token", "--headless", "--port", String(port)], { cwd: dir, stdio: "ignore" });
+  server = spawn(MARIMO[0]!, [...MARIMO.slice(1), "edit", dir, "--no-token", "--headless", "--port", String(port)], { cwd: dir, stdio: "ignore" });
   const url = `http://127.0.0.1:${port}`;
   for (let i = 0; i < 100; i++) {
     try { if ((await fetch(`${url}/health`)).ok) break; } catch { /* starting */ }

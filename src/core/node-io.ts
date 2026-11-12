@@ -10,7 +10,7 @@ export function registryDir(env: NodeJS.ProcessEnv = process.env): string {
   return join(env.XDG_STATE_HOME || join(homedir(), ".local", "state"), "marimo", "servers");
 }
 
-function alive(pid: unknown): boolean {
+export function alive(pid: unknown): boolean {
   if (typeof pid !== "number") return true;
   try {
     process.kill(pid, 0);
@@ -18,6 +18,12 @@ function alive(pid: unknown): boolean {
   } catch (error) {
     return (error as NodeJS.ErrnoException).code === "EPERM";
   }
+}
+
+/** marimo main's host records (`hosts-v1`): one private JSON file per running host. */
+export function hostsDir(env: NodeJS.ProcessEnv = process.env): string {
+  if (process.platform === "win32") return join(homedir(), ".marimo", "hosts-v1");
+  return join(env.XDG_STATE_HOME || join(homedir(), ".local", "state"), "marimo", "hosts-v1");
 }
 
 export function nodeIo(options: { registryDir?: string; fetch?: typeof fetch } = {}): Io {

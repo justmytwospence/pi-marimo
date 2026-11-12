@@ -495,10 +495,10 @@ export default function piMarimo(pi: ExtensionAPI): void {
       terminal.write(`\x1b]52;c;${Buffer.from(text).toString("base64")}\x07`);
     },
     followed: () => watcher?.followed() ?? [],
-    interrupt: (f) => withEditor(f, (t) => interruptKernel(t, process.env.MARIMO_TOKEN)),
+    interrupt: (f) => withEditor(f, (t) => interruptKernel({ ...t, ...(f.attachment.notebookId ? { notebookId: f.attachment.notebookId } : {}) }, process.env.MARIMO_TOKEN)),
     executionActivity,
     openInBrowser: (f) => openUrl(`${f.attachment.url}/?file=${encodeURIComponent(f.attachment.path)}`),
-    run: (f, cells) => withEditor(f, (t) => runCells(t, cells, process.env.MARIMO_TOKEN)),
+    run: (f, cells) => withEditor(f, (t) => runCells({ ...t, ...(f.attachment.notebookId ? { notebookId: f.attachment.notebookId } : {}) }, cells, process.env.MARIMO_TOKEN)),
     servers: (f) => [...bg.servers(f.attachment.path), ...(ownServers().find(f.attachment.url) ? ["started by Pi"] : [])],
     stopServers: (f) => bg.stopServers(f.attachment.path) + (ownServers().stop(f.attachment.url) ? 1 : 0),
     lastRun: (f) => source.lastRun(f),

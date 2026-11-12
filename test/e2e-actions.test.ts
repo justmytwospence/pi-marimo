@@ -18,23 +18,16 @@ import { runCells, setUiValues } from "../src/core/kernel.js";
 import { markCell, unmarkSelection } from "../src/ui/lens-mark.js";
 import { runScratch, type ScratchEvent } from "../src/core/kernel.js";
 import { notebookKey } from "../src/ui/identity.js";
+import { MARIMO, marimoAvailable } from "./live-marimo.js";
 import { NotebookView } from "../src/ui/view.js";
 
-const live = (() => {
-  if (process.env.PI_MARIMO_LIVE_TEST !== "1") return false;
-  try {
-    execFileSync("marimo", ["--version"], { stdio: "ignore" });
-    return true;
-  } catch {
-    return false;
-  }
-})();
+const live = marimoAvailable();
 
 test.skipIf(!live)("package-list-read-only in a disposable fixture session", async () => {
   const dir = realpathSync(mkdtempSync(join(tmpdir(), "pi-marimo-package-list-")));
   const file = join(dir, "packages.py");
   writeFileSync(file, NOTEBOOK);
-  const server = await servers.start({ command: ["marimo"], file, cwd: dir, timeoutMs: 60_000 });
+  const server = await servers.start({ command: MARIMO, file, cwd: dir, timeoutMs: 60_000 });
   const sessionId = await headless.attach(server.url, file);
   const watcher = new MarimoWatcher({ io: nodeIo(), cwd: dir, pollMs: 300, onChange: () => undefined });
   watcher.start();
@@ -120,7 +113,7 @@ test.skipIf(!live)("a notebook Pi starts: run, set a widget, run Python, mark a 
   const dir = realpathSync(mkdtempSync(join(tmpdir(), "pi-marimo-actions-")));
   const file = join(dir, "nb.py");
   writeFileSync(file, NOTEBOOK);
-  const server = await servers.start({ command: ["marimo"], file, cwd: dir, timeoutMs: 60_000 });
+  const server = await servers.start({ command: MARIMO, file, cwd: dir, timeoutMs: 60_000 });
   const sessionId = await headless.attach(server.url, file);
   const watcher = new MarimoWatcher({ io: nodeIo(), cwd: dir, pollMs: 300, onChange: () => undefined });
   watcher.start();
@@ -218,7 +211,7 @@ test.skipIf(!live)("keyboard controls update kernel values; table cursor, full v
   const dir = realpathSync(mkdtempSync(join(tmpdir(), "pi-marimo-keyboard-")));
   const file = join(dir, "keyboard.py");
   writeFileSync(file, KEYBOARD_NOTEBOOK);
-  const server = await servers.start({ command: ["marimo"], file, cwd: dir, timeoutMs: 60_000 });
+  const server = await servers.start({ command: MARIMO, file, cwd: dir, timeoutMs: 60_000 });
   const sessionId = await headless.attach(server.url, file);
   const watcher = new MarimoWatcher({ io: nodeIo(), cwd: dir, pollMs: 300, onChange: () => undefined });
   watcher.start();
@@ -353,7 +346,7 @@ test.skipIf(!live)("save API: save-only, canonical source, explicit run, and sta
   const dir = realpathSync(mkdtempSync(join(tmpdir(), "pi-marimo-save-")));
   const file = join(dir, "save-fixture.py");
   writeFileSync(file, SAVE_NOTEBOOK);
-  const server = await servers.start({ command: ["marimo"], file, cwd: dir, timeoutMs: 60_000 });
+  const server = await servers.start({ command: MARIMO, file, cwd: dir, timeoutMs: 60_000 });
   const sessionId = await headless.attach(server.url, file);
   const watcher = new MarimoWatcher({ io: nodeIo(), cwd: dir, pollMs: 300, onChange: () => undefined });
   watcher.start();
