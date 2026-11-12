@@ -1,14 +1,45 @@
-import { readFile } from "node:fs/promises";
-import { createRequire } from "node:module";
+import { createHash } from "node:crypto";
+import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import type { CdpClient } from "./cdp.js";
 import { sharedChrome } from "./chrome.js";
 import type { Geometry } from "./live.js";
 
 export type MermaidAppearance = "light" | "dark";
 export type MermaidState = { status: "rendering" } | { status: "ready"; png: string } | { status: "failed"; reason: string };
-export const mermaidBundlePath = (): string => createRequire(import.meta.url).resolve("mermaid/dist/mermaid.min.js");
-let bundle: Promise<string> | undefined;
-const localBundle = () => bundle ??= readFile(mermaidBundlePath(), "utf8");
+/** The pinned browser bundle, downloaded on first use (about 5 MB) instead of shipped as a dependency (over 100 MB). */
+export const MERMAID_VERSION = "12.2.0";
+export const MERMAID_SHA256 = "a8a6a6f805b074a8261a2825c86f99c8054acb3b35f50bb7e24a4f9f2c3c3b9f";
+const MERMAID_URL = `https://cdn.jsdelivr.net/npm/mermaid@${MERMAID_VERSION}/dist/mermaid.min.js`;
+const bundles = new Map<string, Promise<string>>();
+
+const sha256 = (text: string): string => createHash("sha256").update(text).digest("hex");
+
+/** The bundle's source: from pi-marimo's cache when it verifies, else downloaded, verified and cached. */
+export function mermaidBundle(options: { cacheDir?: string; fetchImpl?: typeof fetch } = {}): Promise<string> {
+  const dir = options.cacheDir ?? join(process.env.XDG_CACHE_HOME ?? join(homedir(), ".cache"), "pi-marimo", "mermaid", MERMAID_VERSION);
+  const known = bundles.get(dir);
+  if (known) return known;
+  const load = (async () => {
+    const file = join(dir, "mermaid.min.js");
+    try {
+      const cached = await readFile(file, "utf8");
+      if (sha256(cached) === MERMAID_SHA256) return cached;
+    } catch { /* not cached yet */ }
+    const res = await (options.fetchImpl ?? fetch)(MERMAID_URL, { signal: AbortSignal.timeout(60_000) });
+    if (!res.ok) throw new Error(`could not download Mermaid (HTTP ${res.status})`);
+    const text = await res.text();
+    if (sha256(text) !== MERMAID_SHA256) throw new Error("Mermaid download failed verification");
+    await mkdir(dir, { recursive: true });
+    await writeFile(`${file}.tmp`, text);
+    await rename(`${file}.tmp`, file);
+    return text;
+  })();
+  bundles.set(dir, load);
+  load.catch(() => bundles.delete(dir));
+  return load;
+}
 interface Entry { state: MermaidState; callbacks: Set<() => void>; bytes: number }
 
 /** Lazy, serial, isolated Mermaid renders. Source is data, never executable page/HTML input. */
@@ -17,7 +48,7 @@ export class MermaidRenderer {
   private queue: Promise<void> = Promise.resolve();
   private disposed = false;
   private cancel = new Set<() => void>();
-  constructor(private readonly host: { connection(): Promise<CdpClient> } = sharedChrome(), private readonly deadlineMs = 10_000) {}
+  constructor(private readonly host: { connection(): Promise<CdpClient> } = sharedChrome(), private readonly deadlineMs = 10_000, private readonly loadBundle: () => Promise<string> = () => mermaidBundle()) {}
 
   request(source: string, geometry: Geometry, appearance: MermaidAppearance, onReady: () => void): MermaidState {
     if (this.disposed) return { status: "failed", reason: "renderer disposed" };
@@ -99,7 +130,7 @@ export class MermaidRenderer {
         return result;
       };
       await evaluate(`document.head.innerHTML = '<meta http-equiv="Content-Security-Policy" content="default-src \\'none\\'; style-src \\'unsafe-inline\\'; img-src data:; font-src data:; base-uri \\'none\\'; form-action \\'none\\'">'; document.body.style.cssText='margin:0;overflow:hidden'; window.open=()=>null;`);
-      await evaluate(await localBundle());
+      await evaluate(await this.loadBundle()); check();
       await evaluate(`(async () => {
         mermaid.initialize({startOnLoad:false,securityLevel:'strict',secure:[...mermaid.mermaidAPI.defaultConfig.secure,'htmlLabels','flowchart','theme'],maxTextSize:262144,theme:${JSON.stringify(appearance === "dark" ? "dark" : "default")},htmlLabels:false,flowchart:{htmlLabels:false}});
         const rendered = await mermaid.render('diagram', ${JSON.stringify(source)});

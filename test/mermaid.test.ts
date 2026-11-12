@@ -1,8 +1,11 @@
-import { readFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, test, vi } from "vitest";
 import type { CdpClient } from "../src/core/cdp.js";
 import { componentProps, outputElements, parseOutputFragment, textContent } from "../src/core/html.js";
-import { MermaidRenderer, mermaidBundlePath, type MermaidState } from "../src/core/mermaid.js";
+import { MermaidRenderer, MERMAID_SHA256, mermaidBundle, type MermaidState } from "../src/core/mermaid.js";
 import { mermaidRows } from "../src/ui/outputs.js";
 import { foregroundAnsi, getTerminalColorMode, parseColor, stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
 import { CellConsole } from "../src/core/console.js";
@@ -19,6 +22,7 @@ vi.mock("@earendil-works/pi-tui", async importOriginal => ({
   Image: class { render() { return ["\x1b_Gfake", ""]; } },
 }));
 
+const stubBundle = async () => "/*bundle*/";
 const geometry = { cols: 80, rows: 14, cellW: 8, cellH: 16 };
 function mock() {
   const handlers = new Map<string, (p: Record<string, any>) => void>();
@@ -88,7 +92,7 @@ describe("Mermaid source panels", () => {
   }
   test.each(["failed", "rendering", "ready"] as const)("highlights complete source panels for %s diagrams", async status => {
     const syntax = new SyntaxHighlighter();
-    const renderer = new MermaidRenderer(mock().host);
+    const renderer = new MermaidRenderer(mock().host, 10_000, stubBundle);
     vi.spyOn(renderer, "request").mockReturnValue(status === "failed" ? { status, reason: "browser missing" } : status === "ready" ? { status, png: "image" } : { status });
     try {
       const onReady = vi.fn();
@@ -108,7 +112,7 @@ describe("Mermaid source panels", () => {
     notebook.apply("kernel-ready", { cell_ids: ["m"], codes: [`mo.md(r\"\"\"# Diagram\n\n\`\`\`mermaid\n${source}\n\`\`\`\"\"\")`], names: ["_"] });
     const followed: Followed = { attachment: { path: "/fixture/diagram.py", url: "http://fixture.invalid", sessionId: "s" }, notebook, connection: "connected", current: true, touchedAt: 0 };
     const tui = { requestRender: vi.fn(), terminal: { rows: 40 } };
-    const renderer = new MermaidRenderer(mock().host);
+    const renderer = new MermaidRenderer(mock().host, 10_000, stubBundle);
     const request = vi.spyOn(renderer, "request").mockReturnValue({ status: "failed", reason: "browser missing" });
     const view = new NotebookView(tui as any, theme, notebookKey(followed), { followed: () => [followed], interrupt: async () => {}, openInBrowser: () => {}, syntax, diagrams: renderer }, () => {});
     try {
@@ -132,12 +136,43 @@ describe("Mermaid source panels", () => {
 });
 
 describe("Mermaid renderer", () => {
-  test("installed full local browser bundle exists", () => {
-    expect(mermaidBundlePath()).toContain("mermaid.min.js");
-    expect(readFileSync(mermaidBundlePath(), "utf8").length).toBeGreaterThan(500_000);
+  describe("the on-demand bundle", () => {
+    const dir = () => mkdtempSync(join(tmpdir(), "pi-marimo-mermaid-"));
+    const real = readFileSync(new URL("../node_modules/mermaid/dist/mermaid.min.js", import.meta.url), "utf8");
+    test("is the pinned build", () => {
+      expect(createHash("sha256").update(real).digest("hex")).toBe(MERMAID_SHA256);
+    });
+    test("downloads, verifies and caches once", async () => {
+      const d = dir();
+      const fetchImpl = vi.fn(async () => ({ ok: true, status: 200, text: async () => real })) as unknown as typeof fetch;
+      expect(await mermaidBundle({ cacheDir: d, fetchImpl })).toBe(real);
+      expect(readFileSync(join(d, "mermaid.min.js"), "utf8")).toBe(real);
+      expect(await mermaidBundle({ cacheDir: d, fetchImpl })).toBe(real);
+      expect(fetchImpl).toHaveBeenCalledTimes(1);
+      expect(String((fetchImpl as any).mock.calls[0][0])).toContain("mermaid@12.2.0");
+    });
+    test("a cached copy that no longer verifies is downloaded again", async () => {
+      const d = dir();
+      writeFileSync(join(d, "mermaid.min.js"), "tampered");
+      const fetchImpl = vi.fn(async () => ({ ok: true, status: 200, text: async () => real })) as unknown as typeof fetch;
+      expect(await mermaidBundle({ cacheDir: d, fetchImpl })).toBe(real);
+      expect(fetchImpl).toHaveBeenCalledTimes(1);
+    });
+    test("a hash mismatch rejects and writes nothing", async () => {
+      const d = dir();
+      const fetchImpl = (async () => ({ ok: true, status: 200, text: async () => "evil" })) as unknown as typeof fetch;
+      await expect(mermaidBundle({ cacheDir: d, fetchImpl })).rejects.toThrow("failed verification");
+      expect(existsSync(join(d, "mermaid.min.js"))).toBe(false);
+    });
+    test("an HTTP error rejects, and the next call may try again", async () => {
+      const d = dir();
+      const fetchImpl = (async () => ({ ok: false, status: 404, text: async () => "" })) as unknown as typeof fetch;
+      await expect(mermaidBundle({ cacheDir: d, fetchImpl })).rejects.toThrow("HTTP 404");
+      await expect(mermaidBundle({ cacheDir: d, fetchImpl })).rejects.toThrow("HTTP 404");
+    });
   });
   test("serializes source safely, loads local bytes and closes isolated targets", async () => {
-    const m = mock(); const renderer = new MermaidRenderer(m.host);
+    const m = mock(); const renderer = new MermaidRenderer(m.host, 10_000, stubBundle);
     const source = 'graph TD; A["</script>\\\"; window.pwned=true; //"]-->B';
     expect((await ready(renderer, source)).status).toBe("ready");
     const calls = m.send.mock.calls;
@@ -146,7 +181,7 @@ describe("Mermaid renderer", () => {
     expect(render?.[1]?.expression).toContain("securityLevel:'strict'");
     expect(render?.[1]?.expression).toContain("htmlLabels:false");
     expect(render?.[1]?.expression).not.toContain("bindFunctions");
-    expect(calls.some(([method, p]) => method === "Runtime.evaluate" && String(p?.expression).length > 500_000)).toBe(true);
+    expect(calls.some(([method, p]) => method === "Runtime.evaluate" && String(p?.expression) === "/*bundle*/")).toBe(true);
     expect(calls).toContainEqual(["Browser.setDownloadBehavior", { behavior: "deny", browserContextId: "context" }]);
     expect(calls.some(([method]) => method === "Target.closeTarget")).toBe(true);
     expect(calls.some(([method]) => method === "Target.disposeBrowserContext")).toBe(true);
@@ -160,7 +195,7 @@ describe("Mermaid renderer", () => {
       if (method === "Runtime.evaluate" && String(p?.expression).includes("const rendered")) await new Promise<void>(r => { release = r; });
       return original(method, p, session);
     });
-    const renderer = new MermaidRenderer(m.host);
+    const renderer = new MermaidRenderer(m.host, 10_000, stubBundle);
     const result = ready(renderer);
     await vi.waitFor(() => expect(release).toBeTypeOf("function"));
     expect(m.send.mock.calls.some(([method, p]) => method === "Network.setBlockedURLs" && JSON.stringify(p).includes("*"))).toBe(true);
@@ -173,7 +208,7 @@ describe("Mermaid renderer", () => {
     release(); renderer.dispose();
   });
   test("deduplicates, caches multiple diagrams and regenerates on geometry/theme changes", async () => {
-    const m = mock(); const renderer = new MermaidRenderer(m.host);
+    const m = mock(); const renderer = new MermaidRenderer(m.host, 10_000, stubBundle);
     await Promise.all([ready(renderer), ready(renderer)]);
     await ready(renderer); await ready(renderer, "graph TD; C-->D");
     await ready(renderer, undefined, { ...geometry, cols: 40 });
@@ -187,14 +222,14 @@ describe("Mermaid renderer", () => {
   test("32 MiB image budget evicts before the entry count limit", async () => {
     const m = mock(); const original = m.send.getMockImplementation()!;
     m.send.mockImplementation(async (method, p, session) => method === "Page.captureScreenshot" ? { data: "A".repeat(17 * 1024 * 1024) } : original(method, p, session));
-    const renderer = new MermaidRenderer(m.host);
+    const renderer = new MermaidRenderer(m.host, 10_000, stubBundle);
     await ready(renderer, "a"); await ready(renderer, "b"); await ready(renderer, "a");
     expect(m.send.mock.calls.filter(([method]) => method === "Target.createTarget")).toHaveLength(3);
     renderer.dispose();
   });
   test("source fallback is complete for failure/rendering and image metadata uses the existing path", () => {
     const theme = { fg: (_: string, text: string) => text, bold: (text: string) => text };
-    const m = mock(); const renderer = new MermaidRenderer(m.host);
+    const m = mock(); const renderer = new MermaidRenderer(m.host, 10_000, stubBundle);
     const source = `graph TD\n${"A-->B\n".repeat(10_000)}LAST`;
     const request = vi.spyOn(renderer, "request");
     request.mockReturnValue({ status: "failed", reason: "browser missing" });
@@ -213,14 +248,14 @@ describe("Mermaid renderer", () => {
     renderer.dispose();
   });
   test("oversize input is rejected without starting Chrome", () => {
-    const m = mock(); const renderer = new MermaidRenderer(m.host);
+    const m = mock(); const renderer = new MermaidRenderer(m.host, 10_000, stubBundle);
     expect(renderer.request("é".repeat(131073), geometry, "light", () => {})).toMatchObject({ status: "failed", reason: expect.stringContaining("256 KiB") });
     expect(m.send).not.toHaveBeenCalled(); renderer.dispose();
   });
   test("deadline closes targets and allows the next serialized job", async () => {
     const m = mock(); const original = m.send.getMockImplementation()!;
     m.send.mockImplementation(async (method, p, session) => method === "Runtime.evaluate" ? new Promise(() => {}) : original(method, p, session));
-    const renderer = new MermaidRenderer(m.host, 30);
+    const renderer = new MermaidRenderer(m.host, 30, stubBundle);
     expect(await ready(renderer)).toMatchObject({ status: "failed", reason: "render timed out" });
     expect(m.send.mock.calls.some(([method]) => method === "Target.closeTarget")).toBe(true);
     renderer.dispose();
@@ -228,7 +263,7 @@ describe("Mermaid renderer", () => {
   test("syntax errors close targets and leave readable failure states", async () => {
     const m = mock(); const original = m.send.getMockImplementation()!;
     m.send.mockImplementation(async (method, p, session) => method === "Runtime.evaluate" ? { exceptionDetails: { text: "syntax error" } } : original(method, p, session));
-    const renderer = new MermaidRenderer(m.host);
+    const renderer = new MermaidRenderer(m.host, 10_000, stubBundle);
     expect(await ready(renderer)).toMatchObject({ status: "failed", reason: "invalid diagram or unsupported syntax" });
     expect(m.handlers.size).toBe(0);
     expect(m.send.mock.calls.some(([method]) => method === "Target.closeTarget")).toBe(true);
@@ -241,14 +276,14 @@ describe("Mermaid renderer", () => {
       if (method === "Runtime.evaluate") await new Promise<void>(r => { release = r; });
       return original(method, p, session);
     });
-    const renderer = new MermaidRenderer(m.host); const result = ready(renderer);
+    const renderer = new MermaidRenderer(m.host, 10_000, stubBundle); const result = ready(renderer);
     await vi.waitFor(() => expect(release).toBeTypeOf("function"));
     m.handlers.get("Inspector.targetCrashed")!({});
     expect(await result).toMatchObject({ status: "failed", reason: "browser target crashed" });
     release(); renderer.dispose();
     const late = mock(); let resolve!: (v: Record<string, any>) => void;
     late.send.mockImplementation(async method => method === "Target.createBrowserContext" ? new Promise(r => { resolve = r; }) : {});
-    const disposed = new MermaidRenderer(late.host);
+    const disposed = new MermaidRenderer(late.host, 10_000, stubBundle);
     disposed.request("late", geometry, "light", () => {});
     await vi.waitFor(() => expect(resolve).toBeTypeOf("function"));
     disposed.dispose(); resolve({ browserContextId: "late-context" });
@@ -257,7 +292,7 @@ describe("Mermaid renderer", () => {
   test("dispose cancels active and pending renders without notifying stale consumers", async () => {
     const m = mock(); const original = m.send.getMockImplementation()!;
     m.send.mockImplementation(async (method, p, session) => method === "Runtime.evaluate" ? new Promise(() => {}) : original(method, p, session));
-    const renderer = new MermaidRenderer(m.host); const callback = vi.fn();
+    const renderer = new MermaidRenderer(m.host, 10_000, stubBundle); const callback = vi.fn();
     renderer.request("one", geometry, "light", callback); renderer.request("two", geometry, "light", callback);
     await vi.waitFor(() => expect(m.send.mock.calls.some(([method]) => method === "Runtime.evaluate")).toBe(true));
     renderer.dispose(); await new Promise(r => setTimeout(r, 10));
