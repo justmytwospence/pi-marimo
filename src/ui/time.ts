@@ -38,6 +38,8 @@ export function exactTime(at: number, timeZone?: string): string {
   const p = parts(at, timeZone);
   const detail = new Intl.DateTimeFormat("en-US", { timeZone, second: "2-digit", timeZoneName: "longOffset" }).formatToParts(at);
   const second = detail.find((v) => v.type === "second")!.value.padStart(2, "0");
-  const zone = detail.find((v) => v.type === "timeZoneName")!.value;
+  const rawZone = detail.find((v) => v.type === "timeZoneName")!.value;
+  // Newer ICU prints a bare "GMT" for a zero offset.
+  const zone = rawZone === "GMT" ? "GMT+00:00" : rawZone;
   return `${p.year}-${p.month}-${p.day} ${p.hour}:${p.minute}:${second} ${zone}`;
 }
