@@ -17,8 +17,8 @@ export interface ViewHost {
   isClosed(): boolean;
   /** The one-line note under the panes; undefined clears it. */
   setNote(text: string | undefined): void;
-  /** Back to the cell list, with the cursor kept in view. */
-  showCells(): void;
+  /** Back to the cell list, with the cursor kept in view (and the outline scrolled to the top). */
+  showCells(resetScroll?: boolean): void;
   openDock(spec: DockSpec): void;
   closeDock(): void;
   /** While a Pi dialog is up the view takes no keys. */
@@ -26,4 +26,18 @@ export interface ViewHost {
   /** Move the outline to a cell. */
   goTo(f: Followed, id: string): void;
   cell(f: Followed, id: string): Cell | undefined;
+  /** Scroll the outline by rows (and stop following the running cell). */
+  move(by: number): void;
+  resetScroll(): void;
+  /** Scroll the cursor into view on the next render. */
+  reveal(): void;
+  switchNotebook(by: 1 | -1): void;
+  setMode(mode: "cells" | "variables" | "packages"): void;
+  /** Back to Pi's chat. */
+  leave(): void;
+  copy(text: string): void;
+  /** Typing goes to a filter box; Esc returns to `from`. */
+  startFind(from: string | undefined): void;
+  enterTable(f: Followed, cell: Cell): void;
+  confirm(question: string, choices: readonly string[]): Promise<string | undefined>;
 }

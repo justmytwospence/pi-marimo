@@ -45,6 +45,7 @@ import { type TableRpc, type TableSession, parseFilter, tableSession } from "./t
 import { variableList, variableRows, variableDetailRows, type VariableSort } from "./variables.js";
 import type { PackagePaneState } from "./packages.js";
 import { PackagesController } from "./view-packages.js";
+import { VariablesController } from "./view-variables.js";
 import type { ViewHost } from "./view-host.js";
 import type { PackageClient, PackageSnapshot } from "../core/packages.js";
 import { SessionPreferences, type ViewPreferences } from "./settings.js";
@@ -277,11 +278,7 @@ export class NotebookView implements Component, Focusable {
   private section: boolean;
   private folded = new Set<string>();
   private diffs = new Set<string>();
-  private varCursor: string | undefined;
-  private varFilter = "";
-  private varSort: VariableSort = "name";
-  private varDetail = false;
-  private varScroll = 0;
+  private variables!: VariablesController;
   /** The focused part of the cursor's cell (n/p), an index into `lastParts`. */
   private part: number | undefined;
   private partCell: string | undefined;
@@ -330,14 +327,25 @@ export class NotebookView implements Component, Focusable {
       render: () => this.renderReady(),
       isClosed: () => this.closed,
       setNote: (text) => { this.note = text; },
-      showCells: () => { this.mode = "cells"; this.reveal = true; },
+      showCells: (resetScroll) => { this.mode = "cells"; if (resetScroll) this.scroll = 0; this.reveal = true; },
       openDock: (spec) => this.openDock(spec),
       closeDock: () => this.closeDock(),
       setConfirming: (on) => { this.confirming = on; },
       goTo: (f, id) => this.goTo(f, id),
       cell: (f, id) => f.notebook.cells.get(id),
+      move: (by) => this.move(by),
+      resetScroll: () => { this.scroll = 0; },
+      reveal: () => { this.reveal = true; },
+      switchNotebook: (by) => this.switchNotebook(by),
+      setMode: (mode) => { this.mode = mode; },
+      leave: () => this.leave(),
+      copy: (text) => this.copy(text),
+      startFind: (from) => { this.typing = true; this.findFrom = from; },
+      enterTable: (f, cell) => this.enterTable(f, cell),
+      confirm: (question, choices) => this.confirm(question, choices),
     };
     this.packages = new PackagesController(this.host);
+    this.variables = new VariablesController(this.host);
     this.ownsEditors = !actions.editors;
     this.editors = actions.editors ?? new InlineEditorManager();
     const colors = (theme as SyntaxTheme).colors;
@@ -408,9 +416,9 @@ export class NotebookView implements Component, Focusable {
       ...(this.packages.pane.snapshot ? { packageSnapshot: this.packages.pane.snapshot } : {}),
       ...(this.packages.pane.tree ? { packageTree: this.packages.pane.tree } : {}),
       ...(this.packages.pane.treeError ? { packageTreeError: this.packages.pane.treeError } : {}),
-      ...(this.varCursor !== undefined ? { varCursor: this.varCursor } : {}),
-      varFilter: this.varFilter,
-      varSort: this.varSort, varDetail: this.varDetail, varScroll: this.varScroll,
+      ...(this.variables.cursor !== undefined ? { varCursor: this.variables.cursor } : {}),
+      varFilter: this.variables.filter,
+      varSort: this.variables.sort, varDetail: this.variables.detail, varScroll: this.variables.scroll,
       codeOffsets: [...this.codeOffsets].map(([id, state]) => [id, { ...state }]),
       diagramSources: [...this.diagramSources],
       sectionCodeOpen: [...this.sectionCodeOpen],
@@ -456,11 +464,11 @@ export class NotebookView implements Component, Focusable {
     this.packages.pane.snapshot = s.packageSnapshot;
     this.packages.pane.tree = s.packageTree;
     this.packages.pane.treeError = s.packageTreeError;
-    this.varCursor = s.varCursor;
-    this.varFilter = s.varFilter;
-    this.varSort = s.varSort ?? "name";
-    this.varDetail = s.varDetail ?? false;
-    this.varScroll = s.varScroll ?? 0;
+    this.variables.cursor = s.varCursor;
+    this.variables.filter = s.varFilter;
+    this.variables.sort = s.varSort ?? "name";
+    this.variables.detail = s.varDetail ?? false;
+    this.variables.scroll = s.varScroll ?? 0;
     this.codeOffsets = new Map(s.codeOffsets ?? []);
     this.diagramSources = new Set(s.diagramSources ?? []);
     this.sectionCodeOpen = new Set(s.sectionCodeOpen ?? []);
@@ -621,22 +629,22 @@ export class NotebookView implements Component, Focusable {
     if (by) {
       const f = this.current();
       if (vars) {
-        const list = f ? variableList(f.notebook, this.varFilter, this.varSort) : [];
-        const at = list.findIndex((v) => v.name === this.varCursor);
-        this.varCursor = list[Math.max(0, Math.min(list.length - 1, at + by))]?.name ?? this.varCursor;
+        const list = f ? variableList(f.notebook, this.variables.filter, this.variables.sort) : [];
+        const at = list.findIndex((v) => v.name === this.variables.cursor);
+        this.variables.cursor = list[Math.max(0, Math.min(list.length - 1, at + by))]?.name ?? this.variables.cursor;
         this.reveal = true;
       } else if (f) this.step(f, by as 1 | -1);
       this.tui.requestRender();
       return;
     }
-    let text = vars ? this.varFilter : this.filter;
+    let text = vars ? this.variables.filter : this.filter;
     // `/` finds: Enter goes to the match under the cursor and shows everything again; Esc goes back.
     if (matchesKey(data, "escape") || matchesKey(data, "enter")) {
       const found = matchesKey(data, "enter");
       this.typing = false;
       if (vars) {
-        this.varFilter = "";
-        if (!found) this.varCursor = this.findFrom;
+        this.variables.filter = "";
+        if (!found) this.variables.cursor = this.findFrom;
       } else {
         this.filter = "";
         const target = found ? this.cursor : this.findFrom;
@@ -653,8 +661,8 @@ export class NotebookView implements Component, Focusable {
     else if (matchesKey(data, "backspace")) text = text.slice(0, -1);
     else if (!data.startsWith("\x1b") && data >= " ") text += data;
     if (vars) {
-      this.varFilter = text;
-      this.varCursor = undefined;
+      this.variables.filter = text;
+      this.variables.cursor = undefined;
     } else {
       this.filter = text;
       this.cursor = undefined;
@@ -678,8 +686,8 @@ export class NotebookView implements Component, Focusable {
     this.cursor = undefined;
     this.chainView = false;
     this.filter = "";
-    this.varFilter = "";
-    this.varCursor = undefined;
+    this.variables.filter = "";
+    this.variables.cursor = undefined;
     this.folded.clear();
     this.diffs.clear();
     this.codeOpen.clear();
@@ -1010,73 +1018,9 @@ export class NotebookView implements Component, Focusable {
     }
   }
 
-  private variablesKey(f: Followed | undefined, data: string): void {
-    const command = commandFor("variables", data)?.id;
-    const page = this.viewport();
-    const list = f ? variableList(f.notebook, this.varFilter, this.varSort) : [];
-    const at = Math.max(0, list.findIndex((v) => v.name === this.varCursor));
-    if (command === "var-back" && this.varDetail) { this.varDetail = false; this.varScroll = 0; return; }
-    if (this.varDetail) {
-      const down = command === "var-down", up = command === "var-up";
-      if (down || up || command === "var-first" || command === "var-last") {
-        this.varScroll = command === "var-first" ? 0 : command === "var-last" ? Number.MAX_SAFE_INTEGER : Math.max(0, this.varScroll + (down ? 1 : -1)); return;
-      }
-      const next = command === "var-page-down" || command === "var-half-down";
-      const previous = command === "var-page-up" || command === "var-half-up";
-      if (next || previous) { this.varScroll = Math.max(0, this.varScroll + (next ? page : -page)); return; }
-    }
-    if (command === "var-sort") { const sorts: VariableSort[] = ["name", "type", "definition"]; this.varSort = sorts[(sorts.indexOf(this.varSort) + 1) % sorts.length]!; return; }
-    const moveTo = (i: number) => { this.varCursor = list[Math.max(0, Math.min(list.length - 1, i))]?.name; this.reveal = true; };
-    if (command === "var-leave") { this.leave(); return; }
-    if (command === "var-close" || command === "var-back") {
-      this.mode = "cells";
-      this.scroll = 0;
-      this.reveal = true;
-      return;
-    }
-    if (command === "notebook-previous") { this.switchNotebook(-1); this.mode = "variables"; return; }
-    if (command === "notebook-next") { this.switchNotebook(1); this.mode = "variables"; return; }
-    if (command === "var-find") { this.typing = true; this.findFrom = this.varCursor; this.varFilter = ""; return; }
-    if (command === "var-down") return moveTo(at + 1);
-    if (command === "var-up") return moveTo(at - 1);
-    if (command === "var-first") { this.scroll = 0; return moveTo(0); }
-    if (command === "var-last") return moveTo(list.length - 1);
-    if (command === "var-half-up") return this.move(-Math.max(1, Math.floor(page / 2)));
-    if (command === "var-half-down") return this.move(Math.max(1, Math.floor(page / 2)));
-    if (command === "var-page-up") return this.move(-page);
-    if (command === "var-page-down") return this.move(page);
-    const v = list[at];
-    if (!f || !v) return;
-    if (command === "var-detail") {
-      this.varDetail = true; this.varScroll = 0;
-    } else if (command === "var-definition") {
-      if (v.definedBy && f.notebook.cells.has(v.definedBy)) this.goTo(f, v.definedBy);
-      else this.note = `No cell defines ${v.name}.`;
-    } else if (command === "var-copy" || command === "var-copy-value") {
-      try { if (this.actions.copy) this.actions.copy(command === "var-copy" ? v.name : v.value); else this.copy(command === "var-copy" ? v.name : v.value); }
-      catch (e) { this.note = message(e); }
-    } else if (command === "var-ask") {
-      const defining = v.definedBy ? f.notebook.cells.get(v.definedBy) : undefined;
-      if (this.actions.ask) this.actions.ask(f, defining, `Explain variable ${v.name} (${v.datatype}), defined in ${defining ? cellTitle(f.notebook, defining) : "unknown cell"}.`);
-      else this.note = "Asking the agent is not available here.";
-    } else if (command === "var-table") {
-      const cell = v.definedBy ? f.notebook.cells.get(v.definedBy) : undefined;
-      if (!cell?.output?.table) this.note = `No table output for ${v.name}.`;
-      else { this.goTo(f, cell.id); this.enterTable(f, cell); }
-    } else if (command === "var-uses") {
-      const users = f.notebook.order.filter(id => v.usedBy.includes(id));
-      if (!users.length) { this.note = `No cell uses ${v.name}.`; return; }
-      const choices = ["Cancel", ...users.map((id, i) => `${i + 1}. ${cellTitle(f.notebook, f.notebook.cells.get(id)!)}`)];
-      void this.confirm(`Use sites of ${v.name}`, choices).then(choice => {
-        const id = users[choices.indexOf(choice ?? "") - 1];
-        if (!this.closed && id && this.current()?.notebook === f.notebook) { this.goTo(f, id); this.tui.requestRender(); }
-      }).catch(e => { this.note = message(e); this.renderReady(); });
-    }
-  }
-
   /** Enter (or a double click): edit source/Markdown or activate the focused control. */
   private activate(f: Followed): void {
-    if (this.mode === "variables") return this.variablesKey(f, "\r");
+    if (this.mode === "variables") return this.variables.key(f, "\r");
     const c = this.cursorCell(f);
     if (!c) return;
     this.cursor = c.id;
@@ -1151,7 +1095,7 @@ export class NotebookView implements Component, Focusable {
   private scrollBy(by: number): void {
     if (this.mode === "cells") this.detailScroll = Math.max(0, this.detailScroll + by);
     else if (this.mode === "packages") this.packages.pane.state.scroll = Math.max(0, this.packages.pane.state.scroll + by);
-    else if (this.varDetail) this.varScroll = Math.max(0, this.varScroll + by);
+    else if (this.variables.detail) this.variables.scroll = Math.max(0, this.variables.scroll + by);
     else this.move(by);
   }
 
@@ -1273,7 +1217,7 @@ export class NotebookView implements Component, Focusable {
       return;
     }
     if (this.mode === "variables") {
-      this.variablesKey(f, data);
+      this.variables.key(f, data);
       this.tui.requestRender();
       return;
     }
@@ -1599,7 +1543,7 @@ export class NotebookView implements Component, Focusable {
     const removed = changes.filter((c) => c.kind === "deleted").length;
     const agent = changes.length ? `${dot}${th.fg("accent", `agent: ${[edited ? `${edited} changed` : "", created ? `${created} new` : "", removed ? `${removed} removed` : ""].filter(Boolean).join(" · ")}`)}` : "";
     const prefs = this.preferences.snapshot();
-    const context = [this.palette ? "palette" : this.help ? "help" : this.commandMode(), this.chainView && this.mode === "cells" ? `chain · ${this.chainOrder} order` : "", this.mode === "variables" ? this.varFilter : this.mode === "packages" ? this.packages.pane.state.filter : this.filter].filter(Boolean).join(" · ");
+    const context = [this.palette ? "palette" : this.help ? "help" : this.commandMode(), this.chainView && this.mode === "cells" ? `chain · ${this.chainOrder} order` : "", this.mode === "variables" ? this.variables.filter : this.mode === "packages" ? this.packages.pane.state.filter : this.filter].filter(Boolean).join(" · ");
     const visibility = [context, prefs.diagnostics !== "all" ? `diagnostics ${prefs.diagnostics === "none" ? "hidden" : prefs.diagnostics}` : "", !prefs.showOutput ? "output hidden" : ""].filter(Boolean).join(" · ");
     const left = `${visibility ? `${th.fg("dim", visibility)}${dot}` : ""}${busy ? `${th.fg("accent", "●")} ` : errors ? `${th.fg("error", "✗")} ` : ""}${th.bold(file)}  ${[state, ...(native?.detail ?? [])].filter(Boolean).join(" · ")}${working}${agent}`;
     const right = th.fg("dim", [this.actions.lastRun?.(f) ?? "", shortWhere(f.attachment.url) ?? "", servers.length ? `server ${servers.join(", ")}` : ""].filter(Boolean).join(" · "));
@@ -1766,25 +1710,25 @@ export class NotebookView implements Component, Focusable {
     } else if (this.mode === "variables") {
       out.push(row(this.header(f, file, inner)));
       const nb = f.notebook;
-      const list = variableList(nb, this.varFilter, this.varSort);
-      if (!this.varCursor || !list.some((v) => v.name === this.varCursor)) this.varCursor = list[0]?.name;
-      let built = variableRows(list, nb, th, this.varCursor, inner, this.varFilter);
-      const at = this.varCursor !== undefined ? built.index.get(this.varCursor) : undefined;
+      const list = variableList(nb, this.variables.filter, this.variables.sort);
+      if (!this.variables.cursor || !list.some((v) => v.name === this.variables.cursor)) this.variables.cursor = list[0]?.name;
+      let built = variableRows(list, nb, th, this.variables.cursor, inner, this.variables.filter);
+      const at = this.variables.cursor !== undefined ? built.index.get(this.variables.cursor) : undefined;
       this.place(built.rows.length, at, page);
       // Scrolled away from the cursor: it moves to the nearest variable on screen.
       if (at !== undefined && (at < this.scroll || at >= this.scroll + page)) {
         const pick = list[at < this.scroll ? this.scroll : Math.min(list.length - 1, this.scroll + page - 1)];
         if (pick) {
-          this.varCursor = pick.name;
-          built = variableRows(list, nb, th, this.varCursor, inner, this.varFilter);
+          this.variables.cursor = pick.name;
+          built = variableRows(list, nb, th, this.variables.cursor, inner, this.variables.filter);
         }
       }
-      if (this.varDetail && list.length) {
-        const selected = list.find(v => v.name === this.varCursor)!;
+      if (this.variables.detail && list.length) {
+        const selected = list.find(v => v.name === this.variables.cursor)!;
         const detail = variableDetailRows(selected, nb, inner);
-        this.varScroll = Math.min(this.varScroll, Math.max(0, detail.length - page));
+        this.variables.scroll = Math.min(this.variables.scroll, Math.max(0, detail.length - page));
         this.lastRows = detail;
-        for (let i = 0; i < page; i++) out.push(row(detail[this.varScroll + i]?.text ?? ""));
+        for (let i = 0; i < page; i++) out.push(row(detail[this.variables.scroll + i]?.text ?? ""));
       } else {
         this.lastRows = built.rows;
         for (let i = 0; i < page; i++) out.push(row(built.rows[this.scroll + i]?.text ?? ""));
@@ -2231,7 +2175,7 @@ export class NotebookView implements Component, Focusable {
       return { handled: true };
     }
     if (this.editors.active) return { handled: true };
-    if (this.mode === "packages" || (this.mode === "variables" && this.varDetail)) {
+    if (this.mode === "packages" || (this.mode === "variables" && this.variables.detail)) {
       if (event.type === "wheel" && !this.help && !this.dock) { this.scrollBy(event.wheelDelta ?? 0); this.tui.requestRender(); }
       return { handled: true };
     }
@@ -2296,8 +2240,8 @@ export class NotebookView implements Component, Focusable {
     if (this.mode === "variables") {
       const r = this.lastRows[this.scroll + line];
       if (r?.variable) {
-        const again = this.varCursor === r.variable;
-        this.varCursor = r.variable;
+        const again = this.variables.cursor === r.variable;
+        this.variables.cursor = r.variable;
         if (again || twice) this.activate(f);
       }
     } else if (this.paneAt(event.x, line) === "detail") {
