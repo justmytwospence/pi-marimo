@@ -8,6 +8,7 @@ import { afterAll, expect, test } from "vitest";
 import { findHost, resetHostCache } from "../src/core/hosts.js";
 import { ownHeadlessSessions } from "../src/core/headless.js";
 import { interruptKernel, runCells } from "../src/core/kernel.js";
+import { PairInbox } from "../src/core/pair-inbox.js";
 import { nodeIo } from "../src/core/node-io.js";
 import { MarimoWatcher } from "../src/core/watcher.js";
 import { MARIMO, marimoAvailable } from "./live-marimo.js";
@@ -87,6 +88,22 @@ test.skipIf(!marimoAvailable())("follows, runs and interrupts a notebook on this
     await runCells(target, [{ id: slow!.id, code: slow!.code }]);
     await interruptKernel(target);
     // A marimo chosen through PI_MARIMO_LIVE_MARIMO is the host-protocol one: it must have been used.
+    if (host && f.attachment.notebookId) {
+      // Pi attaches as an agent: marimo lists it on the notebook.
+      const inbox = new PairInbox({ onMessage: () => {}, identity: "pi-marimo-e2e" });
+      inbox.sync([{ serverUrl: url, notebookId: f.attachment.notebookId, path: file }]);
+      try {
+        await until(() => inbox.attachedKeys().length === 1, 15_000);
+        const res = await fetch(`${host.url}/notebooks/${f.attachment.notebookId}/events?types=attachment`, { headers: { Authorization: `Bearer ${host.token}`, Accept: "text/event-stream" } });
+        const reader = res.body!.getReader();
+        let text = "";
+        while (!text.includes("event: ready")) { const { value, done } = await reader.read(); if (done) break; text += new TextDecoder().decode(value); }
+        await reader.cancel();
+        expect(text).toContain('"identity":"pi-marimo-e2e"');
+        expect(text).toContain('"kind":"agent"');
+        expect(text).toContain('"name":"Pi"');
+      } finally { inbox.dispose(); }
+    }
     if (process.env.PI_MARIMO_LIVE_MARIMO) expect(host?.url).toContain("/api/marimo/v1");
     else if (host) expect(host.url).toContain("/api/marimo/v1");
   } finally {

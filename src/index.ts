@@ -38,6 +38,7 @@ import { PackageClient } from "./core/packages.js";
 import { InlineEditorManager } from "./ui/inline-editor.js";
 import { pairTargets, sameServer } from "./core/touch.js";
 import { MarimoWatcher, type Mode, type Waiting, parseMode } from "./core/watcher.js";
+import { PairInbox } from "./core/pair-inbox.js";
 import { HerdrHold } from "./herdr.js";
 import { ACTIVITY_CHANGED, ACTIVITY_GONE, ACTIVITY_HOST, ACTIVITY_SECTION, stoppable } from "./activity.js";
 import { FULL_SCREEN } from "./frame.ts";
@@ -109,6 +110,8 @@ export const DEFAULT_CONFIG = {
   },
   execution: { command: [] as string[] },
   completion: { mode: "subscribed" },
+  /** Attach to host-capable notebooks (marimo main) as a pair agent, and turn their agent messages into prompts. */
+  pair: { inbox: true },
   server: {
     /** How /marimo edit and /marimo new start marimo; [] picks `uv run marimo` when the cwd has uv.lock, else `marimo`. */
     command: [] as string[],
@@ -130,6 +133,7 @@ const SUBCOMMANDS: Array<[string, string]> = [
   ["watch", "subscribe to the notebook's currently observed execution wave"],
   ["unwatch", "unsubscribe from an execution without interrupting Python"],
   ["executions", "list this session and branch's execution records"],
+  ["attach", "reattach Pi to notebook messages after it was detached in marimo"],
   ["lens", "print the open Lens selections"],
   ["chart", "show a cell's chart in the transcript"],
   ["inspect", "drive the newest transcript chart from the keyboard"],
@@ -341,6 +345,21 @@ export default function piMarimo(pi: ExtensionAPI): void {
       touchedAt.set(f.attachment.path, prompts);
     },
     onChange: () => schedule(),
+  });
+  // Pi as an agent of the notebooks this session uses (core/pair-inbox.ts): marimo shows it attached, and what
+  // the notebook sends its agent arrives as a prompt, a follow-up while the agent is busy.
+  const pairInbox = new PairInbox({
+    onMessage: (m) => {
+      if (watcher) {
+        const before = watcher.engaged().length;
+        watcher.touch([{ url: m.serverUrl, file: m.path }]);
+        if (watcher.engaged().length !== before) pi.appendEntry(ENTRY, { engaged: watcher.engaged() });
+      }
+      const idle = ctxRef?.isIdle() !== false;
+      pi.sendUserMessage(`Agent message from marimo (notebook ${relativePath(m.path, ctxRef?.cwd ?? "")}).\n${m.text}`, idle ? undefined : { deliverAs: "followUp" });
+    },
+    onTrouble: (t, error) => ctxRef?.ui.notify(`marimo: could not attach Pi to ${basename(t.path)} for notebook messages (${error.message}); retrying`, "warning"),
+    onDetached: (t) => ctxRef?.ui.notify(`marimo: detached from ${basename(t.path)} in marimo; /marimo attach reattaches`, "info"),
   });
   registerExecutionMessageRenderers(pi, COMPLETION_MESSAGE, EXECUTIONS_MESSAGE);
   registerExecutionTools(pi, executions);
@@ -759,6 +778,9 @@ export default function piMarimo(pi: ExtensionAPI): void {
       bg.external(watcher.followed(), ctxRef.cwd);
       bg.annotate(watcher.followed(), ctxRef.cwd);
       source.update(watcher.followed());
+      pairInbox.sync(config.pair?.inbox === false ? [] : mine()
+        .filter((f) => f.connection === "connected" && f.attachment.notebookId)
+        .map((f) => ({ serverUrl: f.attachment.url, notebookId: f.attachment.notebookId!, path: f.canonicalPath ?? f.attachment.path })));
     }
     // A notebook this session uses starts running while the agent works: dock it beside the chat.
     if (ctxRef?.mode === "tui" && watcher) {
@@ -870,6 +892,7 @@ export default function piMarimo(pi: ExtensionAPI): void {
 
   pi.on("session_shutdown", async () => {
     executions.shutdown();
+    pairInbox.dispose();
     headless.onMessage = undefined;
     editors.dispose();
     disposeEditServices();
@@ -1060,6 +1083,7 @@ export default function piMarimo(pi: ExtensionAPI): void {
         if (!inspectLatest(ctx.ui)) ctx.ui.notify("marimo: no live chart in the transcript (/marimo chart <cell> shows one)", "info");
         return;
       }
+      if (word === "attach") { pairInbox.reattach(); schedule(); ctx.ui.notify("marimo: reattaching to notebook messages", "info"); return; }
       if (word === "auto") { setMode({ kind: "auto" }); ctx.ui.notify("marimo: following every notebook open under this directory", "info"); return; }
       if (word === "off") { setMode({ kind: "off" }); ctx.ui.notify("marimo: off", "info"); return; }
       const rest = arg.slice(word.length).trim();
