@@ -27,6 +27,7 @@ import type { SyntaxHighlighter, SyntaxTheme } from "./syntax.js";
 import type { MermaidRenderer } from "../core/mermaid.js";
 import { mermaidRows } from "./outputs.js";
 import type { EditorFactoryFn } from "../editor-contract.ts";
+import { ArmedActions } from "./armed.js";
 import { Dock, type DockSpec } from "./dock.js";
 import { type Part, detailRows } from "./detail.js";
 import { Help, type HelpState } from "./help.js";
@@ -262,13 +263,7 @@ export class NotebookView implements Component, Focusable {
   private findFrom: string | undefined;
   /** Scroll the cursor's cell into view on the next render (after a move, not after scrolling). */
   private reveal = false;
-  private armedTarget: string | undefined;
-  /** A run of several cells waits for a second press: which, and in which kernel session. */
-  private armedRun: { what: "stale" | "all"; target: string } | undefined;
-  /** `S` waits for a second press, like `x`. */
-  private armedStop: string | undefined;
-  /** `M` waits for a second press: the selection it removes. */
-  private armedUnmark: { id: string; label: string } | undefined;
+  private readonly armed = new ArmedActions();
   private note: string | undefined;
   private closed = false;
   private mode: "cells" | "variables" | "packages" = "cells";
@@ -491,10 +486,10 @@ export class NotebookView implements Component, Focusable {
 
   private syncConfirmation(): void {
     const f = this.current();
-    if (!f || !this.kernelBusy(f) || interruptKey(f) !== this.armedTarget) this.armedTarget = undefined;
-    if (!f || interruptKey(f) !== this.armedStop) this.armedStop = undefined;
-    if (!f || f.connection !== "connected" || (this.armedRun && this.armedRun.target !== interruptKey(f))) this.armedRun = undefined;
-    if (!f || (this.armedUnmark && !f.notebook.lens.selections().some((s) => s.id === this.armedUnmark!.id))) this.armedUnmark = undefined;
+    if (!f || !this.kernelBusy(f) || interruptKey(f) !== this.armed.target) this.armed.target = undefined;
+    if (!f || interruptKey(f) !== this.armed.stop) this.armed.stop = undefined;
+    if (!f || f.connection !== "connected" || (this.armed.run && this.armed.run.target !== interruptKey(f))) this.armed.run = undefined;
+    if (!f || (this.armed.unmark && !f.notebook.lens.selections().some((s) => s.id === this.armed.unmark!.id))) this.armed.unmark = undefined;
   }
 
   private viewport(): number {
@@ -1238,10 +1233,7 @@ export class NotebookView implements Component, Focusable {
       const text = this.transientMessage(true);
       if (text) {
         this.messageView = new MessageView({ text, scroll: 0 });
-        this.armedTarget = undefined;
-        this.armedRun = undefined;
-        this.armedStop = undefined;
-        this.armedUnmark = undefined;
+        this.armed.clear();
       }
       this.tui.requestRender();
       return;
@@ -1279,10 +1271,7 @@ export class NotebookView implements Component, Focusable {
       // Unknown notebook input still cancels a pending two-press action, as before.
       // It must not leave an old destructive confirmation armed for a later key.
       if (this.mode === "cells" && !this.table && !this.widget && !this.live.inspecting) {
-        this.armedTarget = undefined;
-        this.armedRun = undefined;
-        this.armedStop = undefined;
-        this.armedUnmark = undefined;
+        this.armed.clear();
         this.note = undefined;
       }
       this.timing = false;
@@ -1426,14 +1415,14 @@ export class NotebookView implements Component, Focusable {
     const page = this.viewport();
     if (command.id === "interrupt") {
       const busy = f && this.kernelBusy(f);
-      this.armedRun = undefined;
+      this.armed.run = undefined;
       if (!f || !busy) {
-        this.armedTarget = undefined;
+        this.armed.target = undefined;
         this.note = "Nothing is running.";
-      } else if (this.armedTarget !== interruptKey(f)) {
-        this.armedTarget = interruptKey(f);
+      } else if (this.armed.target !== interruptKey(f)) {
+        this.armed.target = interruptKey(f);
       } else {
-        this.armedTarget = undefined;
+        this.armed.target = undefined;
         this.note = "Interrupting…";
         this.actions.interrupt(f).then(
           () => { if (!this.closed) { this.note = "Interrupted."; this.tui.requestRender(); } },
@@ -1445,10 +1434,10 @@ export class NotebookView implements Component, Focusable {
     }
     if (f && (command.id === "run-stale" || command.id === "run-all")) {
       const what = command.id === "run-stale" ? "stale" : "all";
-      this.armedTarget = undefined;
-      if (this.armedRun?.what !== what || this.armedRun.target !== interruptKey(f)) this.armedRun = { what, target: interruptKey(f) };
+      this.armed.target = undefined;
+      if (this.armed.run?.what !== what || this.armed.run.target !== interruptKey(f)) this.armed.run = { what, target: interruptKey(f) };
       else {
-        this.armedRun = undefined;
+        this.armed.run = undefined;
         const all = f.notebook.ordered().filter((c) => !f.notebook.isMarkdown(c) && !c.disabled);
         const cells = what === "all" ? all : all.filter((c) => c.stale || f.notebook.edited(c));
         this.startRun(f, cells, what === "all" ? `all ${cells.length} cells` : `${cells.length} stale cell${cells.length === 1 ? "" : "s"}`);
@@ -1457,11 +1446,11 @@ export class NotebookView implements Component, Focusable {
       return;
     }
     if (f && command.id === "stop" && this.actions.stopServers && (this.actions.servers?.(f).length ?? 0) > 0) {
-      this.armedTarget = undefined;
-      this.armedRun = undefined;
-      if (this.armedStop !== interruptKey(f)) this.armedStop = interruptKey(f);
+      this.armed.target = undefined;
+      this.armed.run = undefined;
+      if (this.armed.stop !== interruptKey(f)) this.armed.stop = interruptKey(f);
       else {
-        this.armedStop = undefined;
+        this.armed.stop = undefined;
         const n = this.actions.stopServers(f);
         this.note = n ? `Stopping the marimo server${n === 1 ? "" : "s"}…` : "No server to stop.";
       }
@@ -1469,19 +1458,19 @@ export class NotebookView implements Component, Focusable {
       return;
     }
     if (f && command.id === "unmark") {
-      this.armedTarget = undefined;
-      this.armedRun = undefined;
-      this.armedStop = undefined;
+      this.armed.target = undefined;
+      this.armed.run = undefined;
+      this.armed.stop = undefined;
       const unmark = this.actions.unmark;
       const c = this.cursorCell(f);
       const selection = c ? f.notebook.lens.selections().filter((s) => s.cells.includes(c.id)).at(-1) : undefined;
       if (!unmark) this.note = "Not available here.";
-      else if (!selection) { this.armedUnmark = undefined; this.note = "No Lens selection on this cell."; }
-      else if (this.armedUnmark?.id !== selection.id) {
-        this.armedUnmark = { id: selection.id, label: selection.label };
+      else if (!selection) { this.armed.unmark = undefined; this.note = "No Lens selection on this cell."; }
+      else if (this.armed.unmark?.id !== selection.id) {
+        this.armed.unmark = { id: selection.id, label: selection.label };
         this.note = `M again removes ${selection.label}`;
       } else {
-        this.armedUnmark = undefined;
+        this.armed.unmark = undefined;
         const label = selection.label;
         this.note = `Removing ${label}…`;
         unmark(f, selection.id).then(
@@ -1492,10 +1481,7 @@ export class NotebookView implements Component, Focusable {
       this.tui.requestRender();
       return;
     }
-    this.armedTarget = undefined;
-    this.armedRun = undefined;
-    this.armedStop = undefined;
-    this.armedUnmark = undefined;
+    this.armed.clear();
     this.note = undefined;
     const nb = f?.notebook;
     this.syncPart();
@@ -2179,9 +2165,9 @@ export class NotebookView implements Component, Focusable {
 
   private transientMessage(includeHidden = false): string | undefined {
     if (this.help && !includeHidden) return undefined;
-    if (this.armedRun) return `${commandKey(this.armedRun.what === "all" ? "run-all" : "run-stale")} again to run ${this.armedRun.what} cells`;
-    if (this.armedTarget) return `${commandKey("interrupt")} again to interrupt`;
-    if (this.armedStop) return `${commandKey("stop")} again to stop the server`;
+    if (this.armed.run) return `${commandKey(this.armed.run.what === "all" ? "run-all" : "run-stale")} again to run ${this.armed.run.what} cells`;
+    if (this.armed.target) return `${commandKey("interrupt")} again to interrupt`;
+    if (this.armed.stop) return `${commandKey("stop")} again to stop the server`;
     return this.note;
   }
 
