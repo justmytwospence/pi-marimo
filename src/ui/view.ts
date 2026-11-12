@@ -46,6 +46,7 @@ import { variableList, variableRows, variableDetailRows, type VariableSort } fro
 import type { PackagePaneState } from "./packages.js";
 import { PackagesController } from "./view-packages.js";
 import { VariablesController } from "./view-variables.js";
+import { WidgetController } from "./view-widgets.js";
 import type { ViewHost } from "./view-host.js";
 import type { PackageClient, PackageSnapshot } from "../core/packages.js";
 import { SessionPreferences, type ViewPreferences } from "./settings.js";
@@ -279,6 +280,7 @@ export class NotebookView implements Component, Focusable {
   private folded = new Set<string>();
   private diffs = new Set<string>();
   private variables!: VariablesController;
+  private widgets!: WidgetController;
   /** The focused part of the cursor's cell (n/p), an index into `lastParts`. */
   private part: number | undefined;
   private partCell: string | undefined;
@@ -286,10 +288,6 @@ export class NotebookView implements Component, Focusable {
   private lastParts: Part[] = [];
   /** The table the keys drive (table mode). */
   private table: { cell: string; objectId: string } | undefined;
-  /** The widget the keys drive. */
-  private widget: { cell: string; index: number; sub: number } | undefined;
-  /** A slider being dragged with the mouse. */
-  private dragging: { cell: string; index: number } | undefined;
   private help = false;
   private helpView = new Help();
   private palette?: Palette;
@@ -343,9 +341,12 @@ export class NotebookView implements Component, Focusable {
       startFind: (from) => { this.typing = true; this.findFrom = from; },
       enterTable: (f, cell) => this.enterTable(f, cell),
       confirm: (question, choices) => this.confirm(question, choices),
+      clearPart: () => { this.part = undefined; },
+      openValue: (f, cell, w) => this.openValue(f, cell, w),
     };
     this.packages = new PackagesController(this.host);
     this.variables = new VariablesController(this.host);
+    this.widgets = new WidgetController(this.host);
     this.ownsEditors = !actions.editors;
     this.editors = actions.editors ?? new InlineEditorManager();
     const colors = (theme as SyntaxTheme).colors;
@@ -430,7 +431,7 @@ export class NotebookView implements Component, Focusable {
       ...(this.messageView ? { message: { ...this.messageView.state } } : {}),
       ...(this.note ? { note: this.note } : {}),
       ...(this.table ? { table: { ...this.table } } : {}),
-      ...(this.widget ? { widget: { ...this.widget } } : {}),
+      ...(this.widgets.active ? { widget: { ...this.widgets.active } } : {}),
       ...(this.focusedBlock ? { focusedBlock: this.focusedBlock } : {}),
     };
   }
@@ -444,7 +445,7 @@ export class NotebookView implements Component, Focusable {
     this.helpView = new Help(s.help ?? s.lastHelp);
     this.palette = s.palette ? new Palette(s.palette.mode, s.palette) : undefined;
     this.table = s.table ? { ...s.table } : undefined;
-    this.widget = s.widget ? { ...s.widget } : undefined;
+    this.widgets.active = s.widget ? { ...s.widget } : undefined;
     this.cursor = s.cursor;
     this.follow = s.follow;
     this.scroll = s.scroll;
@@ -583,8 +584,8 @@ export class NotebookView implements Component, Focusable {
       return;
     }
     this.note = undefined;
-    this.widget = undefined;
-    this.dragging = undefined;
+    this.widgets.active = undefined;
+    this.widgets.dragging = undefined;
     this.part = undefined;
     this.partCell = undefined;
     this.focusedBlock = undefined;
@@ -693,7 +694,7 @@ export class NotebookView implements Component, Focusable {
     this.codeOpen.clear();
     this.sectionCodeFolded.clear();
     this.detailScroll = 0;
-    this.widget = undefined;
+    this.widgets.active = undefined;
     this.table = undefined;
     this.part = undefined;
   }
@@ -823,7 +824,7 @@ export class NotebookView implements Component, Focusable {
     this.mode = "cells";
     this.filter = "";
     this.folded.clear();
-    this.widget = undefined;
+    this.widgets.active = undefined;
     this.table = undefined;
     this.live.leave();
     this.setCode(cell.id, true);
@@ -960,64 +961,6 @@ export class NotebookView implements Component, Focusable {
 
   // --- keys -----------------------------------------------------------------------------------
 
-  /** Flatten widget leaves in output order; the indices match the rows' kernel widget indices. */
-  private cellWidgets(cell: Cell): Widget[] {
-    return cell.output?.blocks?.length ? cell.output.blocks.flatMap(block => block.output.widgets ?? []).slice(0, MAX_WIDGETS) : cell.output?.widgets?.slice(0, MAX_WIDGETS) ?? [];
-  }
-
-  /** The widgets of the driven cell, or undefined (and widget mode ends) when they are gone. */
-  private drivenWidgets(f: Followed | undefined): { cell: Cell; widgets: Widget[] } | undefined {
-    const w = this.widget;
-    const cell = w && f ? f.notebook.cells.get(w.cell) : undefined;
-    const widgets = cell ? this.cellWidgets(cell) : [];
-    if (!f || !cell || !widgets.length || f.connection !== "connected") {
-      this.widget = undefined;
-      return undefined;
-    }
-    if (w!.index >= widgets.length) w!.index = widgets.length - 1;
-    return { cell, widgets };
-  }
-
-  private widgetKey(f: Followed | undefined, data: string): void {
-    const driven = this.drivenWidgets(f);
-    if (!driven || !f) { this.note = "The widgets are gone."; return; }
-    const command = commandFor("widget", data)?.id;
-    const focus = this.widget!;
-    const w = driven.widgets[focus.index]!;
-    if (command === "widget-close") { this.widget = undefined; return; }
-    if (command === "widget-previous" || command === "widget-next") {
-      const controls = f.notebook.ordered().flatMap(cell => this.cellWidgets(cell).map((_, index) => ({ cell, index })));
-      const at = controls.findIndex(item => item.cell.id === focus.cell && item.index === focus.index);
-      const by = command === "widget-next" ? 1 : -1;
-      const next = controls[((at + by) % controls.length + controls.length) % controls.length];
-      if (next) {
-        this.goTo(f, next.cell.id);
-        this.widget = { cell: next.cell.id, index: next.index, sub: 0 };
-        this.part = undefined;
-        this.reveal = true;
-      }
-      return;
-    }
-    if (command === "widget-browser") { this.actions.openInBrowser(f); return; }
-    const act = (action: WidgetAction) => {
-      if (w.disabled) { this.note = "This widget is disabled."; return; }
-      const next = nextValue(w, widgetValue(f.notebook, w), action, focus.sub);
-      if (!next) { this.note = typeable(w) ? "enter types a value" : undefined; return; }
-      focus.sub = next.sub;
-      this.note = undefined;
-      if (next.send) this.actions.setWidget?.(f, driven.cell, w, next.value);
-    };
-    if (command === "widget-dec") act("dec");
-    else if (command === "widget-inc") act("inc");
-    else if (command === "widget-dec10") act("dec10");
-    else if (command === "widget-inc10") act("inc10");
-    else if (command === "widget-toggle") act("toggle");
-    else if (command === "widget-type") {
-      if (typeable(w) && !w.disabled) this.openValue(f, driven.cell, w);
-      else act("toggle");
-    }
-  }
-
   /** Enter (or a double click): edit source/Markdown or activate the focused control. */
   private activate(f: Followed): void {
     if (this.mode === "variables") return this.variables.key(f, "\r");
@@ -1034,7 +977,7 @@ export class NotebookView implements Component, Focusable {
       if (interactive?.kind === "widgets" && interactive.widgetIndices?.length) {
         if (!this.actions.setWidget) this.note = "Widgets cannot be driven here.";
         else if (f.connection !== "connected") this.note = "The notebook is not connected.";
-        else this.widget = { cell: c.id, index: interactive.widgetIndices[0]!, sub: 0 };
+        else this.widgets.active = { cell: c.id, index: interactive.widgetIndices[0]!, sub: 0 };
         return;
       }
     }
@@ -1047,7 +990,7 @@ export class NotebookView implements Component, Focusable {
         case "widgets":
           if (!this.actions.setWidget) this.note = "Widgets cannot be driven here.";
           else if (f.connection !== "connected") this.note = "The notebook is not connected.";
-          else this.widget = { cell: target.id, index: p.widgetIndices?.[0] ?? 0, sub: 0 };
+          else this.widgets.active = { cell: target.id, index: p.widgetIndices?.[0] ?? 0, sub: 0 };
           break;
         case "code": this.openInlineEditor(f, target, "python"); break;
         case "markdown": this.openInlineEditor(f, target); break;
@@ -1148,7 +1091,7 @@ export class NotebookView implements Component, Focusable {
     if (!command) {
       // Unknown notebook input still cancels a pending two-press action, as before.
       // It must not leave an old destructive confirmation armed for a later key.
-      if (this.mode === "cells" && !this.table && !this.widget && !this.live.inspecting) {
+      if (this.mode === "cells" && !this.table && !this.widgets.active && !this.live.inspecting) {
         this.armed.clear();
         this.note = undefined;
       }
@@ -1171,7 +1114,7 @@ export class NotebookView implements Component, Focusable {
       } else this.preferences.update({ showOutput: !current.showOutput });
       // An invisible control must never retain keyboard or mouse ownership.
       const focused = this.part === undefined ? undefined : this.lastParts[this.part];
-      const hidesOutput = !this.preferences.snapshot().showOutput && (!!this.widget || !!this.table || this.live.inspecting || (focused && ["printed", "output", "table", "chart", "widgets"].includes(focused.kind)));
+      const hidesOutput = !this.preferences.snapshot().showOutput && (!!this.widgets.active || !!this.table || this.live.inspecting || (focused && ["printed", "output", "table", "chart", "widgets"].includes(focused.kind)));
       if (hidesOutput || (command.id === "diagnostics" && focused?.kind === "error")) this.focusSource();
       this.tui.requestRender();
       return;
@@ -1190,8 +1133,8 @@ export class NotebookView implements Component, Focusable {
     }
     if (this.typing) return this.typeFilter(data);
     const f = this.current();
-    if (this.widget) {
-      this.widgetKey(f, data);
+    if (this.widgets.active) {
+      this.widgets.key(f, data);
       this.tui.requestRender();
       return;
     }
@@ -1436,12 +1379,12 @@ export class NotebookView implements Component, Focusable {
       else this.goTo(f, pick);
     } else if (f && command.id === "widget") {
       const c = this.cursorCell(f);
-      const widgets = c ? this.cellWidgets(c) : [];
+      const widgets = c ? this.widgets.cellWidgets(c) : [];
       if (!c || !widgets.length) this.note = "This cell shows no widgets.";
       else if (!this.actions.setWidget) this.note = "Widgets cannot be driven here.";
       else if (f.connection !== "connected") this.note = "The notebook is not connected.";
       else {
-        this.widget = { cell: c.id, index: 0, sub: 0 };
+        this.widgets.active = { cell: c.id, index: 0, sub: 0 };
         this.cursor = c.id;
         this.follow = false;
         this.reveal = true;
@@ -1497,9 +1440,9 @@ export class NotebookView implements Component, Focusable {
   }
 
   private focusSource(): void {
-    this.widget = undefined;
+    this.widgets.active = undefined;
     this.table = undefined;
-    this.dragging = undefined;
+    this.widgets.dragging = undefined;
     this.live.leave();
     const f = this.current();
     const cell = f && this.cursorCell(f);
@@ -1650,8 +1593,8 @@ export class NotebookView implements Component, Focusable {
     const file = basename(f?.attachment.path ?? notebookPath(this.key));
     const out = [this.actions.docked ? dockedBanner(file, width, th, this.actions.docked.focused()) : banner(`Notebook ${file}`, width, th)];
     if (!f && this.dock) this.closeDock();
-    if (!f) this.widget = undefined;
-    else if (this.widget) this.drivenWidgets(f);
+    if (!f) this.widgets.active = undefined;
+    else if (this.widgets.active) this.widgets.driven(f);
     const height = Math.max(0, this.tui.terminal.rows);
     const dock = this.messageView ? [] : this.dockRows(width, height <= CHROME ? height : height - CHROME);
     this.lastDock = dock.length;
@@ -1783,7 +1726,7 @@ export class NotebookView implements Component, Focusable {
         this.reveal = false;
       } else this.place(built.rows.length, at, page);
       // Scrolled away from the cursor: it moves to the nearest cell on screen.
-      if (split && at !== undefined && !this.follow && !this.widget && !this.editors.active && (at < this.scroll || at >= this.scroll + page)) {
+      if (split && at !== undefined && !this.follow && !this.widgets.active && !this.editors.active && (at < this.scroll || at >= this.scroll + page)) {
         const visible = cells.filter((c) => { const r = built.cellRows.get(c.id); return r !== undefined && r >= this.scroll && r < this.scroll + page; });
         const pick = at < this.scroll ? visible[0] : visible.at(-1);
         if (pick) {
@@ -1854,7 +1797,7 @@ export class NotebookView implements Component, Focusable {
             cellId: this.editors.state.cellId, kind: this.editors.state.kind,
             rows: (width: number, _row: number) => this.editors.render(width, Math.max(1, this.section ? Math.min(dh - 1, Math.max(4, Math.floor(dh * 0.6))) : dh - 1)).map((text, editorRow) => ({ text, editorRow })),
           } } : {}),
-          ...(this.widget ? { widgetFocus: this.widget } : {}),
+          ...(this.widgets.active ? { widgetFocus: this.widgets.active } : {}),
           imageRows: dh - 1, vega: this.vega, plotly: this.plotly,
           ...(this.actions.liveCharts === false ? {} : { live: this.live }),
           onVega: this.renderReady,
@@ -1878,7 +1821,7 @@ export class NotebookView implements Component, Focusable {
           if (at) this.detailScroll = Math.max(0, at.row - 1);
           this.scrollToPart = false;
         }
-        const focused = this.widget ? d.widgetRows.get(`${this.widget.cell}\0${this.widget.index}`) : undefined;
+        const focused = this.widgets.active ? d.widgetRows.get(`${this.widgets.active.cell}\0${this.widgets.active.index}`) : undefined;
         if (focused !== undefined) {
           if (focused < this.detailScroll) this.detailScroll = focused;
           else if (focused >= this.detailScroll + dh) this.detailScroll = focused - dh + 1;
@@ -2020,7 +1963,7 @@ export class NotebookView implements Component, Focusable {
   }
 
   private commandMode(): CommandMode {
-    return this.editors.active ? "editor" : this.table ? "table" : this.widget ? "widget" : this.live?.inspecting ? "chart" : this.mode === "cells" ? "notebook" : this.mode;
+    return this.editors.active ? "editor" : this.table ? "table" : this.widgets.active ? "widget" : this.live?.inspecting ? "chart" : this.mode === "cells" ? "notebook" : this.mode;
   }
 
   private openHelp(): void {
@@ -2063,14 +2006,14 @@ export class NotebookView implements Component, Focusable {
     if (this.help) return ""; // Help owns its own footer.
     const focused = this.part === undefined ? undefined : this.lastParts[this.part];
     const cell = f ? this.cursorCell(f) : undefined;
-    const contextual = focused?.kind ?? (cell && this.cellWidgets(cell).length ? "widgets" : cell?.output?.table ? "table" : this.live.rects.length ? "chart" : undefined);
+    const contextual = focused?.kind ?? (cell && this.widgets.cellWidgets(cell).length ? "widgets" : cell?.output?.table ? "table" : this.live.rects.length ? "chart" : undefined);
     const busy = !!f && this.kernelBusy(f);
     const primary = mode === "editor" ? "editor-f2" : mode === "table" ? "table-row" : mode === "widget" ? "widget-type" : mode === "chart" ? "chart-drag" : mode === "variables" ? "var-detail" : mode === "packages" ? "pkg-detail" : contextual === "table" ? "table" : contextual === "widgets" ? "widget" : contextual === "chart" ? "chart" : this.actions.run && cell && f && !f.notebook.isMarkdown(cell) ? busy ? "interrupt" : "run" : "activate";
     const cells = f ? this.cells(f) : [];
     const at = cells.findIndex(cell => cell.id === this.cursor);
     const position = mode === "notebook" && at >= 0 ? `${at + 1}/${cells.length}` : undefined;
     if (mode === "widget" && f) {
-      const w = this.drivenWidgets(f)?.widgets[this.widget?.index ?? 0];
+      const w = this.widgets.driven(f)?.widgets[this.widgets.active?.index ?? 0];
       const action = w?.kind === "range-slider" ? "Space handle" : w?.kind === "button" ? "Space press" : w?.kind === "checkbox" || w?.kind === "switch" ? "Space toggle" : "Enter value";
       const tokens = ["Tab next", "←/→ adjust", action, "Esc done"];
       const kept: string[] = [];
@@ -2111,7 +2054,7 @@ export class NotebookView implements Component, Focusable {
     const r = this.lastDetail[this.detailScroll + line - this.panes.detailTop];
     if (!r?.widget) return undefined;
     const cell = f.notebook.cells.get(r.widget.cell);
-    const w = cell && this.cellWidgets(cell)[r.widget.index];
+    const w = cell && this.widgets.cellWidgets(cell)[r.widget.index];
     return cell && w ? { f, cell, w, index: r.widget.index, col: event.x - this.panes.detailLeft - WIDGET_TEXT } : undefined;
   }
 
@@ -2119,8 +2062,8 @@ export class NotebookView implements Component, Focusable {
   private clickWidget(at: { f: Followed; cell: Cell; w: Widget; index: number; col: number }, dragging = false): boolean {
     const { f, cell, w, index } = at;
     if (!this.actions.setWidget || f.connection !== "connected") return false;
-    const sub = this.widget?.cell === cell.id && this.widget.index === index ? this.widget.sub : 0;
-    this.widget = { cell: cell.id, index, sub };
+    const sub = this.widgets.active?.cell === cell.id && this.widgets.active.index === index ? this.widgets.active.sub : 0;
+    this.widgets.active = { cell: cell.id, index, sub };
     if (!this.section) this.cursor = cell.id;
     this.follow = false;
     const hit = widgetHit(w, widgetValue(f.notebook, w), at.col);
@@ -2128,14 +2071,14 @@ export class NotebookView implements Component, Focusable {
     if (w.disabled) { this.note = "This widget is disabled."; return false; }
     if ("type" in hit) { if (!dragging) this.openValue(f, cell, w); return false; }
     if ("value" in hit) {
-      if (hit.sub !== undefined) this.widget.sub = hit.sub;
+      if (hit.sub !== undefined) this.widgets.active.sub = hit.sub;
       this.actions.setWidget(f, cell, w, hit.value);
       return hit.drag === true;
     }
     if (dragging) return false;
-    const next = nextValue(w, widgetValue(f.notebook, w), hit.action, this.widget.sub);
+    const next = nextValue(w, widgetValue(f.notebook, w), hit.action, this.widgets.active.sub);
     if (next) {
-      this.widget.sub = next.sub;
+      this.widgets.active.sub = next.sub;
       if (next.send) this.actions.setWidget(f, cell, w, next.value);
     }
     return false;
@@ -2185,13 +2128,13 @@ export class NotebookView implements Component, Focusable {
     if (live) return live;
     if (this.closed) return undefined;
     // A slider dragged with the mouse follows it until the button goes up.
-    if (this.dragging && (event.type === "drag" || event.type === "release")) {
+    if (this.widgets.dragging && (event.type === "drag" || event.type === "release")) {
       const at = this.widgetAt({ ...event, y: Math.max(ROWS_TOP, event.y) });
       const f = this.current();
-      const cell = f?.notebook.cells.get(this.dragging.cell);
-      const w = cell && this.cellWidgets(cell)[this.dragging.index];
-      if (f && cell && w) this.clickWidget({ f, cell, w, index: this.dragging.index, col: at?.cell.id === cell.id && at.index === this.dragging.index ? at.col : event.x - this.panes.detailLeft - WIDGET_TEXT }, true);
-      if (event.type === "release") this.dragging = undefined;
+      const cell = f?.notebook.cells.get(this.widgets.dragging.cell);
+      const w = cell && this.widgets.cellWidgets(cell)[this.widgets.dragging.index];
+      if (f && cell && w) this.clickWidget({ f, cell, w, index: this.widgets.dragging.index, col: at?.cell.id === cell.id && at.index === this.widgets.dragging.index ? at.col : event.x - this.panes.detailLeft - WIDGET_TEXT }, true);
+      if (event.type === "release") this.widgets.dragging = undefined;
       this.tui.requestRender();
       return { handled: true };
     }
@@ -2202,8 +2145,8 @@ export class NotebookView implements Component, Focusable {
       const f = this.current();
       // Over the focused widget the wheel changes it (up: more); elsewhere it scrolls.
       const over = this.widgetAt(event);
-      if (over && by && this.widget?.cell === over.cell.id && this.widget.index === over.index && this.actions.setWidget && !over.w.disabled) {
-        const next = nextValue(over.w, widgetValue(over.f.notebook, over.w), by < 0 ? "inc" : "dec", this.widget.sub);
+      if (over && by && this.widgets.active?.cell === over.cell.id && this.widgets.active.index === over.index && this.actions.setWidget && !over.w.disabled) {
+        const next = nextValue(over.w, widgetValue(over.f.notebook, over.w), by < 0 ? "inc" : "dec", this.widgets.active.sub);
         if (next?.send) this.actions.setWidget(over.f, over.cell, over.w, next.value);
         this.tui.requestRender();
         return { handled: true };
@@ -2225,7 +2168,7 @@ export class NotebookView implements Component, Focusable {
       // A press on a slider's bar sets it there and drags it from then on.
       const at = this.dock || this.help ? undefined : this.widgetAt(event);
       if (at && at.w.kind.endsWith("slider") && this.clickWidget(at)) {
-        this.dragging = { cell: at.cell.id, index: at.index };
+        this.widgets.dragging = { cell: at.cell.id, index: at.index };
         this.tui.requestRender();
         return { handled: true, capture: true };
       }
@@ -2264,7 +2207,7 @@ export class NotebookView implements Component, Focusable {
         const at = this.widgetAt(event);
         // A slider was set by its press already.
         if (at && !(at.w.kind.endsWith("slider") && widgetHit(at.w, widgetValue(f.notebook, at.w), at.col))) this.clickWidget(at);
-        else if (at) this.widget = { cell: at.cell.id, index: at.index, sub: this.widget?.sub ?? 0 };
+        else if (at) this.widgets.active = { cell: at.cell.id, index: at.index, sub: this.widgets.active?.sub ?? 0 };
       } else if (r?.code) {
         const c = this.cursorCell(f);
         if (r.part !== undefined) this.part = r.part;
@@ -2278,7 +2221,7 @@ export class NotebookView implements Component, Focusable {
         const again = this.cursor === r.cell;
         this.cursor = r.cell;
         this.follow = false;
-        this.widget = undefined;
+        this.widgets.active = undefined;
         this.table = undefined;
         if (again || twice) this.activate(f);
       }

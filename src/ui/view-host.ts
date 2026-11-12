@@ -2,6 +2,7 @@
 // that hosts them. The view owns the cursor, scroll, notes and docks; a controller owns its mode's state
 // and keys.
 import type { Cell } from "../core/notebook.js";
+import type { Widget } from "../core/output.js";
 import type { Followed } from "../core/watcher.js";
 import type { DockSpec } from "./dock.js";
 import type { ViewActions } from "./view.js";
@@ -39,5 +40,9 @@ export interface ViewHost {
   /** Typing goes to a filter box; Esc returns to `from`. */
   startFind(from: string | undefined): void;
   enterTable(f: Followed, cell: Cell): void;
+  /** Forget which part of the cell has focus. */
+  clearPart(): void;
+  /** Type a value for a control in the dock. */
+  openValue(f: Followed, cell: Cell, w: Widget): void;
   confirm(question: string, choices: readonly string[]): Promise<string | undefined>;
 }

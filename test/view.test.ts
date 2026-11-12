@@ -2173,11 +2173,11 @@ test("STEP3 visibility keys release hidden controls to source and transfer prefe
   const v = make(f);
   try {
     screen(v);
-    (v as any).widget = { cell: "a", index: 0, sub: 0 };
+    (v as any).widgets.active = { cell: "a", index: 0, sub: 0 };
     (v as any).table = { cell: "a", objectId: "t" };
     v.handleInput("\\");
     screen(v);
-    expect((v as any).widget).toBeUndefined();
+    expect((v as any).widgets.active).toBeUndefined();
     expect((v as any).table).toBeUndefined();
     expect((v as any).lastParts[(v as any).part]?.kind).toBe("code");
     v.handleInput("!");
