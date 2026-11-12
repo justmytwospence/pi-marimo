@@ -206,6 +206,8 @@ export function detailRows(nb: NotebookState, theme: FrameTheme, now: number, o:
     if (diff && change) {
       const offset = o.codeOffsets?.get(blockId)?.offset ?? 0;
       for (const text of diffLines(change.before, cell.code, { width, offset })) p.add(text, { code: true, blockId });
+      const down = nb.descendants(cell.id).filter((id) => { const d = nb.cells.get(id); return d && !nb.isMarkdown(d); });
+      if (down.length) p.add(dim(`reruns ${down.length} downstream cell${down.length === 1 ? "" : "s"}: ${down.slice(0, 5).map((id) => oneLine(cellTitle(nb, nb.cells.get(id)!))).join(", ")}${down.length > 5 ? ` +${down.length - 5}` : ""}`));
     } else {
       for (const r of codePanelRows(cell.code, { ...sub, theme: o.theme ?? theme, blockId, language: "python", folded: !open })) p.add(r.text, r);
     }

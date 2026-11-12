@@ -1,4 +1,4 @@
-import { expect, test, vi } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import { NotebookState } from "../src/core/notebook.js";
 import type { Followed } from "../src/core/watcher.js";
 import { INPUT_CONTEXT } from "../src/activity.js";
@@ -3489,4 +3489,57 @@ test("the help's navigation list starts with moving between cells", () => {
     const first = plain(v.render(100).join("\n")).split("\n").find((l) => /next cell|message/u.test(l));
     expect(first).toContain("next cell");
   } finally { v.dispose(); }
+});
+
+describe("reverting the agent's changes", () => {
+  const setup = (kind: "edited" | "created") => {
+    const f = nbWith([{ id: "a", code: "x = 2", name: "load" }, { id: "b", code: "y = x", name: "use" }]);
+    f.notebook.apply("variables", { variables: [{ name: "x", declared_by: ["a"], used_by: ["b"] }, { name: "y", declared_by: ["b"], used_by: [] }] });
+    f.notebook.agentChanges.set("a", { kind, before: kind === "created" ? "" : "x = 1", at: 1 });
+    const confirm = vi.fn(async (_q: string, choices: readonly string[]) => choices[1]);
+    const saveCell = vi.fn(async (_f: Followed, _id: string, code: string) => ({ canonicalCode: code, requestId: "r" }));
+    const deleteCell = vi.fn(async () => {});
+    const runSavedCell = vi.fn(async () => {});
+    const v = make(f, { confirm, saveCell, deleteCell, runSavedCell });
+    v.handleInput("g");
+    return { f, v, confirm, saveCell, deleteCell, runSavedCell };
+  };
+  const settle = () => new Promise((r) => setTimeout(r, 0));
+
+  test("u restores the code from before the change, after naming what reruns downstream", async () => {
+    const { f, v, confirm, saveCell } = setup("edited");
+    try {
+      v.handleInput("u");
+      await settle();
+      expect(confirm.mock.calls[0]![0]).toContain("1 downstream cell: use");
+      expect(saveCell).toHaveBeenCalledWith(f, "a", "x = 1", "x = 2");
+      expect(f.notebook.agentChanges.has("a")).toBe(false);
+      expect(screen(v)).toContain("Reverted load");
+    } finally { v.dispose(); }
+  });
+  test("Revert and run also runs the saved cell", async () => {
+    const { v, confirm, runSavedCell } = setup("edited");
+    confirm.mockImplementation(async (_q, choices) => choices[2]);
+    try { v.handleInput("u"); await settle(); expect(runSavedCell).toHaveBeenCalledWith(expect.anything(), "a", "x = 1"); } finally { v.dispose(); }
+  });
+  test("a cell the agent created is deleted, not saved", async () => {
+    const { f, v, deleteCell, saveCell } = setup("created");
+    try { v.handleInput("u"); await settle(); expect(deleteCell).toHaveBeenCalledWith(f, "a", "x = 2"); expect(saveCell).not.toHaveBeenCalled(); } finally { v.dispose(); }
+  });
+  test("cancelling changes nothing; a cell the agent did not touch only says so", async () => {
+    const { f, v, confirm, saveCell } = setup("edited");
+    confirm.mockImplementation(async (_q, choices) => choices[0]);
+    try {
+      v.handleInput("u"); await settle();
+      expect(saveCell).not.toHaveBeenCalled();
+      expect(f.notebook.agentChanges.has("a")).toBe(true);
+      v.handleInput("j"); v.handleInput("u");
+      expect(screen(v)).toContain("The agent has not changed this cell");
+    } finally { v.dispose(); }
+  });
+  test("the diff names the downstream cells it reruns", () => {
+    const { f } = setup("edited");
+    const d = detailRows(f.notebook, theme, 0, { cell: f.notebook.cells.get("a")!, width: 80, section: false, codeOpen: true, diff: true });
+    expect(d.rows.map((r) => plain(r.text)).join("\n")).toContain("reruns 1 downstream cell: use");
+  });
 });

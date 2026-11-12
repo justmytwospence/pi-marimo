@@ -199,3 +199,26 @@ describe("explicit checked run", () => {
     expect(f.nb.cells.get("a")!.code).toBe("x = 1");
   });
 });
+
+describe("deleteCell", () => {
+  test("deletes in code mode only when the code still matches, with one attempt", async () => {
+    const f = fixture();
+    f.execute.mockImplementation(async (_, script, __, emit) => {
+      expect(script).toContain('ctx.cells[_args["cellId"]].code != _args["expectedCode"]');
+      expect(script).toContain('ctx.delete_cell(_args["cellId"])');
+      expect(script).not.toContain("run_cell");
+      const marker = /(pi-marimo-delete-[a-f0-9-]+:)/u.exec(script)![1]!;
+      emit({ stream: "stdout", text: `${marker}{"deleted": true}` });
+      return ok;
+    });
+    await f.service.deleteCell("a", "x = 1");
+    expect(f.execute).toHaveBeenCalledTimes(1);
+  });
+  test("a missing receipt is an unknown outcome, reconciled and never retried", async () => {
+    const f = fixture();
+    f.execute.mockResolvedValue(ok);
+    await expect(f.service.deleteCell("a", "x = 1")).rejects.toThrow("Delete outcome unknown");
+    expect(f.execute).toHaveBeenCalledTimes(1);
+    expect(f.reconcile).toHaveBeenCalled();
+  });
+});

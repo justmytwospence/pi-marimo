@@ -177,6 +177,7 @@ export interface ViewActions {
   saveTable?(f: Followed, cell: Cell, objectId: string): Promise<string>;
   editors?: InlineEditorManager;
   saveCell?(f: Followed, cellId: string, code: string, expectedCode: string): Promise<SaveReceipt>;
+  deleteCell?(f: Followed, cellId: string, expectedCode: string): Promise<void>;
   runSavedCell?(f: Followed, cellId: string, canonicalCode: string): Promise<void>;
   confirm?(question: string, choices: readonly string[]): Promise<string | undefined>;
   copy?(text: string): void;
@@ -1554,7 +1555,8 @@ export class NotebookView implements Component, Focusable {
         this.cursor = c.id;
         this.reveal = true;
       }
-    } else if (f && command.id === "variables") {
+    } else if (f && nb && command.id === "revert") this.revertCommand(f);
+    else if (f && command.id === "variables") {
       this.mode = "variables";
       this.scroll = 0;
       this.reveal = true;
@@ -2108,6 +2110,43 @@ export class NotebookView implements Component, Focusable {
     out.push(...transientRows.map(text => row(th.fg("warning", text))));
     out.push(row(this.footer(f, inner)));
     return out;
+  }
+
+  /** `u`: put the agent's code back (or delete the cell it made), after saying what reruns downstream. */
+  private revertCommand(f: Followed): void {
+    const nb = f.notebook;
+    const c = this.cursorCell(f);
+    const change = c ? nb.agentChanges.get(c.id) : undefined;
+    if (!c || !change || change.kind === "deleted") { this.note = "The agent has not changed this cell since your last message."; return; }
+    if (change.kind === "moved" || change.kind === "renamed") { this.note = "Only code changes can be reverted here."; return; }
+    if (this.editors.active) { this.note = "Close the editor first."; return; }
+    const title = cellTitle(nb, c);
+    const created = change.kind === "created";
+    if (created ? !this.actions.deleteCell : !this.actions.saveCell) { this.note = "Not available here."; return; }
+    const down = nb.descendants(c.id).filter((id) => { const d = nb.cells.get(id); return d && !nb.isMarkdown(d); });
+    const names = down.slice(0, 5).map((id) => cellTitle(nb, nb.cells.get(id)!));
+    const affects = down.length ? `\nRunning it affects ${down.length} downstream cell${down.length === 1 ? "" : "s"}: ${names.join(", ")}${down.length > 5 ? ` +${down.length - 5}` : ""}` : "";
+    const expected = c.code;
+    const choices = created ? ["Cancel", "Delete cell"] : ["Cancel", "Revert", "Revert and run"];
+    const question = created ? `Delete ${title}, which the agent created?${affects}` : `Revert ${title} to its code before the agent's change?${affects}`;
+    void this.confirm(question, choices).then(async (choice) => {
+      if (!choice || choice === "Cancel" || this.closed) return;
+      try {
+        if (created) {
+          await this.actions.deleteCell!(f, c.id, expected);
+          this.note = `Deleted ${title}.`;
+        } else {
+          const receipt = await this.actions.saveCell!(f, c.id, change.before, expected);
+          nb.clearAgentChange(c.id);
+          this.diffs.delete(c.id);
+          if (choice === "Revert and run" && this.actions.runSavedCell) { await this.actions.runSavedCell(f, c.id, receipt.canonicalCode); this.note = `Reverted ${title} and started it.`; }
+          else this.note = `Reverted ${title}.`;
+        }
+      } catch (e) {
+        this.note = `Could not ${created ? "delete" : "revert"} ${title}: ${message(e)}`;
+      }
+      this.renderReady();
+    }).catch((e) => { this.note = message(e); this.renderReady(); });
   }
 
   private async confirm(question: string, choices: readonly string[]): Promise<string | undefined> {

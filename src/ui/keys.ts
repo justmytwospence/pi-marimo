@@ -78,6 +78,7 @@ export const COMMANDS: readonly Command[] = [
   command("fold-section", N, ["z", "tab"], "Display", "fold section"),
   command("fold-all", N, ["Z", "shift+tab"], "Display", "fold all sections"),
   command("diff", N, ["d"], "Display", "agent diff"),
+  command("revert", N, ["u"], "Editing", "revert agent change", "Restore the cell's code from before the agent's change, or delete a cell the agent created; asks first"),
   command("run", N, ["r"], "Execution", "run cell"),
   command("run-stale", N, ["R"], "Execution", "run stale", "Press twice to run stale cells"),
   command("run-all", N, ["A"], "Execution", "run all", "Press twice to run all cells"),

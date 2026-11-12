@@ -99,6 +99,34 @@ export class EditCellService {
     }
   }
 
+  /** Deletes a cell if its code still is `expectedCode`; one attempt, never retried. */
+  async deleteCell(cellId: string, expectedCode: string): Promise<void> {
+    this.check();
+    const nb = this.options.notebook;
+    if ([...nb.cells.values()].some(c => c.status === "running" || c.status === "queued")) throw new Error("Kernel is busy; nothing was deleted. Try when idle.");
+    if (!nb.cells.has(cellId)) throw new Error("Cell no longer exists");
+    const requestId = randomUUID();
+    const marker = `pi-marimo-delete-${requestId}:`;
+    const script = `import json\nimport marimo._code_mode as cm\n_args = ${pythonJson({ cellId, expectedCode })}\nasync with cm.get_context() as ctx:\n    if ctx.cells[_args["cellId"]].code != _args["expectedCode"]:\n        raise ValueError("Cell changed elsewhere; nothing was deleted")\n    ctx.delete_cell(_args["cellId"])\nprint(${pythonJson(marker)} + json.dumps({"deleted": True, "requestId": ${pythonJson(requestId)}}))\n`;
+    let receipt = false;
+    const diagnostics: string[] = [];
+    try {
+      const { done } = this.start(script, event => {
+        if (event.stream === "stderr") { diagnostics.push(event.text.slice(-4000)); if (diagnostics.length > 20) diagnostics.shift(); }
+        if (event.stream === "stdout" && event.text.startsWith(marker)) receipt = true;
+      });
+      const result = await done;
+      this.check();
+      if (!result.success || !receipt) throw new Error(result.output?.data || diagnostics.slice(-20).join("\n") || "no receipt");
+    } catch (error) {
+      try { await this.options.reconcile(); } catch { /* Preserve the failure; never retry. */ }
+      const message = error instanceof Error ? error.message : String(error);
+      if (message.includes("Cell changed elsewhere")) throw new Error("Cell changed elsewhere; nothing was deleted");
+      throw new Error(/outcome unknown/iu.test(message) ? message : `Delete outcome unknown: ${message}`);
+    }
+    await this.options.reconcile();
+  }
+
   /** Resolves on checked queue acceptance; owns the scratch stream until execution finishes. */
   async runSavedCell(cellId: string, canonicalCode: string): Promise<void> {
     this.check();

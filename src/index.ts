@@ -499,6 +499,7 @@ export default function piMarimo(pi: ExtensionAPI): void {
     packages: packageClient,
     editors,
     saveCell: async (f: Followed, cellId: string, code: string, expectedCode: string): Promise<SaveReceipt> => (await editorService(f)).saveCell(cellId, code, expectedCode),
+    deleteCell: async (f: Followed, cellId: string, expectedCode: string): Promise<void> => (await editorService(f)).deleteCell(cellId, expectedCode),
     runSavedCell: async (f: Followed, cellId: string, canonicalCode: string): Promise<void> => (await editorService(f)).runSavedCell(cellId, canonicalCode),
     confirm: async (question: string, choices: readonly string[]): Promise<string | undefined> => {
       if (!ctxRef || choices.length === 0) return undefined;
