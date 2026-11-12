@@ -5,7 +5,9 @@ Pi package for live marimo notebooks (npm: `pi-marimo`, repo `justmytwospence/pi
 ## Checks
 
 - `npm ci`, then `npm run check`.
-- Live e2e (needs `marimo` on PATH): `PI_MARIMO_LIVE_TEST=1 npx vitest run test/e2e.test.ts test/e2e-actions.test.ts`
+- Live e2e (needs `marimo` on PATH): `PI_MARIMO_LIVE_TEST=1 npx vitest run test/e2e.test.ts test/e2e-actions.test.ts test/e2e-host.test.ts`
+- Live against marimo main (host protocol): `PI_MARIMO_LIVE_TEST=1 PI_MARIMO_LIVE_MARIMO="uvx --from git+https://github.com/marimo-team/marimo@main marimo" npx vitest run test/e2e-host.test.ts`
+- Docs: `npm run docs:build` (strict). `docs/reference/keys.md` is generated: after changing `src/ui/keys.ts`, run `UPDATE_DOCS=1 npx vitest run test/docs.test.ts`.
 - Demo: `uvx --with pandas,numpy,matplotlib,plotly,altair,vl-convert-python,rich,tqdm,marimo-lens marimo edit --no-token examples/coffee.py`
 
 ## Browser-free pairing

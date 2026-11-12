@@ -1,0 +1,28 @@
+name: live
+on:
+  schedule: [{ cron: '0 9 * * 1' }]
+  workflow_dispatch: {}
+jobs:
+  live:
+    runs-on: ubuntu-latest
+    continue-on-error: ${{ matrix.name == 'main' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: release
+            pip: 'marimo==0.25.2 pandas'
+            tests: test/e2e.test.ts test/e2e-actions.test.ts test/e2e-host.test.ts
+          # A git build has no frontend assets, so skew-protected endpoints answer 401: only the host path is checked.
+          - name: main
+            pip: 'marimo @ git+https://github.com/marimo-team/marimo@main pandas'
+            tests: test/e2e-host.test.ts
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '24', cache: npm }
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.12' }
+      - run: pip install "${{ matrix.pip }}"
+      - run: npm ci
+      - run: PI_MARIMO_LIVE_TEST=1 npx vitest run ${{ matrix.tests }}
