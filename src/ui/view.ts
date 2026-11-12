@@ -1109,239 +1109,265 @@ export class NotebookView implements Component, Focusable {
       this.tui.requestRender();
       return;
     }
-    if (["code-left", "code-right", "code-reset", "diagram"].includes(command.id)) {
-      const candidates = this.lastDetail.filter(r => r.blockId && (this.part === undefined || r.part === this.part));
-      const blockId = candidates.find(r => r.blockId === this.focusedBlock)?.blockId ?? candidates[0]?.blockId;
-      if (blockId) {
-        if (command.id === "diagram" && this.diagramBlocks.has(blockId)) {
-          if (!this.diagramSources.delete(blockId)) this.diagramSources.add(blockId);
-          // Markdown caches the adapter identity; change it only when source visibility changes.
-          this.diagramRows = (source, options) => this.renderDiagram(source, options);
-        } else if (command.id !== "diagram") {
-          const state = this.codeOffsets.get(blockId) ?? { offset: 0 };
-          if (command.id === "code-reset") state.offset = 0;
-          else scrollCode(state, command.id === "code-left" ? -8 : 8, Number.MAX_SAFE_INTEGER);
-          this.codeOffsets.set(blockId, state);
-        }
-      }
-      this.tui.requestRender();
-      return;
-    }
-    if (command.id === "edit" && f) {
-      const cell = this.cursorCell(f);
-      if (cell) {
-        const selected = this.part === undefined ? undefined : this.lastParts[this.part];
-        const target = selected ? f.notebook.cells.get(selected.cell) ?? cell : cell;
-        this.openInlineEditor(f, target, selected?.kind === "code" ? "python" : undefined);
-      }
-      this.tui.requestRender();
-      return;
-    }
-    if (command.id === "fold-code" && f) {
-      const cell = this.cursorCell(f);
-      if (cell) this.toggleCode(cell.id);
-      this.tui.requestRender();
-      return;
-    }
     const page = this.viewport();
-    if (command.id === "interrupt") {
-      const busy = f && this.kernelBusy(f);
-      this.armed.run = undefined;
-      if (!f || !busy) {
-        this.armed.target = undefined;
-        this.note = "Nothing is running.";
-      } else if (this.armed.target !== interruptKey(f)) {
-        this.armed.target = interruptKey(f);
-      } else {
-        this.armed.target = undefined;
-        this.note = "Interrupting…";
-        this.actions.interrupt(f).then(
-          () => { if (!this.closed) { this.note = "Interrupted."; this.tui.requestRender(); } },
-          (e: unknown) => { if (!this.closed) { this.note = `Could not interrupt: ${message(e)}`; this.tui.requestRender(); } },
-        );
-      }
-      this.tui.requestRender();
-      return;
+    // Commands that end with a redraw and need no list navigation.
+    if (["code-left", "code-right", "code-reset", "diagram"].includes(command.id)) this.codeViewCommand(command.id);
+    else if (command.id === "edit" && f) this.editCommand(f);
+    else if (command.id === "fold-code" && f) { const cell = this.cursorCell(f); if (cell) this.toggleCode(cell.id); }
+    else if (command.id === "interrupt") this.interruptCommand(f);
+    else if (f && (command.id === "run-stale" || command.id === "run-all")) this.runManyCommand(f, command.id === "run-stale" ? "stale" : "all");
+    else if (f && command.id === "stop" && this.actions.stopServers && (this.actions.servers?.(f).length ?? 0) > 0) this.stopCommand(f);
+    else if (f && command.id === "unmark") this.unmarkCommand(f);
+    else { this.listCommand(command, data, f, page); return; }
+    this.tui.requestRender();
+  }
+
+  /** Scroll the focused code block sideways, or flip a Mermaid diagram to its source. */
+  private codeViewCommand(id: string): void {
+    const candidates = this.lastDetail.filter(r => r.blockId && (this.part === undefined || r.part === this.part));
+    const blockId = candidates.find(r => r.blockId === this.focusedBlock)?.blockId ?? candidates[0]?.blockId;
+    if (!blockId) return;
+    if (id === "diagram" && this.diagramBlocks.has(blockId)) {
+      if (!this.diagramSources.delete(blockId)) this.diagramSources.add(blockId);
+      // Markdown caches the adapter identity; change it only when source visibility changes.
+      this.diagramRows = (source, options) => this.renderDiagram(source, options);
+    } else if (id !== "diagram") {
+      const state = this.codeOffsets.get(blockId) ?? { offset: 0 };
+      if (id === "code-reset") state.offset = 0;
+      else scrollCode(state, id === "code-left" ? -8 : 8, Number.MAX_SAFE_INTEGER);
+      this.codeOffsets.set(blockId, state);
     }
-    if (f && (command.id === "run-stale" || command.id === "run-all")) {
-      const what = command.id === "run-stale" ? "stale" : "all";
+  }
+
+  private editCommand(f: Followed): void {
+    const cell = this.cursorCell(f);
+    if (!cell) return;
+    const selected = this.part === undefined ? undefined : this.lastParts[this.part];
+    const target = selected ? f.notebook.cells.get(selected.cell) ?? cell : cell;
+    this.openInlineEditor(f, target, selected?.kind === "code" ? "python" : undefined);
+  }
+
+  /** `x` twice: interrupt the kernel. */
+  private interruptCommand(f: Followed | undefined): void {
+    const busy = f && this.kernelBusy(f);
+    this.armed.run = undefined;
+    if (!f || !busy) {
       this.armed.target = undefined;
-      if (this.armed.run?.what !== what || this.armed.run.target !== interruptKey(f)) this.armed.run = { what, target: interruptKey(f) };
-      else {
-        this.armed.run = undefined;
-        const all = f.notebook.ordered().filter((c) => !f.notebook.isMarkdown(c) && !c.disabled);
-        const cells = what === "all" ? all : all.filter((c) => c.stale || f.notebook.edited(c));
-        this.startRun(f, cells, what === "all" ? `all ${cells.length} cells` : `${cells.length} stale cell${cells.length === 1 ? "" : "s"}`);
-      }
-      this.tui.requestRender();
-      return;
-    }
-    if (f && command.id === "stop" && this.actions.stopServers && (this.actions.servers?.(f).length ?? 0) > 0) {
+      this.note = "Nothing is running.";
+    } else if (this.armed.target !== interruptKey(f)) {
+      this.armed.target = interruptKey(f);
+    } else {
       this.armed.target = undefined;
-      this.armed.run = undefined;
-      if (this.armed.stop !== interruptKey(f)) this.armed.stop = interruptKey(f);
-      else {
-        this.armed.stop = undefined;
-        const n = this.actions.stopServers(f);
-        this.note = n ? `Stopping the marimo server${n === 1 ? "" : "s"}…` : "No server to stop.";
-      }
-      this.tui.requestRender();
-      return;
+      this.note = "Interrupting…";
+      this.actions.interrupt(f).then(
+        () => { if (!this.closed) { this.note = "Interrupted."; this.tui.requestRender(); } },
+        (e: unknown) => { if (!this.closed) { this.note = `Could not interrupt: ${message(e)}`; this.tui.requestRender(); } },
+      );
     }
-    if (f && command.id === "unmark") {
-      this.armed.target = undefined;
-      this.armed.run = undefined;
-      this.armed.stop = undefined;
-      const unmark = this.actions.unmark;
-      const c = this.cursorCell(f);
-      const selection = c ? f.notebook.lens.selections().filter((s) => s.cells.includes(c.id)).at(-1) : undefined;
-      if (!unmark) this.note = "Not available here.";
-      else if (!selection) { this.armed.unmark = undefined; this.note = "No Lens selection on this cell."; }
-      else if (this.armed.unmark?.id !== selection.id) {
-        this.armed.unmark = { id: selection.id, label: selection.label };
-        this.note = `M again removes ${selection.label}`;
-      } else {
-        this.armed.unmark = undefined;
-        const label = selection.label;
-        this.note = `Removing ${label}…`;
-        unmark(f, selection.id).then(
-          () => { if (!this.closed) { this.note = `Removed ${label}.`; this.tui.requestRender(); } },
-          (e: unknown) => { if (!this.closed) { this.note = `Could not remove ${label}: ${message(e)}`; this.tui.requestRender(); } },
-        );
-      }
-      this.tui.requestRender();
-      return;
+  }
+
+  /** `R` / `A` twice: run the stale cells, or all of them. */
+  private runManyCommand(f: Followed, what: "stale" | "all"): void {
+    this.armed.target = undefined;
+    if (this.armed.run?.what !== what || this.armed.run.target !== interruptKey(f)) { this.armed.run = { what, target: interruptKey(f) }; return; }
+    this.armed.run = undefined;
+    const all = f.notebook.ordered().filter((c) => !f.notebook.isMarkdown(c) && !c.disabled);
+    const cells = what === "all" ? all : all.filter((c) => c.stale || f.notebook.edited(c));
+    this.startRun(f, cells, what === "all" ? `all ${cells.length} cells` : `${cells.length} stale cell${cells.length === 1 ? "" : "s"}`);
+  }
+
+  /** `S` twice: stop the marimo server. */
+  private stopCommand(f: Followed): void {
+    this.armed.target = undefined;
+    this.armed.run = undefined;
+    if (this.armed.stop !== interruptKey(f)) { this.armed.stop = interruptKey(f); return; }
+    this.armed.stop = undefined;
+    const n = this.actions.stopServers!(f);
+    this.note = n ? `Stopping the marimo server${n === 1 ? "" : "s"}…` : "No server to stop.";
+  }
+
+  /** `M` twice: remove the cell's latest Lens selection. */
+  private unmarkCommand(f: Followed): void {
+    this.armed.target = undefined;
+    this.armed.run = undefined;
+    this.armed.stop = undefined;
+    const unmark = this.actions.unmark;
+    const c = this.cursorCell(f);
+    const selection = c ? f.notebook.lens.selections().filter((s) => s.cells.includes(c.id)).at(-1) : undefined;
+    if (!unmark) this.note = "Not available here.";
+    else if (!selection) { this.armed.unmark = undefined; this.note = "No Lens selection on this cell."; }
+    else if (this.armed.unmark?.id !== selection.id) {
+      this.armed.unmark = { id: selection.id, label: selection.label };
+      this.note = `M again removes ${selection.label}`;
+    } else {
+      this.armed.unmark = undefined;
+      const label = selection.label;
+      this.note = `Removing ${label}…`;
+      unmark(f, selection.id).then(
+        () => { if (!this.closed) { this.note = `Removed ${label}.`; this.tui.requestRender(); } },
+        (e: unknown) => { if (!this.closed) { this.note = `Could not remove ${label}: ${message(e)}`; this.tui.requestRender(); } },
+      );
     }
+  }
+
+  /** The commands that move around the notebook or open a tool; any of them disarms a pending confirmation. */
+  private listCommand(command: Command, data: string, f: Followed | undefined, page: number): void {
     this.armed.clear();
     this.note = undefined;
     const nb = f?.notebook;
     this.syncPart();
-    if (command.id === "notebook-previous") this.switchNotebook(-1);
-    else if (command.id === "notebook-next") this.switchNotebook(1);
-    else if (command.id === "browser" && f) {
+    const id = command.id;
+    if (id === "notebook-previous") this.switchNotebook(-1);
+    else if (id === "notebook-next") this.switchNotebook(1);
+    else if (id === "browser" && f) {
       this.actions.openInBrowser(f);
       this.note = "Opened in the browser.";
-    } else if (command.id === "find") {
+    } else if (id === "find") {
       this.typing = true;
       this.findFrom = this.cursor;
       this.filter = "";
-    } else if (command.id === "section") {
+    } else if (id === "section") {
       this.section = !this.section;
       sectionMode = this.section;
       this.note = this.section ? "Section view: the whole section." : "Cell view.";
       this.reveal = true;
-    } else if (f && nb && command.id === "fold-section") {
-      const c = this.cursorCell(f);
-      const cells = nb.ordered();
-      const at = c ? cells.findIndex((x) => x.id === c.id) : -1;
-      const head = c && nb.headings(c).length ? c : cells.slice(0, Math.max(0, at)).reverse().find((x) => nb.headings(x).length > 0);
-      if (!head) this.note = "No section here.";
-      else {
-        if (!this.folded.delete(head.id)) this.folded.add(head.id);
-        this.cursor = head.id;
-        this.follow = false;
-        this.reveal = true;
-      }
-    } else if (f && nb && command.id === "fold-all") {
-      if (this.folded.size) this.folded.clear();
-      else for (const c of nb.ordered()) if (nb.headings(c).length) this.folded.add(c.id);
-      const c = this.cursorCell(f);
-      if (c) this.cursor = c.id;
-      this.reveal = true;
-    } else if (f && nb && this.filter && (matchesKey(data, "ctrl+k") || matchesKey(data, "ctrl+j"))) this.step(f, matchesKey(data, "ctrl+j") ? 1 : -1);
-    else if (f && nb && command.id === "section-previous") this.step(f, -1, (c) => nb.headings(c).length > 0, "No section here.");
-    else if (f && nb && command.id === "section-next") this.step(f, 1, (c) => nb.headings(c).length > 0, "No section here.");
-    else if (command.id === "part-next" || command.id === "part-previous") {
-      if (!this.lastParts.length) this.note = "This cell has one part.";
-      else {
-        const last = this.lastParts.length - 1;
-        if (command.id === "part-next") this.part = this.part === undefined ? 0 : Math.min(last, this.part + 1);
-        else this.part = this.part === undefined ? last : Math.max(0, this.part - 1);
-        this.focusedBlock = undefined;
-        this.scrollToPart = true;
-      }
-    } else if (f && command.id === "table") this.enterTable(f, this.cursorCell(f));
-    else if (f && nb && (command.id === "change-next" || command.id === "change-previous")) {
-      if (![...nb.agentChanges.keys()].some((id) => nb.cells.has(id))) this.note = "The agent has not changed a cell since your last message.";
-      else this.step(f, command.id === "change-next" ? 1 : -1, (c) => nb.agentChanges.has(c.id), "The agent has not changed a cell since your last message.");
-    } else if (f && nb && command.id === "diff") {
-      const c = this.cursorCell(f);
-      if (!c || !nb.agentChanges.has(c.id)) this.note = "The agent has not changed this cell since your last message.";
-      else {
-        if (!this.diffs.delete(c.id)) { this.diffs.add(c.id); this.setCode(c.id, true); }
-        this.cursor = c.id;
-        this.reveal = true;
-      }
-    } else if (f && nb && command.id === "revert") this.revertCommand(f);
-    else if (f && command.id === "variables") {
+    } else if (f && nb && id === "fold-section") this.foldSectionCommand(f);
+    else if (f && nb && id === "fold-all") this.foldAllCommand(f);
+    else if (f && nb && this.filter && (matchesKey(data, "ctrl+k") || matchesKey(data, "ctrl+j"))) this.step(f, matchesKey(data, "ctrl+j") ? 1 : -1);
+    else if (f && nb && id === "section-previous") this.step(f, -1, (c) => nb.headings(c).length > 0, "No section here.");
+    else if (f && nb && id === "section-next") this.step(f, 1, (c) => nb.headings(c).length > 0, "No section here.");
+    else if (id === "part-next" || id === "part-previous") this.partCommand(id === "part-next");
+    else if (f && id === "table") this.enterTable(f, this.cursorCell(f));
+    else if (f && nb && (id === "change-next" || id === "change-previous")) {
+      if (![...nb.agentChanges.keys()].some((cid) => nb.cells.has(cid))) this.note = "The agent has not changed a cell since your last message.";
+      else this.step(f, id === "change-next" ? 1 : -1, (c) => nb.agentChanges.has(c.id), "The agent has not changed a cell since your last message.");
+    } else if (f && nb && id === "diff") this.diffCommand(f);
+    else if (f && nb && id === "revert") this.revertCommand(f);
+    else if (f && id === "variables") {
       this.mode = "variables";
       this.scroll = 0;
       this.reveal = true;
-    } else if (f && nb && (command.id === "parent" || command.id === "child")) {
-      const c = this.cursorCell(f);
-      const order = nb.order;
-      const here = c ? order.indexOf(c.id) : -1;
-      const candidates = c ? (command.id === "parent" ? nb.parents(c.id) : nb.children(c.id)) : [];
-      const pick = command.id === "parent"
-        ? [...candidates].reverse().find((id) => order.indexOf(id) < here) ?? candidates[0]
-        : candidates.find((id) => order.indexOf(id) > here) ?? candidates[0];
-      if (!pick) this.note = command.id === "parent" ? "No upstream cell." : "No downstream cell.";
-      else this.goTo(f, pick);
-    } else if (f && command.id === "widget") {
-      const c = this.cursorCell(f);
-      const widgets = c ? this.widgets.cellWidgets(c) : [];
-      if (!c || !widgets.length) this.note = "This cell shows no widgets.";
-      else if (!this.actions.setWidget) this.note = "Widgets cannot be driven here.";
-      else if (f.connection !== "connected") this.note = "The notebook is not connected.";
-      else {
-        this.widgets.active = { cell: c.id, index: 0, sub: 0 };
-        this.cursor = c.id;
-        this.follow = false;
-        this.reveal = true;
-      }
-    } else if (f && command.id === "ask") this.openAsk(f);
-    else if (f && command.id === "scratch") this.openScratch(f);
-    else if (f && command.id === "mark") this.openMark(f);
-    else if (f && command.id === "chart") {
-      const c = this.cursorCell(f);
-      const focused = this.part === undefined ? undefined : this.lastParts[this.part];
-      const output = focused?.kind === "chart" ? focused.output : c?.output?.blocks?.find(block => block.output.vega || block.output.plotly)?.output ?? c?.output;
-      if (c && this.live.inspect(output)) this.note = "";
-      else this.note = "Select a cell with a live chart first, then i.";
-    } else if (f && command.id === "activate") this.activate(f);
-    else if (f && command.id === "run") {
+    } else if (f && nb && (id === "parent" || id === "child")) this.relativeCommand(f, id);
+    else if (f && id === "widget") this.widgetCommand(f);
+    else if (f && id === "ask") this.openAsk(f);
+    else if (f && id === "scratch") this.openScratch(f);
+    else if (f && id === "mark") this.openMark(f);
+    else if (f && id === "chart") this.chartCommand(f);
+    else if (f && id === "activate") this.activate(f);
+    else if (f && id === "run") {
       const c = this.cursorCell(f);
       if (c) this.startRun(f, [c], cellTitle(f.notebook, c));
       else this.note = "No cell selected.";
-    } else if (f && command.id === "error-next") this.step(f, 1, (c) => !!c.error);
-    else if (f && command.id === "error-previous") this.step(f, -1, (c) => !!c.error);
-    else if (f && command.id === "chain") {
+    } else if (f && id === "error-next") this.step(f, 1, (c) => !!c.error);
+    else if (f && id === "error-previous") this.step(f, -1, (c) => !!c.error);
+    else if (f && id === "chain") {
       this.chainView = !this.chainView;
       if (!this.cells(f).some((c) => c.id === this.cursor)) this.cursor = undefined;
       this.reveal = true;
       this.note = undefined;
-    } else if (command.id === "chain-order") {
+    } else if (id === "chain-order") {
       if (this.chainView && this.cursor !== undefined && this.lastCellRows.has(this.cursor)) this.keepRow = this.lastCellRows.get(this.cursor)! - this.scroll;
       this.chainOrder = this.chainOrder === "file" ? "run" : "file";
       this.note = `${this.chainOrder === "run" ? "Run" : "File"} order.${this.chainView ? "" : " Press @ to show the run chain."}`;
-    } else if (command.id === "follow") {
+    } else if (id === "follow") {
       this.follow = true;
       this.reveal = true;
-    } else if (command.id === "jump-running") this.jumpToRunning();
-    else if (f && command.id === "down") this.step(f, 1);
-    else if (f && command.id === "up") this.step(f, -1);
-    else if (command.id === "page-up") this.scrollBy(-page);
-    else if (command.id === "page-down") this.scrollBy(page);
-    else if (command.id === "first") {
+    } else if (id === "jump-running") this.jumpToRunning();
+    else if (f && id === "down") this.step(f, 1);
+    else if (f && id === "up") this.step(f, -1);
+    else if (id === "page-up") this.scrollBy(-page);
+    else if (id === "page-down") this.scrollBy(page);
+    else if (id === "first") {
       this.move(-Infinity);
       this.cursor = f ? this.cells(f)[0]?.id : undefined;
-    } else if (command.id === "last") {
+    } else if (id === "last") {
       this.follow = false;
       this.scroll = Number.MAX_SAFE_INTEGER;
       this.cursor = f ? this.cells(f).at(-1)?.id : undefined;
       this.reveal = true;
     }
     this.tui.requestRender();
+  }
+
+  /** Tab: fold or unfold the section the cursor is in. */
+  private foldSectionCommand(f: Followed): void {
+    const nb = f.notebook;
+    const c = this.cursorCell(f);
+    const cells = nb.ordered();
+    const at = c ? cells.findIndex((x) => x.id === c.id) : -1;
+    const head = c && nb.headings(c).length ? c : cells.slice(0, Math.max(0, at)).reverse().find((x) => nb.headings(x).length > 0);
+    if (!head) { this.note = "No section here."; return; }
+    if (!this.folded.delete(head.id)) this.folded.add(head.id);
+    this.cursor = head.id;
+    this.follow = false;
+    this.reveal = true;
+  }
+
+  /** Shift+Tab: fold every section, or unfold them all. */
+  private foldAllCommand(f: Followed): void {
+    const nb = f.notebook;
+    if (this.folded.size) this.folded.clear();
+    else for (const c of nb.ordered()) if (nb.headings(c).length) this.folded.add(c.id);
+    const c = this.cursorCell(f);
+    if (c) this.cursor = c.id;
+    this.reveal = true;
+  }
+
+  /** `n` / `p`: the next or previous part of the cell (error, output, widgets, code). */
+  private partCommand(next: boolean): void {
+    if (!this.lastParts.length) { this.note = "This cell has one part."; return; }
+    const last = this.lastParts.length - 1;
+    if (next) this.part = this.part === undefined ? 0 : Math.min(last, this.part + 1);
+    else this.part = this.part === undefined ? last : Math.max(0, this.part - 1);
+    this.focusedBlock = undefined;
+    this.scrollToPart = true;
+  }
+
+  /** `d`: the agent's change to the cell as a diff. */
+  private diffCommand(f: Followed): void {
+    const c = this.cursorCell(f);
+    if (!c || !f.notebook.agentChanges.has(c.id)) { this.note = "The agent has not changed this cell since your last message."; return; }
+    if (!this.diffs.delete(c.id)) { this.diffs.add(c.id); this.setCode(c.id, true); }
+    this.cursor = c.id;
+    this.reveal = true;
+  }
+
+  /** `<` / `>`: a cell this one uses, or one that uses it. */
+  private relativeCommand(f: Followed, id: "parent" | "child"): void {
+    const nb = f.notebook;
+    const c = this.cursorCell(f);
+    const order = nb.order;
+    const here = c ? order.indexOf(c.id) : -1;
+    const candidates = c ? (id === "parent" ? nb.parents(c.id) : nb.children(c.id)) : [];
+    const pick = id === "parent"
+      ? [...candidates].reverse().find((cid) => order.indexOf(cid) < here) ?? candidates[0]
+      : candidates.find((cid) => order.indexOf(cid) > here) ?? candidates[0];
+    if (!pick) this.note = id === "parent" ? "No upstream cell." : "No downstream cell.";
+    else this.goTo(f, pick);
+  }
+
+  /** `w`: drive the cell's controls. */
+  private widgetCommand(f: Followed): void {
+    const c = this.cursorCell(f);
+    const widgets = c ? this.widgets.cellWidgets(c) : [];
+    if (!c || !widgets.length) this.note = "This cell shows no widgets.";
+    else if (!this.actions.setWidget) this.note = "Widgets cannot be driven here.";
+    else if (f.connection !== "connected") this.note = "The notebook is not connected.";
+    else {
+      this.widgets.active = { cell: c.id, index: 0, sub: 0 };
+      this.cursor = c.id;
+      this.follow = false;
+      this.reveal = true;
+    }
+  }
+
+  /** `i`: drive a live chart's pointer from the keyboard. */
+  private chartCommand(f: Followed): void {
+    const c = this.cursorCell(f);
+    const focused = this.part === undefined ? undefined : this.lastParts[this.part];
+    const output = focused?.kind === "chart" ? focused.output : c?.output?.blocks?.find(block => block.output.vega || block.output.plotly)?.output ?? c?.output;
+    if (c && this.live.inspect(output)) this.note = "";
+    else this.note = "Select a cell with a live chart first, then i.";
   }
 
   private move(by: number): void {
