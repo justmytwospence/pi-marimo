@@ -90,7 +90,7 @@ class Follower {
   }
 
   get attachment(): Attachment {
-    return { url: this.target.url, sessionId: this.target.sessionId, path: this.target.path };
+    return { url: this.target.url, sessionId: this.target.sessionId, path: this.target.path, ...(this.target.notebookId ? { notebookId: this.target.notebookId } : {}) };
   }
 
   /** Point at a new session for the same file (a page reload) and reconnect. */

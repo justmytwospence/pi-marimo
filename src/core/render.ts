@@ -8,6 +8,7 @@ export interface Attachment {
   url: string;
   sessionId: string;
   path: string;
+  notebookId?: string;
 }
 
 export const STATE_TAG = "marimo_notebook_state";

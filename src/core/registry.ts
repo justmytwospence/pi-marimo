@@ -10,6 +10,8 @@ export interface NotebookSession {
   url: string;
   sessionId: string;
   path: string;
+  /** marimo main: the notebook's id in the host API. */
+  notebookId?: string;
 }
 
 export function authHeaders(token?: string): Record<string, string> {
@@ -39,7 +41,7 @@ export async function listSessions(io: Io, url: string, token?: string): Promise
   if (body === null || typeof body !== "object") return [];
   return Object.entries(body as Record<string, Record<string, unknown> | null>).flatMap(([sessionId, info]) => {
     const path = typeof info?.path === "string" ? info.path : typeof info?.filename === "string" ? info.filename : "";
-    return path ? [{ url, sessionId, path }] : [];
+    return path ? [{ url, sessionId, path, ...(typeof info?.notebook_id === "string" ? { notebookId: info.notebook_id } : {}) }] : [];
   });
 }
 

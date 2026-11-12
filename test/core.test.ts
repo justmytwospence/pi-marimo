@@ -4,7 +4,7 @@ import { insertState } from "../src/index.js";
 import { editableMarkdown, markdownCellCode, headingsFromCode, isMarkdownCell, mdLiterals } from "../src/core/markdown.js";
 import { NotebookState } from "../src/core/notebook.js";
 import { snapshot, statusParts, shortWhere, statusText } from "../src/core/render.js";
-import { SseParser } from "../src/core/sse.js";
+import { SessionDecoder, SseParser } from "../src/core/sse.js";
 import { normalize, within } from "../src/core/io.js";
 import { parseMode } from "../src/core/watcher.js";
 
@@ -13,10 +13,12 @@ const attachment = { url: "http://127.0.0.1:2799", sessionId: "s1", path: "/tmp/
 function replay(file: string, until?: (op: string, data: any) => boolean): NotebookState {
   const nb = new NotebookState();
   const parser = new SseParser();
+  const decoder = new SessionDecoder();
   for (const event of parser.push(readFileSync(new URL(`./fixtures/${file}`, import.meta.url), "utf8"))) {
-    const message = JSON.parse(event.data);
-    nb.apply(message.op, message.data);
-    if (until?.(message.op, message.data)) break;
+    for (const message of decoder.decode(event)) {
+      nb.apply(message.op, message.data);
+      if (until?.(message.op, message.data)) return nb;
+    }
   }
   return nb;
 }

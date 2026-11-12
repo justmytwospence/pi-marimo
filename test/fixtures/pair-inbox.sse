@@ -1,0 +1,19 @@
+event: attachment
+data: {"attachment":{"id":"att-8380qgbhg9qqxw7j","identity":"s_321b0a86","kind":"client","name":null,"notebook_id":"nb-0qpp5q9gaejn39vt","since":"2026-11-12T21:00:31.073061Z"}}
+
+event: attachment
+data: {"attachment":{"id":"att-0e626kdwbkjkh11b","identity":"pi-marimo-probe","kind":"agent","name":"Pi","notebook_id":"nb-0qpp5q9gaejn39vt","since":"2026-11-12T21:00:32.637184Z"}}
+
+id: ec2d2833-24
+event: ready
+data: {}
+
+id: ec2d2833-25
+event: custom
+data: {"custom":{"data":"Please explain cell y","type":"marimo.pair.agent-message"},"time":"2026-11-12T21:00:34.142503Z"}
+
+id: ec2d2833-26
+event: custom
+data: {"custom":{"data":{"text":"structured","cells":["vblA"]},"type":"marimo.pair.agent-message"},"time":"2026-11-12T21:00:34.143801Z"}
+
+

@@ -1,0 +1,97 @@
+event: notebook
+data: {"notebook":{"id":"nb-wvh1r9ym9w6kw9eq","name":"nb","operations":["notebook.update","notebook.delete","notebook.open","notebook.edit","notebook.save","runtime.start","runtime.stop","runtime.restart","runtime.run","runtime.input","runtime.execute","runtime.interrupt","runtime.cancel"],"path":"nb.py","project_id":"proj-pvgqpdzq1nmjqfs6","updated_at":"2026-11-12T20:49:21.414357Z"}}
+
+event: cell
+data: {"cell":{"code":"import marimo as mo\nimport time","code_fingerprint":"py-ast-v1:3.14:ccbc4f8e6b761e786c55b08cd71a29ba1a5b36f54f5e6a737b5d986669316bb6","config":{"column":null,"disabled":false,"expand_output":false,"hide_code":false},"etag":"101b081b8594c079","id":"Hbol","name":"_","notebook_id":"nb-wvh1r9ym9w6kw9eq","version":1}}
+
+event: cell
+data: {"cell":{"code":"mo.md(\"\"\"\n# Loading\n\"\"\")","code_fingerprint":"py-ast-v1:3.14:f1937186e68392b84cbd24c2fbf2aac3f4587b023acdb85efe34690c69f266ed","config":{"column":null,"disabled":false,"expand_output":false,"hide_code":false},"etag":"a88b89c4f93abc8b","id":"MJUe","name":"_","notebook_id":"nb-wvh1r9ym9w6kw9eq","version":1}}
+
+event: cell
+data: {"cell":{"code":"time.sleep(1)\ny = 1\nprint(\"hello\")","code_fingerprint":"py-ast-v1:3.14:2acb8623cda0c5d901652519858cb89d9229d1f0acc470c4fc790f16bee2f29e","config":{"column":null,"disabled":false,"expand_output":false,"hide_code":false},"etag":"4d10064a5f4c8fd9","id":"vblA","name":"_","notebook_id":"nb-wvh1r9ym9w6kw9eq","version":1}}
+
+event: cell
+data: {"cell":{"code":"s = mo.ui.slider(0, 10, value=y)\ns","code_fingerprint":"py-ast-v1:3.14:4ba616bf57aefe9d68a0d9c8b1477c67930b1f48924eaf2ee3ac11854caaf7f4","config":{"column":null,"disabled":false,"expand_output":false,"hide_code":false},"etag":"11b1b2ca2c4b188b","id":"bkHC","name":"_","notebook_id":"nb-wvh1r9ym9w6kw9eq","version":1}}
+
+event: document
+data: {"document":{"app_config":{},"app_config_etag":"44136fa355b3678a","etag":"1d86791b531a5238","notebook_id":"nb-wvh1r9ym9w6kw9eq","order":["Hbol","MJUe","vblA","bkHC"],"order_etag":"34a821422e56fcff","saved_etag":"1d86791b531a5238","version":1}}
+
+event: analysis
+data: {"analysis":{"cells":{"Hbol":{"defs":["mo","time"],"errors":[],"refs":[]},"MJUe":{"defs":[],"errors":[],"refs":["mo"]},"vblA":{"defs":["y"],"errors":[],"refs":["time"]},"bkHC":{"defs":["s"],"errors":[],"refs":["mo","y"]}},"document_etag":"1d86791b531a5238","notebook_id":"nb-wvh1r9ym9w6kw9eq"}}
+
+event: runtime
+data: {"runtime":{"id":"rt-en21528503q3x3g8","marimo_version":"0.25.2","message":null,"notebook_id":"nb-wvh1r9ym9w6kw9eq","started_at":"2026-11-12T20:50:08.974149Z","status":"running"}}
+
+event: attachment
+data: {"attachment":{"id":"att-pvvbby36j0at4zr9","identity":"late-47306","kind":"client","name":null,"notebook_id":"nb-wvh1r9ym9w6kw9eq","since":"2026-11-12T20:50:35.660634Z"}}
+
+event: run
+data: {"run":{"cells":[],"completed_at":"2026-11-12T20:50:16.626131Z","id":"74de95d5-84ab-4514-bcad-07bb127010f1","notebook_id":"nb-wvh1r9ym9w6kw9eq","outcome":"succeeded","runtime_id":"rt-en21528503q3x3g8","started_at":"2026-11-12T20:50:15.575010Z","status":"completed"}}
+
+event: execution
+data: {"execution":{"caused_by":"73e43dcb-ee12-4762-a992-34a3361bfedf","cell_id":"Hbol","code":null,"code_fingerprint":"py-ast-v1:3.14:ccbc4f8e6b761e786c55b08cd71a29ba1a5b36f54f5e6a737b5d986669316bb6","completed_at":"2026-11-12T20:50:15.590022Z","depends_on":{},"id":"7380ae23-b492-41da-9d1c-956bb25f11d4","outcome":{"kind":"value","display":null},"run_id":"74de95d5-84ab-4514-bcad-07bb127010f1","runtime_id":"rt-en21528503q3x3g8","started_at":"2026-11-12T20:50:15.584588Z","status":"completed"}}
+
+event: execution
+data: {"execution":{"caused_by":"73e43dcb-ee12-4762-a992-34a3361bfedf","cell_id":"MJUe","code":null,"code_fingerprint":"py-ast-v1:3.14:f1937186e68392b84cbd24c2fbf2aac3f4587b023acdb85efe34690c69f266ed","completed_at":"2026-11-12T20:50:15.594929Z","depends_on":{"mo":{"execution":"7380ae23-b492-41da-9d1c-956bb25f11d4","update":0}},"id":"e83ffa94-1788-4e18-ba49-84c7ad9c15b8","outcome":{"kind":"value","display":{"data":"<span class=\"markdown prose dark:prose-invert contents\"><h1 id=\"loading\">Loading</h1></span>","mimetype":"text/markdown"}},"run_id":"74de95d5-84ab-4514-bcad-07bb127010f1","runtime_id":"rt-en21528503q3x3g8","started_at":"2026-11-12T20:50:15.593053Z","status":"completed"}}
+
+event: execution
+data: {"execution":{"caused_by":"73e43dcb-ee12-4762-a992-34a3361bfedf","cell_id":"vblA","code":null,"code_fingerprint":"py-ast-v1:3.14:2acb8623cda0c5d901652519858cb89d9229d1f0acc470c4fc790f16bee2f29e","completed_at":"2026-11-12T20:50:16.610308Z","depends_on":{"print":null,"time":{"execution":"7380ae23-b492-41da-9d1c-956bb25f11d4","update":0}},"id":"83cb8c35-8eaa-406a-bdf8-dc28b04185cf","outcome":{"kind":"value","display":null},"run_id":"74de95d5-84ab-4514-bcad-07bb127010f1","runtime_id":"rt-en21528503q3x3g8","started_at":"2026-11-12T20:50:15.595347Z","status":"completed"}}
+
+event: execution
+data: {"execution":{"caused_by":"73e43dcb-ee12-4762-a992-34a3361bfedf","cell_id":"bkHC","code":null,"code_fingerprint":"py-ast-v1:3.14:4ba616bf57aefe9d68a0d9c8b1477c67930b1f48924eaf2ee3ac11854caaf7f4","completed_at":"2026-11-12T20:50:16.615096Z","depends_on":{"mo":{"execution":"7380ae23-b492-41da-9d1c-956bb25f11d4","update":0},"y":{"execution":"83cb8c35-8eaa-406a-bdf8-dc28b04185cf","update":0}},"id":"acea9494-768e-41b3-bdf0-5eb0162704cc","outcome":{"kind":"value","display":{"data":"<marimo-ui-element object-id='bkHC-0' random-id='ddb7893d-87ff-f020-5e0f-1bd252fea94c'><marimo-slider data-initial-value='1' data-label='null' data-start='0' data-stop='10' data-steps='&#91;&#93;' data-debounce='false' data-disabled='false' data-orientation='&quot;horizontal&quot;' data-show-value='false' data-include-input='false' data-full-width='false'></marimo-slider></marimo-ui-element>","mimetype":"text/html"}},"run_id":"74de95d5-84ab-4514-bcad-07bb127010f1","runtime_id":"rt-en21528503q3x3g8","started_at":"2026-11-12T20:50:16.610710Z","status":"completed"}}
+
+event: variable
+data: {"variable":{"execution_id":"7380ae23-b492-41da-9d1c-956bb25f11d4","id":"7380ae23-b492-41da-9d1c-956bb25f11d4-variable-mo","name":"mo","preview":"marimo","revision":{"execution":"7380ae23-b492-41da-9d1c-956bb25f11d4","update":0},"type":"module"}}
+
+event: variable
+data: {"variable":{"execution_id":"7380ae23-b492-41da-9d1c-956bb25f11d4","id":"7380ae23-b492-41da-9d1c-956bb25f11d4-variable-time","name":"time","preview":"time","revision":{"execution":"7380ae23-b492-41da-9d1c-956bb25f11d4","update":0},"type":"module"}}
+
+event: console
+data: {"console":{"execution_id":"83cb8c35-8eaa-406a-bdf8-dc28b04185cf","id":"83cb8c35-8eaa-406a-bdf8-dc28b04185cf-0","name":"stdout","seq":0,"text":"hello\n"}}
+
+event: variable
+data: {"variable":{"execution_id":"83cb8c35-8eaa-406a-bdf8-dc28b04185cf","id":"83cb8c35-8eaa-406a-bdf8-dc28b04185cf-variable-y","name":"y","preview":"1","revision":{"execution":"83cb8c35-8eaa-406a-bdf8-dc28b04185cf","update":0},"type":"int"}}
+
+event: variable
+data: {"variable":{"execution_id":"acea9494-768e-41b3-bdf0-5eb0162704cc","id":"acea9494-768e-41b3-bdf0-5eb0162704cc-variable-s","name":"s","preview":null,"revision":{"execution":"acea9494-768e-41b3-bdf0-5eb0162704cc","update":0},"type":"slider"}}
+
+event: execution
+data: {"execution":{"caused_by":null,"cell_id":null,"code":"import marimo._code_mode as cm\nasync with cm.get_context() as ctx:\n    for c in ctx.cells:\n        ctx.run_cell(c.id)\n","code_fingerprint":"py-ast-v1:3.14:45e675636b5c0145dbdbc7d4e3201cd020c4f55ad316d86285f8885d38bdf2ed","completed_at":"2026-11-12T20:50:16.620044Z","depends_on":{},"id":"73e43dcb-ee12-4762-a992-34a3361bfedf","outcome":{"kind":"value","display":null},"run_id":"74de95d5-84ab-4514-bcad-07bb127010f1","runtime_id":"rt-en21528503q3x3g8","started_at":"2026-11-12T20:50:15.575010Z","status":"completed"}}
+
+event: console
+data: {"console":{"execution_id":"73e43dcb-ee12-4762-a992-34a3361bfedf","id":"73e43dcb-ee12-4762-a992-34a3361bfedf-0","name":"stdout","seq":0,"text":"re-ran cell 'bkHC' (_)\nre-ran cell 'MJUe' (_)\nre-ran cell 'Hbol' (_)\nre-ran cell 'vblA' (_)\n"}}
+
+id: e7ea17d5-104
+event: ready
+data: {}
+
+event: marimo
+data: {"marimo":{"op":"kernel-ready","layout":null,"resumed":true,"ui_values":{},"app_config":{"width":"compact","app_title":null,"layout_file":null,"css_file":null,"html_head_file":null,"auto_download":[],"sql_output":"auto"},"kiosk":true,"capabilities":{"terminal":true,"pylsp":false,"ty":false,"basedpyright":false,"pyrefly":false},"consumer_capabilities":{"edit":false,"interact":true},"auto_instantiated":false,"stable_session_id":"sess-tqvt227bge6qepp4"}}
+
+event: marimo
+data: {"marimo":{"op":"environment-state","source":"kernel","state":{"restart_required":false,"operations":[]}}}
+
+event: marimo
+data: {"marimo":{"op":"environment-state","source":"server","state":{"restart_required":false,"operations":[]}}}
+
+event: marimo
+data: {"marimo":{"op":"variables","variables":[{"name":"s","declared_by":["bkHC"],"used_by":[]},{"name":"time","declared_by":["Hbol"],"used_by":["vblA"]},{"name":"mo","declared_by":["Hbol"],"used_by":["bkHC","MJUe"]},{"name":"y","declared_by":["vblA"],"used_by":["bkHC"]}]}}
+
+event: marimo
+data: {"marimo":{"op":"variable-values","variables":[{"name":"mo","value":"marimo","datatype":"module","execution_id":"7380ae23-b492-41da-9d1c-956bb25f11d4","revision":{"execution":"7380ae23-b492-41da-9d1c-956bb25f11d4","update":0}},{"name":"time","value":"time","datatype":"module","execution_id":"7380ae23-b492-41da-9d1c-956bb25f11d4","revision":{"execution":"7380ae23-b492-41da-9d1c-956bb25f11d4","update":0}},{"name":"y","value":"1","datatype":"int","execution_id":"83cb8c35-8eaa-406a-bdf8-dc28b04185cf","revision":{"execution":"83cb8c35-8eaa-406a-bdf8-dc28b04185cf","update":0}},{"name":"s","value":null,"datatype":"slider","execution_id":"acea9494-768e-41b3-bdf0-5eb0162704cc","revision":{"execution":"acea9494-768e-41b3-bdf0-5eb0162704cc","update":0}}],"removed":[]}}
+
+event: marimo
+data: {"marimo":{"op":"cell-op","cell_id":"MJUe","output":{"channel":"output","mimetype":"text/markdown","data":"<span class=\"markdown prose dark:prose-invert contents\"><h1 id=\"loading\">Loading</h1></span>","timestamp":1794516615.584952},"console":[],"status":"idle","run_id":"74de95d5-84ab-4514-bcad-07bb127010f1","execution_id":"e83ffa94-1788-4e18-ba49-84c7ad9c15b8","timestamp":1794516615.585803}}
+
+event: marimo
+data: {"marimo":{"op":"cell-op","cell_id":"__scratch__","output":{"channel":"output","mimetype":"text/plain","data":"","timestamp":1794516616.616642},"console":[{"channel":"stdout","mimetype":"text/plain","data":"re-ran cell 'bkHC' (_)\nre-ran cell 'MJUe' (_)\nre-ran cell 'Hbol' (_)\nre-ran cell 'vblA' (_)\n","timestamp":1794516616.617957}],"status":"idle","run_id":"74de95d5-84ab-4514-bcad-07bb127010f1","execution_id":"73e43dcb-ee12-4762-a992-34a3361bfedf","timestamp":1794516616.61823}}
+
+event: marimo
+data: {"marimo":{"op":"cell-op","cell_id":"Hbol","output":{"channel":"output","mimetype":"text/plain","data":"","timestamp":1794516615.5831318},"console":[],"status":"idle","run_id":"74de95d5-84ab-4514-bcad-07bb127010f1","execution_id":"7380ae23-b492-41da-9d1c-956bb25f11d4","timestamp":1794516615.58411}}
+
+event: marimo
+data: {"marimo":{"op":"cell-op","cell_id":"vblA","output":{"channel":"output","mimetype":"text/plain","data":"","timestamp":1794516616.6033332},"console":[{"channel":"stdout","mimetype":"text/plain","data":"hello\n","timestamp":1794516616.604596}],"status":"idle","run_id":"74de95d5-84ab-4514-bcad-07bb127010f1","execution_id":"83cb8c35-8eaa-406a-bdf8-dc28b04185cf","timestamp":1794516616.6048892}}
+
+event: marimo
+data: {"marimo":{"op":"cell-op","cell_id":"bkHC","output":{"channel":"output","mimetype":"text/html","data":"<marimo-ui-element object-id='bkHC-0' random-id='ddb7893d-87ff-f020-5e0f-1bd252fea94c'><marimo-slider data-initial-value='1' data-label='null' data-start='0' data-stop='10' data-steps='&#91;&#93;' data-debounce='false' data-disabled='false' data-orientation='&quot;horizontal&quot;' data-show-value='false' data-include-input='false' data-full-width='false'></marimo-slider></marimo-ui-element>","timestamp":1794516616.606457},"console":[],"status":"idle","run_id":"74de95d5-84ab-4514-bcad-07bb127010f1","execution_id":"acea9494-768e-41b3-bdf0-5eb0162704cc","timestamp":1794516616.609113}}
+
