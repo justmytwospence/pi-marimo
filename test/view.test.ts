@@ -2174,11 +2174,11 @@ test("STEP3 visibility keys release hidden controls to source and transfer prefe
   try {
     screen(v);
     (v as any).widgets.active = { cell: "a", index: 0, sub: 0 };
-    (v as any).table = { cell: "a", objectId: "t" };
+    (v as any).tables.active = { cell: "a", objectId: "t" };
     v.handleInput("\\");
     screen(v);
     expect((v as any).widgets.active).toBeUndefined();
-    expect((v as any).table).toBeUndefined();
+    expect((v as any).tables.active).toBeUndefined();
     expect((v as any).lastParts[(v as any).part]?.kind).toBe("code");
     v.handleInput("!");
     expect(v.snapshot().preferences).toMatchObject({ showOutput: false, diagnostics: "errors" });
@@ -2497,7 +2497,7 @@ test.each(["widget", "table"])("palette outside input cannot mutate or scroll th
     v.render(300); v.handleInput(kind === "widget" ? "w" : "t"); v.render(300);
     paletteSearch(v, ""); v.render(300);
     const saved = v.snapshot();
-    const session = kind === "table" ? (v as any).tableFor(f, f.notebook.cells.get("a")).session : undefined;
+    const session = kind === "table" ? (v as any).tables.sessionFor(f, f.notebook.cells.get("a")).session : undefined;
     if (kind === "table") expect(session).toBeDefined();
     const row = session?.row;
     call.mockClear();

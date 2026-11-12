@@ -47,6 +47,7 @@ import type { PackagePaneState } from "./packages.js";
 import { PackagesController } from "./view-packages.js";
 import { VariablesController } from "./view-variables.js";
 import { WidgetController } from "./view-widgets.js";
+import { TableController } from "./view-tables.js";
 import type { ViewHost } from "./view-host.js";
 import type { PackageClient, PackageSnapshot } from "../core/packages.js";
 import { SessionPreferences, type ViewPreferences } from "./settings.js";
@@ -241,8 +242,6 @@ export class NotebookView implements Component, Focusable {
   private diagramRows = this.renderDiagram;
   /** The detail's scroll, in its own rows. */
   private detailScroll = 0;
-  private tableReturnScroll: number | undefined;
-  private tableCardScroll = 0;
   /** Which cell (and view) the detail last drew, so a new one starts at its top. */
   private detailKey = "";
   private lastOutline: Row[] = [];
@@ -281,13 +280,12 @@ export class NotebookView implements Component, Focusable {
   private diffs = new Set<string>();
   private variables!: VariablesController;
   private widgets!: WidgetController;
+  private tables!: TableController;
   /** The focused part of the cursor's cell (n/p), an index into `lastParts`. */
   private part: number | undefined;
   private partCell: string | undefined;
   private scrollToPart = false;
   private lastParts: Part[] = [];
-  /** The table the keys drive (table mode). */
-  private table: { cell: string; objectId: string } | undefined;
   private help = false;
   private helpView = new Help();
   private palette?: Palette;
@@ -341,12 +339,20 @@ export class NotebookView implements Component, Focusable {
       startFind: (from) => { this.typing = true; this.findFrom = from; },
       enterTable: (f, cell) => this.enterTable(f, cell),
       confirm: (question, choices) => this.confirm(question, choices),
+      viewKey: () => this.key,
+      getDetailScroll: () => this.detailScroll,
+      setDetailScroll: (n) => { this.detailScroll = n; },
+      outlineWidth: () => this.panes.lw,
+      openHelp: () => this.openHelp(),
+      showMessage: (text) => { this.messageView = new MessageView({ text, scroll: 0 }); },
+      selectCell: (id) => { this.cursor = id; this.follow = false; this.reveal = true; },
       clearPart: () => { this.part = undefined; },
       openValue: (f, cell, w) => this.openValue(f, cell, w),
     };
     this.packages = new PackagesController(this.host);
     this.variables = new VariablesController(this.host);
     this.widgets = new WidgetController(this.host);
+    this.tables = new TableController(this.host);
     this.ownsEditors = !actions.editors;
     this.editors = actions.editors ?? new InlineEditorManager();
     const colors = (theme as SyntaxTheme).colors;
@@ -430,7 +436,7 @@ export class NotebookView implements Component, Focusable {
       ...(this.palette ? { palette: { ...this.palette.state } } : {}),
       ...(this.messageView ? { message: { ...this.messageView.state } } : {}),
       ...(this.note ? { note: this.note } : {}),
-      ...(this.table ? { table: { ...this.table } } : {}),
+      ...(this.tables.active ? { table: { ...this.tables.active } } : {}),
       ...(this.widgets.active ? { widget: { ...this.widgets.active } } : {}),
       ...(this.focusedBlock ? { focusedBlock: this.focusedBlock } : {}),
     };
@@ -444,7 +450,7 @@ export class NotebookView implements Component, Focusable {
     this.help = !!s.help;
     this.helpView = new Help(s.help ?? s.lastHelp);
     this.palette = s.palette ? new Palette(s.palette.mode, s.palette) : undefined;
-    this.table = s.table ? { ...s.table } : undefined;
+    this.tables.active = s.table ? { ...s.table } : undefined;
     this.widgets.active = s.widget ? { ...s.widget } : undefined;
     this.cursor = s.cursor;
     this.follow = s.follow;
@@ -564,7 +570,7 @@ export class NotebookView implements Component, Focusable {
     }
     this.filter = "";
     this.mode = "cells";
-    this.table = undefined;
+    this.tables.active = undefined;
     this.cursor = id;
     this.follow = false;
     this.reveal = true;
@@ -695,7 +701,7 @@ export class NotebookView implements Component, Focusable {
     this.sectionCodeFolded.clear();
     this.detailScroll = 0;
     this.widgets.active = undefined;
-    this.table = undefined;
+    this.tables.active = undefined;
     this.part = undefined;
   }
 
@@ -825,22 +831,11 @@ export class NotebookView implements Component, Focusable {
     this.filter = "";
     this.folded.clear();
     this.widgets.active = undefined;
-    this.table = undefined;
+    this.tables.active = undefined;
     this.live.leave();
     this.setCode(cell.id, true);
     this.sectionCodeOpen.add(cell.id);
     void this.editors.open(f, cell.id, kind).then(() => this.renderReady(), e => { this.note = message(e); this.renderReady(); });
-  }
-
-  /** The session and current data of a cell's marimo table, when the view can drive it. */
-  private tableFor(f: Followed, cell: Cell, source?: string | CellOutput): { session: TableSession; data: TableData } | undefined {
-    const id = typeof source === "string" ? source : this.table?.cell === cell.id ? this.table.objectId : undefined;
-    // A supplied leaf is authoritative, including a static table without an object id.
-    const t = typeof source === "object" ? source.table : id ? [cell.output, ...(cell.output?.blocks?.map(block => block.output) ?? [])].find(output => output?.table?.objectId === id)?.table : cell.output?.table;
-    if (!t?.objectId || !this.actions.table || f.connection !== "connected") return undefined;
-    const session = tableSession(`${this.key}\0${t.objectId}`, cell, t);
-    session.onChange = () => { if (!this.closed) this.tui.requestRender(); };
-    return { session, data: session.data() };
   }
 
   private copy(text: string): void {
@@ -851,112 +846,9 @@ export class NotebookView implements Component, Focusable {
     } else this.note = "Copying needs a terminal.";
   }
 
-  private tableKey(f: Followed | undefined, data: string): void {
-    const cell = f && this.table ? f.notebook.cells.get(this.table.cell) : undefined;
-    const t = f && cell ? this.tableFor(f, cell) : undefined;
-    const rpc = this.actions.table;
-    if (!f || !cell || !t || !rpc || !this.table) { this.table = undefined; return; }
-    const s = t.session;
-    const objectId = this.table.objectId;
-    this.note = undefined;
-    const command = commandFor("table", data)?.id;
-    if (command === "table-close") {
-      if (s.card) { s.closeCard(); this.tableCardScroll = 0; }
-      else { this.table = undefined; this.detailScroll = this.tableReturnScroll ?? this.detailScroll; this.tableReturnScroll = undefined; }
-      return;
-    }
-    if (command === "help") { this.openHelp(); return; }
-    if (s.card && (command === "table-down" || command === "table-up" || command === "table-next" || command === "table-previous" || command === "table-first" || command === "table-last")) {
-      const delta = command === "table-down" ? 1 : command === "table-up" ? -1 : command === "table-next" ? this.viewport() : command === "table-previous" ? -this.viewport() : 0;
-      this.tableCardScroll = command === "table-first" ? 0 : command === "table-last" ? Number.MAX_SAFE_INTEGER : Math.max(0, this.tableCardScroll + delta);
-      return;
-    }
-    if (command === "table-down") s.move(f, rpc, 1, 0);
-    else if (command === "table-up") s.move(f, rpc, -1, 0);
-    else if (command === "table-left") s.move(f, rpc, 0, -1);
-    else if (command === "table-right") s.move(f, rpc, 0, 1);
-    else if (command === "table-next") s.setPage(f, rpc, s.page + 1);
-    else if (command === "table-previous") s.setPage(f, rpc, s.page - 1);
-    else if (command === "table-first") s.setPage(f, rpc, 0);
-    else if (command === "table-last") {
-      const n = s.pageCount();
-      if (n === undefined) this.note = "marimo did not count the rows: ] pages forward.";
-      else s.setPage(f, rpc, n - 1);
-    } else if (command === "table-larger") s.setPageSize(f, rpc, 1);
-    else if (command === "table-smaller") s.setPageSize(f, rpc, -1);
-    else if (command === "table-sort" || command === "table-sort-add") s.toggleSort(f, rpc, s.columnName(), command === "table-sort-add");
-    else if (command === "table-search") {
-      this.openDock({
-        kind: "table",
-        title: `Search ${cellTitle(f.notebook, cell)}`,
-        hint: "enter search · empty clears · esc cancel",
-        initial: s.query,
-        submit: (text) => { this.closeDock(); s.setQuery(f, rpc, text); this.tui.requestRender(); },
-        cancel: () => { this.closeDock(); this.tui.requestRender(); },
-      });
-    } else if (command === "table-filter") {
-      const column = s.columnName();
-      const kind = t.data.fieldTypes?.[column]?.kind ?? "string";
-      this.openDock({
-        kind: "table",
-        title: `Filter ${oneLine(column)} (${oneLine(kind)}): > 5 · 1..10 · in a, b · null · !null · ~regex · text`,
-        hint: "enter filter · esc cancel",
-        submit: (text) => {
-          const parsed = parseFilter(column, kind, text);
-          if ("error" in parsed) { this.note = parsed.error; this.tui.requestRender(); return; }
-          this.closeDock();
-          s.addFilter(f, rpc, parsed);
-          this.tui.requestRender();
-        },
-        cancel: () => { this.closeDock(); this.tui.requestRender(); },
-      });
-    } else if (command === "table-clear") s.clearFilters(f, rpc);
-    else if (command === "table-select") {
-      const value = this.actions.setTableSelection ? s.toggleSelect(f.notebook) : undefined;
-      if (!value) this.note = "This table has no selection.";
-      else this.actions.setTableSelection!(f, cell, objectId, value);
-    } else if (command === "table-row") s.openRow();
-    else if (command === "table-column") s.openColumn(f, rpc);
-    else if (command === "table-summary") s.toggleSummaries(f, rpc);
-    else if (command === "table-copy") this.copy(s.cellValue());
-    else if (command === "table-copy-row") this.copy(s.toTsv());
-    else if (command === "table-csv") {
-      const save = this.actions.saveTable;
-      if (!save) this.note = "Not available here.";
-      else {
-        this.note = "Saving…";
-        save(f, cell, objectId).then(
-          (name) => { if (!this.closed) { this.note = `Saved ${name}.`; this.tui.requestRender(); } },
-          (e: unknown) => { if (!this.closed) { this.note = `Could not save: ${message(e)}`; this.tui.requestRender(); } },
-        );
-      }
-    } else if (command === "table-shrink") s.resizeColumn(s.columnName(), -2);
-    else if (command === "table-grow") s.resizeColumn(s.columnName(), 2);
-    else if (command === "table-fit") s.fitColumn(s.columnName());
-    else if (command === "table-value") this.messageView = new MessageView({ text: s.fullCellValue(), scroll: 0 });
-    else if (command === "table-pick") {
-      const names = orderedColumns(t.data);
-      const choices = ["Cancel", ...names.map((name, i) => `${i + 1}. ${oneLine(name)}`)];
-      void this.confirm("Choose table column", choices).then(choice => {
-        const index = choices.indexOf(choice ?? "") - 1;
-        if (index >= 0 && this.table?.objectId === objectId) { s.col = index; s.ensureVisible(Math.max(1, this.panes.lw)); this.renderReady(); }
-      }).catch(e => { this.note = message(e); this.renderReady(); });
-    } else if (command === "table-refresh") void s.refresh(f, rpc);
-  }
-
   /** `t`: drive the table of the cursor's cell (or the focused part). */
   private enterTable(f: Followed, cell: Cell | undefined): void {
-    const focused = this.part !== undefined ? this.lastParts[this.part] : undefined;
-    const target = focused?.kind === "table" ? f.notebook.cells.get(focused.cell) : cell;
-    const objectId = focused?.kind === "table" ? focused.tableObjectId ?? focused.output?.table?.objectId : target?.output?.table?.objectId;
-    if (!target || !objectId) { this.note = "This cell shows no table marimo can page."; return; }
-    if (!this.actions.table || f.connection !== "connected") { this.note = "This cell shows no table marimo can page: the table needs a connected notebook."; return; }
-    if (!this.table) this.tableReturnScroll = this.detailScroll;
-    this.tableCardScroll = 0;
-    this.table = { cell: target.id, objectId };
-    this.cursor = target.id;
-    this.follow = false;
-    this.reveal = true;
+    this.tables.enter(f, cell, this.part !== undefined ? this.lastParts[this.part] : undefined);
   }
 
   // --- keys -----------------------------------------------------------------------------------
@@ -1091,7 +983,7 @@ export class NotebookView implements Component, Focusable {
     if (!command) {
       // Unknown notebook input still cancels a pending two-press action, as before.
       // It must not leave an old destructive confirmation armed for a later key.
-      if (this.mode === "cells" && !this.table && !this.widgets.active && !this.live.inspecting) {
+      if (this.mode === "cells" && !this.tables.active && !this.widgets.active && !this.live.inspecting) {
         this.armed.clear();
         this.note = undefined;
       }
@@ -1114,7 +1006,7 @@ export class NotebookView implements Component, Focusable {
       } else this.preferences.update({ showOutput: !current.showOutput });
       // An invisible control must never retain keyboard or mouse ownership.
       const focused = this.part === undefined ? undefined : this.lastParts[this.part];
-      const hidesOutput = !this.preferences.snapshot().showOutput && (!!this.widgets.active || !!this.table || this.live.inspecting || (focused && ["printed", "output", "table", "chart", "widgets"].includes(focused.kind)));
+      const hidesOutput = !this.preferences.snapshot().showOutput && (!!this.widgets.active || !!this.tables.active || this.live.inspecting || (focused && ["printed", "output", "table", "chart", "widgets"].includes(focused.kind)));
       if (hidesOutput || (command.id === "diagnostics" && focused?.kind === "error")) this.focusSource();
       this.tui.requestRender();
       return;
@@ -1138,8 +1030,8 @@ export class NotebookView implements Component, Focusable {
       this.tui.requestRender();
       return;
     }
-    if (this.table && this.mode === "cells") {
-      this.tableKey(f, data);
+    if (this.tables.active && this.mode === "cells") {
+      this.tables.key(f, data);
       this.tui.requestRender();
       return;
     }
@@ -1441,7 +1333,7 @@ export class NotebookView implements Component, Focusable {
 
   private focusSource(): void {
     this.widgets.active = undefined;
-    this.table = undefined;
+    this.tables.active = undefined;
     this.widgets.dragging = undefined;
     this.live.leave();
     const f = this.current();
@@ -1744,11 +1636,11 @@ export class NotebookView implements Component, Focusable {
         this.syncPart();
         // A table the view drives: its page, cursor and selection; a cell that needs its rows asks for them once.
         const tableSource = (c: Cell, output?: CellOutput) => {
-          const t = this.tableFor(f, c, output);
+          const t = this.tables.sessionFor(f, c, output);
           if (!t) return undefined;
           const s = t.session;
           if (c.id === cell.id && s.needsFetch() && this.actions.table) void s.refresh(f, this.actions.table);
-          const focused = this.table?.cell === c.id && this.table.objectId === t.data.objectId;
+          const focused = this.tables.active?.cell === c.id && this.tables.active.objectId === t.data.objectId;
           const picked = s.selection(nb);
           const cells = new Set<string>();
           const rows = new Set<string>();
@@ -1772,9 +1664,9 @@ export class NotebookView implements Component, Focusable {
           };
         };
         const tableCard = (c: Cell, output?: CellOutput): string[] | undefined => {
-          const t = this.tableFor(f, c, output);
+          const t = this.tables.sessionFor(f, c, output);
           const card = t?.session.card;
-          if (!t || !card || this.table?.cell !== c.id || this.table.objectId !== t.data.objectId) return undefined;
+          if (!t || !card || this.tables.active?.cell !== c.id || this.tables.active.objectId !== t.data.objectId) return undefined;
           const lines = card.kind === "row"
             ? rowCard(t.data, card.index, dw, th as PaneTheme, t.session.page * t.session.pageSize + card.index)
             : columnCard(t.data, card.column, t.session.summaries, card.top, dw, th as PaneTheme);
@@ -1840,8 +1732,8 @@ export class NotebookView implements Component, Focusable {
         detail = this.editors.render(dw, Math.max(1, dh)).map((text, editorRow) => ({ text, editorRow }));
         this.detailScroll = 0;
       }
-      if (cell && this.table?.cell === cell.id) {
-        const active = this.tableFor(f, cell, this.table.objectId);
+      if (cell && this.tables.active?.cell === cell.id) {
+        const active = this.tables.sessionFor(f, cell, this.tables.active.objectId);
         if (active) {
           const s = active.session;
           const picked = s.selection(nb);
@@ -1855,8 +1747,8 @@ export class NotebookView implements Component, Focusable {
             const lines = s.card.kind === "row"
               ? rowCard(active.data, s.card.index, dw, th as PaneTheme, s.page * s.pageSize + s.card.index)
               : columnCard(active.data, s.card.column, s.summaries, s.card.top, dw, th as PaneTheme);
-            this.tableCardScroll = Math.min(this.tableCardScroll, Math.max(0, lines.length - dh));
-            detail = lines.slice(this.tableCardScroll, this.tableCardScroll + dh).map(text => ({ text }));
+            this.tables.cardScroll = Math.min(this.tables.cardScroll, Math.max(0, lines.length - dh));
+            detail = lines.slice(this.tables.cardScroll, this.tables.cardScroll + dh).map(text => ({ text }));
           } else {
             s.ensureVisible(Math.max(1, dw - 1));
             const grid = tableViewport(active.data, dw, dh, th as PaneTheme, {
@@ -1874,7 +1766,7 @@ export class NotebookView implements Component, Focusable {
               ...(grid.rowAt[index] !== undefined ? { tableRow: grid.rowAt[index] } : {}),
               ...(grid.headerRow === index ? { tableHeader: true } : {}),
               ...(grid.rowAt[index] !== undefined || grid.headerRow === index ? { tableColumns: grid.layout.columns } : {}),
-              tableObjectId: this.table!.objectId,
+              tableObjectId: this.tables.active!.objectId,
             }));
           }
           this.detailScroll = 0;
@@ -1963,7 +1855,7 @@ export class NotebookView implements Component, Focusable {
   }
 
   private commandMode(): CommandMode {
-    return this.editors.active ? "editor" : this.table ? "table" : this.widgets.active ? "widget" : this.live?.inspecting ? "chart" : this.mode === "cells" ? "notebook" : this.mode;
+    return this.editors.active ? "editor" : this.tables.active ? "table" : this.widgets.active ? "widget" : this.live?.inspecting ? "chart" : this.mode === "cells" ? "notebook" : this.mode;
   }
 
   private openHelp(): void {
@@ -2151,10 +2043,10 @@ export class NotebookView implements Component, Focusable {
         this.tui.requestRender();
         return { handled: true };
       }
-      if (pane === "detail" && this.table && f) {
-        const cell = f.notebook.cells.get(this.table.cell);
-        const s = cell && this.tableFor(f, cell)?.session;
-        if (s?.card) this.tableCardScroll = Math.max(0, this.tableCardScroll + by);
+      if (pane === "detail" && this.tables.active && f) {
+        const cell = f.notebook.cells.get(this.tables.active.cell);
+        const s = cell && this.tables.sessionFor(f, cell)?.session;
+        if (s?.card) this.tables.cardScroll = Math.max(0, this.tables.cardScroll + by);
         else if (s && by) { s.row = Math.max(0, Math.min((s.data().records?.length ?? s.data().rows.length) - 1, s.row + by)); s.rowOffset = Math.max(0, s.rowOffset + by); }
       } else if (pane === "detail") this.detailScroll = Math.max(0, this.detailScroll + by);
       // The stacked outline is centred on the cursor: the wheel moves the cursor.
@@ -2190,9 +2082,9 @@ export class NotebookView implements Component, Focusable {
     } else if (this.paneAt(event.x, line) === "detail") {
       const r = this.lastDetail[this.detailScroll + line - this.panes.detailTop];
       this.focusedBlock = r?.blockId;
-      if (this.table && (r?.tableRow !== undefined || r?.tableHeader)) {
-        const t = f.notebook.cells.get(this.table.cell);
-        const tf = t ? this.tableFor(f, t, this.table.objectId) : undefined;
+      if (this.tables.active && (r?.tableRow !== undefined || r?.tableHeader)) {
+        const t = f.notebook.cells.get(this.tables.active.cell);
+        const tf = t ? this.tables.sessionFor(f, t, this.tables.active.objectId) : undefined;
         const column = r?.tableColumns?.find(bounds => event.x - this.panes.detailLeft >= bounds.start && event.x - this.panes.detailLeft < bounds.end)?.column;
         if (tf) {
           if (column) tf.session.col = Math.max(0, orderedColumns(tf.data).indexOf(column));
@@ -2222,7 +2114,7 @@ export class NotebookView implements Component, Focusable {
         this.cursor = r.cell;
         this.follow = false;
         this.widgets.active = undefined;
-        this.table = undefined;
+        this.tables.active = undefined;
         if (again || twice) this.activate(f);
       }
     }

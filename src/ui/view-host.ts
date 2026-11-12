@@ -40,6 +40,17 @@ export interface ViewHost {
   /** Typing goes to a filter box; Esc returns to `from`. */
   startFind(from: string | undefined): void;
   enterTable(f: Followed, cell: Cell): void;
+  /** The notebook's key in the view, which scopes per-table state. */
+  viewKey(): string;
+  getDetailScroll(): number;
+  setDetailScroll(n: number): void;
+  /** Columns of the outline pane (the table's first page width). */
+  outlineWidth(): number;
+  openHelp(): void;
+  /** Open text in the read-only message view. */
+  showMessage(text: string): void;
+  /** Put the cursor on a cell, stop following, and reveal it. */
+  selectCell(id: string): void;
   /** Forget which part of the cell has focus. */
   clearPart(): void;
   /** Type a value for a control in the dock. */
