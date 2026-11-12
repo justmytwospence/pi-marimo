@@ -301,8 +301,8 @@ export function detailRows(nb: NotebookState, theme: FrameTheme, now: number, o:
       push(`${selected ? theme.fg("accent", "▌") : " "}${cellGlyph(nb, theme, cell, now)} ${selected ? theme.bold(oneLine(cellTitle(nb, cell))) : dim(oneLine(cellTitle(nb, cell)))}`);
       const status = statusOf(cell);
       if (status) push(status);
-      codeBlock(cell, !o.sectionCodeFolded?.has(cell.id), selected && o.diff);
       resultBlock(cell, { textLines: 12, tableRows: 10 }, 5);
+      codeBlock(cell, cell.hideCode ? !!o.sectionCodeOpen?.has(cell.id) : !o.sectionCodeFolded?.has(cell.id), selected && o.diff);
     }
     return finalize(focusRow);
   }

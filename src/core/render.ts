@@ -322,7 +322,7 @@ export function snapshot(entries: SnapshotEntry[], options: SnapshotOptions = {}
   const sections = shown.map(({ e, current, full }) => section(e.notebook, e.attachment, current, {
     seen: e.seenSeq ?? Number.POSITIVE_INFINITY,
     now,
-    maxCells: full ? options.maxCells ?? 60 : 0,
+    maxCells: full ? options.maxCells ?? 150 : 0,
     maxLevel: full ? 6 : 2,
   }));
   const many = entries.length > 1;

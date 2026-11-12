@@ -8,7 +8,9 @@ const type = (palette: Palette, text: string) => { for (const c of text) palette
 
 test("fuzzy matching searches labels, category, description and shortcuts; empty query preserves registry order", () => {
   const p = new Palette("notebook");
-  expect(p.matches().map(c => c.id)).toEqual(paletteCommands("notebook").map(c => c.id));
+  // Nothing typed: the same commands, the most used first.
+  expect(p.matches().map(c => c.id).sort()).toEqual(paletteCommands("notebook").map(c => c.id).sort());
+  expect(p.matches().slice(0, 3).map(c => c.id)).toEqual(["run", "run-stale", "run-all"]);
   type(p, "run all");
   expect(p.matches()[0]?.id).toBe("run-all");
   p.state.query = "";

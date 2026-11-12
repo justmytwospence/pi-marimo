@@ -1039,7 +1039,7 @@ test("v lists variables; Enter previews repr, Escape returns to list and d jumps
     v.handleInput("v");
     const pane = screen(v);
     expect(pane).toMatch(/● x\s+int\s+1\s+← load\s+· 2 uses/u);
-    expect(pane).toMatch(/ y\s+.*← y\s+· 1 uses/u);
+    expect(pane).toMatch(/ y\s+.*← y\s+· 1 use\b/u);
     v.handleInput("j");
     v.handleInput("\r");
     expect(screen(v)).toContain("marimo value preview");
@@ -1536,7 +1536,7 @@ test("a view started from a state shows the same cell and code", () => {
 
 // --- parts, tables, markdown editing, code blocks ---
 
-test.each([false, true])("section renders Python source before its output, including inline editing (editor=%s)", editing => {
+test.each([false, true])("section renders output before Python source, including inline editing (editor=%s)", editing => {
   const f = nbWith([{ id: "a", code: "value = 42" }]);
   const cell = f.notebook.cells.get("a")!;
   cell.output = { kind: "text", text: "result text" };
@@ -1545,11 +1545,11 @@ test.each([false, true])("section renders Python source before its output, inclu
     sectionCodeFolded: editing ? new Set(["a"]) : undefined,
     inlineEditor: editing ? { cellId: "a", kind: "python", rows: () => [{ text: "inline draft", editorRow: 0 }] } : undefined,
   });
-  expect(d.parts.map(p => p.kind)).toEqual(["code", "output"]);
+  expect(d.parts.map(p => p.kind)).toEqual(["output", "code"]);
   const source = d.rows.findIndex(r => editing ? r.editorRow === 0 : r.sourceLine === 0);
   const output = d.rows.findIndex(r => r.text.includes("result text"));
   expect(source).toBeGreaterThanOrEqual(0);
-  expect(output).toBeGreaterThan(source);
+  expect(source).toBeGreaterThan(output);
 });
 
 test.each([false, true])("detail finalization drops mixed-output wrappers and remaps anchors (section=%s)", section => {
@@ -2997,6 +2997,7 @@ test("STEP6 help scrolls, cycles categories both ways, searches globally and Esc
     v.handleInput("\t");
     expect(v.snapshot().help).toMatchObject({ group: "Display", scroll: 0 });
     v.handleInput("\x1b[Z"); expect(v.snapshot().help?.group).toBe("Navigation");
+    v.handleInput("\x1b[Z"); expect(v.snapshot().help?.group).toBe("Help");
     v.handleInput("\x1b[Z"); expect(v.snapshot().help?.group).toBe("Dock/Mouse");
     v.handleInput("/"); press(v, "scroll"); v.handleInput("\r"); v.render(46);
     expect(v.snapshot().help).toMatchObject({ group: "Dock/Mouse", query: "scroll", typing: false });
@@ -3451,5 +3452,41 @@ test("< to a cell outside the chain leaves the chain view", () => {
     v.handleInput("<");
     expect(screen(v)).toContain("Left the run chain");
     expect(v.snapshot().chain).toBe(false);
+  } finally { v.dispose(); }
+});
+
+test("a hub cell with many dependents marks no children in the gutter", () => {
+  const ids = Array.from({ length: 12 }, (_, i) => `c${i}`);
+  const f = nbWith([{ id: "hub", code: "x = 1", name: "imports" }, ...ids.map((id) => ({ id, code: `${id}_v = x`, name: id }))]);
+  f.notebook.apply("variables", { variables: [{ name: "x", declared_by: ["hub"], used_by: ids }, ...ids.map((id) => ({ name: `${id}_v`, declared_by: [id], used_by: [] }))] });
+  const hub = notebookLines(f.notebook, theme2, 0, { cursor: "hub" }).lines.map(plain);
+  expect(hub.some((l) => /[┌├└│]/u.test(l))).toBe(false);
+  const few = nbWith([{ id: "hub", code: "x = 1", name: "imports" }, { id: "c0", code: "y = x", name: "c0" }]);
+  few.notebook.apply("variables", { variables: [{ name: "x", declared_by: ["hub"], used_by: ["c0"] }] });
+  expect(notebookLines(few.notebook, theme2, 0, { cursor: "hub" }).lines.map(plain).some((l) => l.includes("└"))).toBe(true);
+});
+
+test("cells with hidden code start folded in cell and section view, and B opens them", () => {
+  const f = nbWith([{ id: "a", code: `${Array.from({ length: 8 }, (_, i) => `s${i} = ${i}`).join("\n")}\nsecond = 43`, name: "hidden" }, { id: "b", code: `${Array.from({ length: 8 }, (_, i) => `o${i} = ${i}`).join("\n")}\nmore = 2`, name: "plain" }]);
+  f.notebook.apply("notebook-document-transaction", { transaction: { source: "kernel", changes: [{ type: "set-config", cellId: "a", hideCode: true }] } });
+  expect(f.notebook.cells.get("a")!.hideCode).toBe(true);
+  const v = make(f, { outputs: false });
+  try {
+    expect(screen(v)).not.toContain("second = 43");
+    v.handleInput("B");
+    expect(screen(v)).toContain("second = 43");
+    v.handleInput("B");
+    v.handleInput("O");
+    expect(screen(v)).not.toContain("second = 43");
+  } finally { v.dispose(); }
+});
+
+test("the help's navigation list starts with moving between cells", () => {
+  const f = dataflow();
+  const v = make(f);
+  try {
+    v.handleInput("?");
+    const first = plain(v.render(100).join("\n")).split("\n").find((l) => /next cell|message/u.test(l));
+    expect(first).toContain("next cell");
   } finally { v.dispose(); }
 });

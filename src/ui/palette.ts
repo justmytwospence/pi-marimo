@@ -4,6 +4,9 @@ import type { FrameTheme } from "../frame.js";
 import { formatHelpKey } from "./help.js";
 import { paletteCommands, type Command, type CommandMode } from "./keys.js";
 
+/** The palette's first rows when nothing is typed. */
+const FEATURED = ["run", "run-stale", "run-all", "interrupt", "ask", "find", "variables", "packages", "chain", "section", "follow", "jump-running", "diff", "revert", "table", "widget", "scratch", "mark", "error-next", "browser", "dock"];
+
 export interface PaletteBounds { left: number; top: number; width: number; height: number }
 
 const dimension = (value: number) => Number.isFinite(value) ? Math.max(0, Math.floor(value)) : 0;
@@ -49,6 +52,11 @@ export class Palette {
 
   matches(): Command[] {
     const commands = paletteCommands(this.state.mode);
+    if (this.state.query.trim() === "") {
+      // Nothing typed: the actions people reach for first, then the rest in registry order.
+      const rank = (c: Command) => { const i = FEATURED.indexOf(c.id); return i < 0 ? FEATURED.length : i; };
+      return commands.map((c, i) => ({ c, i })).sort((a, b) => rank(a.c) - rank(b.c) || a.i - b.i).map(({ c }) => c);
+    }
     return fuzzyFilter(commands, this.state.query, (command) =>
       `${command.label} ${command.group} ${command.description} ${command.keys.map(formatHelpKey).join(" ")}`);
   }

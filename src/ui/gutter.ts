@@ -4,6 +4,9 @@ import type { FrameTheme } from "../frame.ts";
 
 export interface GutterMark { glyph: string; color: "accent" | "success" | "dim" | undefined }
 
+/** A cell with more dependents than this (imports, shared data) draws no downstream marks: a bar through the whole outline says nothing. */
+export const HUB_CHILDREN = 10;
+
 export const hasGraph = (nb: NotebookState): boolean => nb.declaredBy.size > 0;
 
 /** Marks for rows `ids` (display order) around `cursor`: its direct parents ("accent") and children ("success"). */
@@ -13,7 +16,8 @@ export function gutterMarks(nb: NotebookState, cursor: string | undefined, ids: 
   const at = ids.indexOf(cursor);
   if (at < 0) return marks;
   const up = new Set(nb.parents(cursor));
-  const down = new Set(nb.children(cursor));
+  const kids = nb.children(cursor);
+  const down = new Set(kids.length > HUB_CHILDREN ? [] : kids);
   const related = ids.map((id, i) => (up.has(id) || down.has(id) ? i : -1)).filter((i) => i >= 0);
   if (!related.length) return marks;
   const first = Math.min(at, ...related);

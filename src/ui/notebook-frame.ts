@@ -10,6 +10,6 @@ export function row(content: string, width: number, _theme: FrameTheme): string 
   return ` ${text}${" ".repeat(Math.max(0, inner - visibleWidth(text)))} `;
 }
 export function banner(title: string, width: number, theme: FrameTheme): string {
-  const label = truncateToWidth(`◀ esc · ${title} · not your main session`, bodyWidth(width));
+  const label = truncateToWidth(`◀ esc · ${title}`, bodyWidth(width));
   return row(theme.fg("accent", theme.bold(label)), width, theme);
 }

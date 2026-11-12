@@ -5,6 +5,8 @@ import type { FrameTheme } from "../frame.ts";
 import type { Row } from "./rows.js";
 import { cellTitle } from "./titles.js";
 
+const uses = (n: number): string => `${n} use${n === 1 ? "" : "s"}`;
+
 export interface VariableRow {
   name: string;
   datatype: string;
@@ -37,14 +39,14 @@ export function variableRows(list: VariableRow[], nb: NotebookState, theme: Fram
     const here = v.name === cursor;
     const nameWidth = wide ? 20 : Math.max(8, Math.floor(width / 2) - 2);
     const label = fit(v.name, nameWidth);
-    return { variable: v.name, text: `${here ? theme.fg("accent", "●") : " "} ${here ? theme.bold(label) : label} ${theme.fg("dim", fit(v.datatype, wide ? 14 : Math.max(0, width - nameWidth - 3)))}${wide ? ` ${fit(v.value, Math.max(1, width - 61 - `${v.usedBy.length} uses`.length))} ${theme.fg("dim", `← ${fit(from ? cellTitle(nb, from) : "?", 17)} · ${v.usedBy.length} uses`)}` : ""}` };
+    return { variable: v.name, text: `${here ? theme.fg("accent", "●") : " "} ${here ? theme.bold(label) : label} ${theme.fg("dim", fit(v.datatype, wide ? 14 : Math.max(0, width - nameWidth - 3)))}${wide ? ` ${fit(v.value, Math.max(1, width - 61 - uses(v.usedBy.length).length))} ${theme.fg("dim", `← ${fit(from ? cellTitle(nb, from) : "?", 17)} · ${uses(v.usedBy.length)}`)}` : ""}` };
   });
   return { rows, index };
 }
 /** Wrap without whitespace collapsing or truncation; every supplied character remains reachable. */
 export function variableDetailRows(v: VariableRow, nb: NotebookState, width: number): Row[] {
   const from = v.definedBy ? nb.cells.get(v.definedBy) : undefined;
-  const lines = [`${v.name} · ${v.datatype}`, `Defined: ${from ? cellTitle(nb, from) : "?"} · ${v.usedBy.length} uses`, "marimo value preview", ...v.value.split("\n")];
+  const lines = [`${v.name} · ${v.datatype}`, `Defined: ${from ? cellTitle(nb, from) : "?"} · ${uses(v.usedBy.length)}`, "marimo value preview", ...v.value.split("\n")];
   return lines.flatMap(line => {
     const rows: Row[] = [];
     let text = "";

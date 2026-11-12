@@ -1185,7 +1185,7 @@ export class NotebookView implements Component, Focusable {
   }
 
   private toggleCode(id: string): void {
-    if (this.sectionMarkdown(id)) {
+    if (this.sectionDefaultHidden(id)) {
       if (!this.sectionCodeOpen.delete(id)) this.sectionCodeOpen.add(id);
     } else {
       const flipped = this.section ? this.sectionCodeFolded : this.codeOpen;
@@ -1193,15 +1193,17 @@ export class NotebookView implements Component, Focusable {
     }
   }
 
-  private sectionMarkdown(id: string): boolean {
+  /** In section view, markdown and `hide_code` cells start with their code folded (it is opt-in to open). */
+  private sectionDefaultHidden(id: string): boolean {
     const nb = this.current()?.notebook;
     const cell = nb?.cells.get(id);
-    return this.section && !!cell && nb!.isMarkdown(cell);
+    return this.section && !!cell && (nb!.isMarkdown(cell) || cell.hideCode);
   }
 
   private codeShown(id: string): boolean {
-    if (this.section) return this.sectionMarkdown(id) ? this.sectionCodeOpen.has(id) : !this.sectionCodeFolded.has(id);
-    return (this.actions.code !== "folded") !== this.codeOpen.has(id);
+    if (this.section) return this.sectionDefaultHidden(id) ? this.sectionCodeOpen.has(id) : !this.sectionCodeFolded.has(id);
+    const hidden = this.current()?.notebook.cells.get(id)?.hideCode === true;
+    return (this.actions.code !== "folded" && !hidden) !== this.codeOpen.has(id);
   }
 
   private setCode(id: string, open: boolean): void {

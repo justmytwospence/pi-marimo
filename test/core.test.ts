@@ -635,3 +635,29 @@ describe("what the view shows beyond the agent's snapshot", () => {
     expect(snapshot([{ notebook: nb, attachment }])).not.toContain("the user set");
   });
 });
+
+describe("notebook model additions", () => {
+  test("hideCode comes from kernel-ready configs and create-cell", () => {
+    const nb = new NotebookState();
+    nb.apply("kernel-ready", { cell_ids: ["a", "b"], codes: ["1", "2"], names: ["", ""], configs: [{ hide_code: true }, {}] });
+    expect(nb.cells.get("a")!.hideCode).toBe(true);
+    expect(nb.cells.get("b")!.hideCode).toBe(false);
+    nb.apply("notebook-document-transaction", { transaction: { source: "kernel", changes: [{ type: "create-cell", cellId: "c", code: "3", config: { hide_code: true } }] } });
+    expect(nb.cells.get("c")!.hideCode).toBe(true);
+  });
+  test("descendants are the transitive users, in notebook order", () => {
+    const nb = new NotebookState();
+    nb.apply("kernel-ready", { cell_ids: ["a", "b", "c", "d"], codes: ["x=1", "y=x", "z=y", "w=1"], names: ["", "", "", ""] });
+    nb.apply("variables", { variables: [{ name: "x", declared_by: ["a"], used_by: ["b"] }, { name: "y", declared_by: ["b"], used_by: ["c"] }, { name: "z", declared_by: ["c"], used_by: [] }, { name: "w", declared_by: ["d"], used_by: [] }] });
+    expect(nb.descendants("a")).toEqual(["b", "c"]);
+    expect(nb.descendants("c")).toEqual([]);
+  });
+  test("a snapshot lists every cell up to 150", () => {
+    const nb = new NotebookState();
+    const ids = Array.from({ length: 100 }, (_, i) => `c${i}`);
+    nb.apply("kernel-ready", { cell_ids: ids, codes: ids.map((_, i) => `v${i} = ${i}`), names: ids.map(() => "") });
+    const text = snapshot([{ notebook: nb, attachment }]);
+    expect(text).not.toContain("more cell");
+    expect(text).toContain("c99");
+  });
+});

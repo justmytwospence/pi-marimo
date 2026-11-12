@@ -27,6 +27,8 @@ export interface Cell {
   code: string;
   name: string;
   disabled: boolean;
+  /** marimo hides this cell's code (`hide_code`): it starts folded here. */
+  hideCode: boolean;
   /** "idle" | "queued" | "running" | "disabled-transitively" */
   status: string;
   /** When the current run started (ms since epoch), while running. */
@@ -214,7 +216,7 @@ export class NotebookState {
   private ensure(id: string): Cell {
     let cell = this.cells.get(id);
     if (!cell) {
-      cell = { id, code: "", name: "_", disabled: false, status: "idle", stale: false, editSeq: 0 };
+      cell = { id, code: "", name: "_", disabled: false, hideCode: false, status: "idle", stale: false, editSeq: 0 };
       this.cells.set(id, cell);
     }
     return cell;
@@ -323,6 +325,7 @@ export class NotebookState {
       cell.code = codes[i] ?? "";
       cell.name = names[i] || "_";
       cell.disabled = configs[i]?.disabled === true;
+      cell.hideCode = configs[i]?.hide_code === true;
       if (typeof lastRun[id] === "string") cell.lastRunCode = lastRun[id] as string;
       const t = times[id];
       if (typeof t === "number" && t >= 0 && t < 1e9) cell.lastRunMs = t;
@@ -366,6 +369,7 @@ export class NotebookState {
           cell.code = typeof change.code === "string" ? change.code : "";
           cell.name = typeof change.name === "string" && change.name ? change.name : "_";
           cell.disabled = record(change.config).disabled === true;
+          cell.hideCode = record(change.config).hide_code === true;
           cell.editedBy = source;
           cell.editSeq = ++this.seq;
           this.place(id, change.before, change.after);
@@ -429,6 +433,9 @@ export class NotebookState {
           const cell = this.ensure(id);
           const disabled = change.disabled === true;
           if (cell.disabled !== disabled) { cell.disabled = disabled; changed = true; }
+          // The wire spells it `hideCode` (transactions are camelCase); cell configs say `hide_code`.
+          const hide = "hideCode" in change ? change.hideCode : "hide_code" in change ? change.hide_code : undefined;
+          if (hide !== undefined && cell.hideCode !== (hide === true)) { cell.hideCode = hide === true; changed = true; }
           break;
         }
       }
@@ -588,6 +595,19 @@ export class NotebookState {
   markPrompt(): void {
     this.agentChanges.clear();
     this.userSets.clear();
+  }
+
+  /** Every cell that runs after this one's results: the transitive users of what it defines, in notebook order. */
+  descendants(cellId: string): string[] {
+    const seen = new Set<string>();
+    const queue = [cellId];
+    while (queue.length) for (const id of this.children(queue.shift()!)) if (id !== cellId && !seen.has(id)) { seen.add(id); queue.push(id); }
+    return this.order.filter((id) => seen.has(id));
+  }
+
+  /** Forgets that the agent changed a cell (it was reverted). */
+  clearAgentChange(cellId: string): void {
+    this.agentChanges.delete(cellId);
   }
 
   /** Cells in notebook order. */

@@ -11,7 +11,7 @@ export interface Command {
   label: string;
   description: string;
 }
-export const GROUPS = ["Navigation", "Display", "Execution", "Editing", "Variables", "Packages", "Tables", "Widgets", "Charts", "Dock/Mouse"] as const;
+export const GROUPS = ["Navigation", "Display", "Execution", "Editing", "Variables", "Packages", "Tables", "Widgets", "Charts", "Dock/Mouse", "Help"] as const;
 const N: CommandMode[] = ["notebook"];
 const V: CommandMode[] = ["variables"];
 const P: CommandMode[] = ["packages"];
@@ -22,28 +22,26 @@ const E: CommandMode[] = ["editor"];
 const reading: CommandMode[] = [...N, ...V, ...P, ...T, ...W, ...C];
 const command = (id: string, modes: readonly CommandMode[], keys: string[], group: string, label: string, description = label): Command => ({ id, modes, keys, group, label, description });
 export const COMMANDS: readonly Command[] = [
-  command("message", [...reading, ...E, "help"], ["f8"], "Navigation", "message", "Read the full captured message; prompt and editor drafts are kept"),
-  command("message-close", ["message"], ["escape", "f8"], "Navigation", "back", "Restore prior focus and scroll without rearming actions"),
-  command("message-down", ["message"], ["j", "down"], "Navigation", "scroll down", "Mouse wheel also scrolls the message"),
-  command("message-up", ["message"], ["k", "up"], "Navigation", "scroll up"),
-  command("message-page-down", ["message"], ["pageDown"], "Navigation", "page down"),
-  command("message-page-up", ["message"], ["pageUp"], "Navigation", "page up"),
-  command("message-top", ["message"], ["g", "home"], "Navigation", "message top"),
-  command("message-bottom", ["message"], ["G", "end"], "Navigation", "message bottom"),
-  command("help", reading, ["?"], "Navigation", "help", "Open searchable context help"),
-  command("palette", reading, ["ctrl+p"], "Navigation", "command palette", "Fuzzy-find actions available in this view"),
+  command("message", [...reading, ...E, "help"], ["f8"], "Help", "message", "Read the full captured message; prompt and editor drafts are kept"),
+  command("message-close", ["message"], ["escape", "f8"], "Help", "back", "Restore prior focus and scroll without rearming actions"),
+  command("message-down", ["message"], ["j", "down"], "Help", "scroll down", "Mouse wheel also scrolls the message"),
+  command("message-up", ["message"], ["k", "up"], "Help", "scroll up"),
+  command("message-page-down", ["message"], ["pageDown"], "Help", "page down"),
+  command("message-page-up", ["message"], ["pageUp"], "Help", "page up"),
+  command("message-top", ["message"], ["g", "home"], "Help", "message top"),
+  command("message-bottom", ["message"], ["G", "end"], "Help", "message bottom"),
   command("editor-help", E, ["f1"], "Editing", "help", "Open help; other Vim keys remain native"),
-  command("help-close", ["help"], ["?", "f1"], "Navigation", "close help", "Close when not typing a search"),
-  command("help-back", ["help"], ["escape"], "Navigation", "clear / close", "Clear search first, then close help"),
-  command("help-search", ["help"], ["/"], "Navigation", "search help", "Search key names and descriptions across all categories"),
-  command("help-next-category", ["help"], ["tab"], "Navigation", "next category", "Switch category and leave search"),
-  command("help-previous-category", ["help"], ["shift+tab"], "Navigation", "previous category", "Switch category and leave search"),
-  command("help-down", ["help"], ["j", "down"], "Navigation", "scroll help down", "Mouse wheel also scrolls help"),
-  command("help-up", ["help"], ["k", "up"], "Navigation", "scroll help up"),
-  command("help-page-down", ["help"], ["pageDown", "ctrl+d", "space"], "Navigation", "help page down"),
-  command("help-page-up", ["help"], ["pageUp", "ctrl+u"], "Navigation", "help page up"),
-  command("help-top", ["help"], ["g", "home"], "Navigation", "help top"),
-  command("help-bottom", ["help"], ["G", "end"], "Navigation", "help bottom"),
+  command("help-close", ["help"], ["?", "f1"], "Help", "close help", "Close when not typing a search"),
+  command("help-back", ["help"], ["escape"], "Help", "clear / close", "Clear search first, then close help"),
+  command("help-search", ["help"], ["/"], "Help", "search help", "Search key names and descriptions across all categories"),
+  command("help-next-category", ["help"], ["tab"], "Help", "next category", "Switch category and leave search"),
+  command("help-previous-category", ["help"], ["shift+tab"], "Help", "previous category", "Switch category and leave search"),
+  command("help-down", ["help"], ["j", "down"], "Help", "scroll help down", "Mouse wheel also scrolls help"),
+  command("help-up", ["help"], ["k", "up"], "Help", "scroll help up"),
+  command("help-page-down", ["help"], ["pageDown", "ctrl+d", "space"], "Help", "help page down"),
+  command("help-page-up", ["help"], ["pageUp", "ctrl+u"], "Help", "help page up"),
+  command("help-top", ["help"], ["g", "home"], "Help", "help top"),
+  command("help-bottom", ["help"], ["G", "end"], "Help", "help bottom"),
   command("down", N, ["j", "down"], "Navigation", "next cell"),
   command("up", N, ["k", "up"], "Navigation", "previous cell"),
   command("section-next", N, ["ctrl+d", "]"], "Navigation", "next section", "Next section, or next filtered cell during search"),
@@ -57,6 +55,8 @@ export const COMMANDS: readonly Command[] = [
   command("follow", N, ["f"], "Navigation", "follow running cell"),
   command("jump-running", N, ["F"], "Navigation", "jump to running cell", "Jump to the running cell once without following later execution"),
   command("find", N, ["/"], "Navigation", "find cell", "Filter cells; Enter goes to the match and clears search; Escape restores selection"),
+  command("help", reading, ["?"], "Navigation", "help", "Open searchable context help"),
+  command("palette", reading, ["ctrl+p"], "Navigation", "command palette", "Fuzzy-find actions available in this view"),
   command("parent", N, ["<"], "Navigation", "upstream cell"),
   command("child", N, [">"], "Navigation", "downstream cell"),
   command("error-next", N, ["e"], "Navigation", "next error"),
@@ -208,7 +208,7 @@ export function commandFor(mode: CommandMode, data: string): Command | undefined
 }
 export function paletteCommands(mode: CommandMode): Command[] {
   if (["editor", "help", "message"].includes(mode)) return [];
-  return COMMANDS.filter((command) => command.modes.includes(mode) && command.id !== "palette" && command.id !== "table-csv"
+  return COMMANDS.filter((command) => command.modes.includes(mode) && command.group !== "Help" && command.id !== "palette" && command.id !== "table-csv"
     && (!command.id.startsWith("widget-") || command.id === "widget-close")
     && (!command.id.startsWith("chart-") || command.id === "chart-close"));
 }
