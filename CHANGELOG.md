@@ -4,6 +4,7 @@
 
 - The agent's changes stay marked (`c`, `d`, `u`, "agent: N new") when a background run's completion resumes the agent; only your next prompt clears them.
 - `view.icons: false` drops Nerd Font icons and symbols that some fonts lack, for terminals and recordings without a Nerd Font.
+- `examples/demo.py` replaces the quickstart notebook: dark charts, a headline, and table selections marked on the chart.
 
 ## 0.4.0
 

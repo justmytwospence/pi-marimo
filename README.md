@@ -24,7 +24,7 @@ npx skills add marimo-team/marimo-pair -s marimo-pair -a pi   # lets the agent e
 
 ## Quick start
 
-1. Open a notebook from Pi: `/marimo new analysis.py`, or `/marimo edit analysis.py` for an existing one, such as [`examples/quickstart.py`](examples/quickstart.py). Pi starts the marimo server if none is running; no browser is needed.
+1. Open a notebook from Pi: `/marimo new analysis.py`, or `/marimo edit analysis.py` for an existing one, such as [`examples/demo.py`](examples/demo.py). Pi starts the marimo server if none is running; no browser is needed.
 2. Ask the agent to work in it: "load sales.csv and chart revenue by month".
 3. Press `ctrl+'`. The notebook docks beside the chat and follows the running cell.
 4. `ctrl+]` switches between the chat and the notebook, and `?` lists every key.
