@@ -30,7 +30,8 @@ import { ambiguityNote, lensLines, lensStatusText, relativePath, shortWhere, sna
 import { basename } from "./core/io.js";
 import { nodeIo } from "./core/node-io.js";
 import { HeadlessSessions, ownHeadlessSessions } from "./core/headless.js";
-import { ownExecutions } from "./core/execution.js";
+import { ownExecutions, stripScratchLens } from "./core/execution.js";
+import type { CellOutput } from "./core/output.js";
 import { COMPLETION_MESSAGE, EXECUTIONS_MESSAGE, ExecutionSession, normalizeExecutionConfig, registerExecutionTools } from "./executions.js";
 import { registerExecutionMessageRenderers } from "./ui/execution-render.js";
 import { EditCellService, pythonJson, type EditorSession, type SaveReceipt, type ScratchExecute } from "./core/edit-cell.js";
@@ -56,7 +57,7 @@ import { NotebookSource, type Unopened } from "./ui/source.js";
 import { openUrl, waitingStatus, waitingUrl } from "./waiting.js";
 import { NotebookView, type ViewActions, type ViewState } from "./ui/view.js";
 import { NotebookSplit } from "./ui/split.ts";
-import { getKeybindings, truncateToWidth } from "@earendil-works/pi-tui";
+import { getKeybindings, Text, truncateToWidth } from "@earendil-works/pi-tui";
 import { ChatChart, type ChartEntry, disposeCharts, latestChart } from "./ui/chat-chart.js";
 import { Painter } from "./ui/painter.js";
 import { stopSharedChrome } from "./core/chrome.js";
@@ -236,32 +237,50 @@ export default function piMarimo(pi: ExtensionAPI): void {
   const syntax = new SyntaxHighlighter(message => ctxRef?.ui.notify(`marimo: ${message}`, "warning"));
   const diagrams = new MermaidRenderer();
 
-  /** A notebook cell's chart as a transcript entry: a Plotly figure to run live, else a picture. */
-  const chartEntry = async (cellRef: string, notebook?: string): Promise<ChartEntry> => {
+  /** The followed notebook's cell a chart tool names, by id or name. */
+  const findChartCell = (cellRef: string, notebook?: string): { f: Followed; cell: Cell } => {
     const followed = watcher?.followed() ?? [];
     const pool: Followed[] = notebook ? followed.filter((f) => f.attachment.path.endsWith(notebook) || f.canonicalPath?.endsWith(notebook)) : followed;
     const ref = cellRef.trim();
     for (const f of pool) {
       const cell = f.notebook.ordered().find((c) => c.id === ref || c.name === ref);
-      if (!cell) continue;
-      const base = { path: f.attachment.path, cell: cell.id, label: cell.name !== "_" ? cell.name : cell.id };
-      const out = cell.output;
-      if (out?.plotly && config.liveCharts !== false) return { ...base, plotly: out.plotly };
-      if (out?.image) return { ...base, png: out.image.data };
-      if (out?.plotly) {
-        const png = await renderPng(sharedPlotly(), out.plotly, 120_000);
-        if (png) return { ...base, png };
-        return { ...base, note: "[chart: could not draw the Plotly figure]" };
-      }
-      if (out?.vega) {
-        const png = await renderPng(vega, out.vega, 120_000);
-        if (png) return { ...base, png };
-        return { ...base, note: "[chart: could not draw the Vega-Lite spec]" };
-      }
-      return { ...base, note: out ? `[no chart: the cell's output is ${out.text}]` : "[no output: run the cell first]" };
+      if (cell) return { f, cell };
     }
     const names = pool.flatMap((f) => f.notebook.ordered().filter((c) => c.output?.plotly || c.output?.image || c.output?.vega).map((c) => (c.name !== "_" ? c.name : c.id)));
     throw new Error(`No cell "${ref}" in ${pool.length ? pool.map((f) => basename(f.attachment.path)).join(", ") : "the followed notebooks"}.${names.length ? ` Cells with charts: ${names.join(", ")}.` : ""}`);
+  };
+
+  /** Up to `max` pictures of a cell's charts, in document order, for the model to look at; `total` counts every chart leaf. */
+  const chartPictures = async (out: CellOutput | undefined, max = 4): Promise<{ pngs: string[]; total: number }> => {
+    const leaves = out?.blocks?.length ? out.blocks.map((b) => b.output) : out ? [out] : [];
+    const charts = leaves.filter((l) => l.image || l.plotly || l.vega);
+    const pngs: string[] = [];
+    for (const leaf of charts) {
+      if (pngs.length >= max) break;
+      const png = leaf.image ? leaf.image.data : leaf.plotly ? await renderPng(sharedPlotly(), leaf.plotly, 120_000) : leaf.vega ? await renderPng(vega, leaf.vega, 120_000) : undefined;
+      if (png) pngs.push(png);
+    }
+    return { pngs, total: charts.length };
+  };
+
+  /** A notebook cell's chart as a transcript entry: a Plotly figure to run live, else a picture. */
+  const chartEntry = async (cellRef: string, notebook?: string): Promise<ChartEntry> => {
+    const { f, cell } = findChartCell(cellRef, notebook);
+    const base = { path: f.attachment.path, cell: cell.id, label: cell.name !== "_" ? cell.name : cell.id };
+    const out = cell.output;
+    if (out?.plotly && config.liveCharts !== false) return { ...base, plotly: out.plotly };
+    if (out?.image) return { ...base, png: out.image.data };
+    if (out?.plotly) {
+      const png = await renderPng(sharedPlotly(), out.plotly, 120_000);
+      if (png) return { ...base, png };
+      return { ...base, note: "[chart: could not draw the Plotly figure]" };
+    }
+    if (out?.vega) {
+      const png = await renderPng(vega, out.vega, 120_000);
+      if (png) return { ...base, png };
+      return { ...base, note: "[chart: could not draw the Vega-Lite spec]" };
+    }
+    return { ...base, note: out ? `[no chart: the cell's output is ${out.text}]` : "[no output: run the cell first]" };
   };
 
   /** Starts the keyboard pointer on the newest transcript chart; keys go to it until Esc. */
@@ -1045,17 +1064,32 @@ export default function piMarimo(pi: ExtensionAPI): void {
   pi.registerTool({
     name: "marimo_chart",
     label: "Chart",
-    description: "Show a chart from a followed marimo notebook in the chat transcript, where the user sees it inline: Plotly figures run live (hover, zoom, pan, from the mouse or with /marimo inspect), other figures as pictures. Use it whenever you would show the user a notebook chart. Give the cell by name or id; the notebook only when several are followed.",
-    promptSnippet: "Show a notebook chart inline in the transcript",
+    description: "Show a chart from a followed marimo notebook in the chat transcript, where the user sees it inline (Plotly live, others as pictures), and get its picture back so you can check it. Use it whenever you would show the user a notebook chart, and with show: false to look at a cell's charts yourself (several figures in tabs or stacks come back as up to 4 pictures) instead of saving figures to files. Give the cell by name or id; the notebook only when several are followed.",
+    promptSnippet: "Show a notebook chart inline in the transcript, or look at it yourself",
     parameters: Type.Object({
       cell: Type.String({ description: "The cell whose output is the chart: its name or id" }),
       notebook: Type.Optional(Type.String({ description: "The notebook's file name or path, when several are followed" })),
+      show: Type.Optional(Type.Boolean({ description: "false: only you see the pictures; nothing goes into the transcript (default true)" })),
     }),
     async execute(_id, params) {
-      const entry = await chartEntry(params.cell, params.notebook);
-      pi.appendEntry(CHART_ENTRY, entry);
-      const how = entry.plotly ? "live (Plotly)" : entry.png ? "as a picture" : entry.note ?? "";
-      return { content: [{ type: "text", text: `Showed ${entry.label} from ${basename(entry.path)} in the transcript ${how}.` }], details: { cell: entry.cell } };
+      const { f, cell } = findChartCell(params.cell, params.notebook);
+      const shown = params.show !== false ? await chartEntry(params.cell, params.notebook) : undefined;
+      if (shown) pi.appendEntry(CHART_ENTRY, shown);
+      const { pngs, total } = await chartPictures(cell.output);
+      const label = cell.name !== "_" ? cell.name : cell.id;
+      const how = shown ? (shown.plotly ? "live (Plotly)" : shown.png ? "as a picture" : shown.note ?? "") : "";
+      const head = shown ? `Showed ${shown.label} from ${basename(shown.path)} in the transcript ${how}.` : `Looked at ${label} from ${basename(f.attachment.path)} (not shown to the user).`;
+      const tail = pngs.length
+        ? `${pngs.length === 1 ? "Its picture follows" : `${pngs.length} pictures follow`}${total > pngs.length ? ` (the first ${pngs.length} of ${total})` : ""}.`
+        : cell.output ? `No picture: the cell's output is ${cell.output.text}.` : "No picture: the cell has no output; run it first.";
+      return {
+        content: [{ type: "text" as const, text: `${head} ${tail}` }, ...pngs.map((data) => ({ type: "image" as const, data, mimeType: "image/png" }))],
+        details: { cell: cell.id, pictures: pngs.length },
+      };
+    },
+    renderResult(result, _options, theme) {
+      const first = result.content.find((c) => c.type === "text") as { text: string } | undefined;
+      return new Text(theme.fg("dim", first?.text ?? ""), 0, 0);
     },
   });
 

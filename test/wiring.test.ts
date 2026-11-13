@@ -517,6 +517,43 @@ test("several notebooks at once: a footer line each, in file order, recent ones 
   expect(x.statuses.get("marimo-2")).toBeUndefined();
 });
 
+async function followedNotebook(x: ReturnType<typeof setup>) {
+  await x.fire("session_start");
+  await until(() => server.feeds.length > 0);
+  server.feeds.at(-1)!(untilRunning + rest);
+  const section = x.of("activity:section")[0]?.section;
+  await section.open(section.entries(Date.now())[0].key, x.ui);
+  const view = x.customs.at(-1).view;
+  return { view, f: view.actions.followed()[0] };
+}
+
+test("marimo_chart hands the agent the picture, and show: false keeps the transcript clean", async () => {
+  const x = setup();
+  let view: any;
+  try {
+    const nb = await followedNotebook(x);
+    view = nb.view;
+    const cell = nb.f.notebook.cells.get("Hbol")!;
+    const png = (n: number) => ({ kind: "image" as const, text: "[image]", image: { mime: "image/png" as const, data: `iVBORw0KGgo${n}=` } });
+    cell.output = png(0);
+    const chart = x.tools.get("marimo_chart");
+    const before = x.entries.length;
+    const looked = await chart.execute("c1", { cell: "Hbol", show: false });
+    expect(looked.content[0].text).toMatch(/^Looked at .* \(not shown to the user\)\. Its picture follows\.$/u);
+    expect(looked.content[1]).toEqual({ type: "image", data: "iVBORw0KGgo0=", mimeType: "image/png" });
+    expect(x.entries.length).toBe(before);
+    const shown = await chart.execute("c2", { cell: "Hbol" });
+    expect(shown.content[0].text).toMatch(/^Showed .* in the transcript as a picture\. Its picture follows\.$/u);
+    expect(x.entries.length).toBe(before + 1);
+    cell.output = { kind: "text", text: "", blocks: [0, 1, 2, 3, 4].map((n) => ({ id: `b${n}`, output: png(n) })) };
+    const many = await chart.execute("c3", { cell: "Hbol", show: false });
+    expect(many.content.filter((c: { type: string }) => c.type === "image")).toHaveLength(4);
+    expect(many.content[0].text).toContain("(the first 4 of 5)");
+    cell.output = { kind: "text", text: "42" };
+    expect((await chart.execute("c4", { cell: "Hbol", show: false })).content).toHaveLength(1);
+  } finally { view?.dispose(); await x.fire("session_shutdown"); }
+});
+
 test("/marimo names its subcommands when given one it does not know", async () => {
   const x = setup([], "rpc");
   await x.fire("session_start");

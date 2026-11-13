@@ -32,5 +32,5 @@ A server Pi starts keeps running across `/reload` and stops when Pi exits, with 
 | `marimo_watch` | subscribe to the currently observed notebook execution wave, including its queued descendants; executes no Python |
 | `marimo_execution` | list execution records, inspect one result, or unsubscribe without interrupting Python |
 
-| `marimo_chart` | show a chart from a followed notebook in the chat transcript, live when it is Plotly |
+| `marimo_chart` | show a chart from a followed notebook in the chat transcript (live when it is Plotly) and give the agent its picture; `show: false` lets the agent look without showing it |
 

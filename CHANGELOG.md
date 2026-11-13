@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- `marimo_chart` gives the agent the chart's picture (up to 4 for a cell with several figures), and `show: false` lets it look without showing you, instead of saving figures to files to read them.
+- When the agent changes cells and does not run them, the result of its notebook call says which, so it runs them or tells you instead of leaving stale output.
+- Agents are steered to `marimo_execute` instead of the marimo-pair skill's `execute-code.sh` (tool description, a prompt rule, and a one-time note on the first bash call).
+- The Lens that marimo 0.25 mounts in every code-mode scratch run no longer shows up as HTML in the agent's results.
+
 ## 0.5.1
 
 - The view follows the running cell again on its own when the agent starts a turn or runs cells during one, after you moved away to read; it waits until you have left the keys alone for five seconds and never takes over an editor, prompt or widget. The header says `not following · f` while a run goes on without it. `view.follow` sets it: `"agent"` (default), `"always"` (any run) or `"manual"` (only `f`, as before).

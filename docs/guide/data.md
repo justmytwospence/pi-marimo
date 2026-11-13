@@ -41,7 +41,7 @@ Clipped image and chart placeholders stay visible even when the image's top is a
 
 In live-chart mode, `h`/`j`/`k`/`l` or arrows move the pointer; uppercase or shifted arrows move farther. Space or Enter starts or ends a drag, `+`/`-` zoom, `0` resets, and `i`, `q` or Esc leaves chart mode.
 
-`/marimo chart <cell>` puts a cell's chart into the chat; the agent can do the same with its `marimo_chart` tool.
+`/marimo chart <cell>` puts a cell's chart into the chat; the agent can do the same with its `marimo_chart` tool. The tool also hands the agent the chart's picture, so it can check a figure (with `show: false`, without putting it in the chat).
 
 ## Variables and packages
 
