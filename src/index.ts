@@ -86,6 +86,7 @@ const LENS_STATUS_KEY = "marimo-lens";
 const OFFER_SOURCE = "pi-marimo";
 const MESSAGE_TYPE = "pi-marimo-state";
 const CHART_ENTRY = "pi-marimo-chart";
+const PAIR_HINT = "pi-marimo: marimo_execute runs this same Python (code mode included) in the notebook's kernel without the shell. It tracks runs that outlive the call (marimo_watch, marimo_execution) and resumes you when they finish, and marimo_chart shows the user a cell's chart and gives you its picture (show: false to only look). Use them instead of execute-code.sh from here on.";
 /** Besides the current notebook, the ones worked in during this many latest prompts are in full in context. */
 const FULL_PROMPTS = 3;
 
@@ -1012,12 +1013,59 @@ export default function piMarimo(pi: ExtensionAPI): void {
     return undefined;
   });
 
-  pi.on("tool_result", (event) => {
-    if (event.toolCallId.includes("/")) return undefined;
-    const note = ambiguous.get(event.toolCallId);
-    if (!note) return undefined;
-    ambiguous.delete(event.toolCallId);
-    return { content: [...event.content, { type: "text" as const, text: note }], ...(event.structuredContent !== undefined ? { structuredContent: event.structuredContent } : {}) };
+  /** Notes owed to a top-level call, from it or its nested calls: the marimo_execute hint, cells left unrun. */
+  const owed = new Map<string, string[]>();
+  const owe = (root: string, text: string | undefined) => { if (text) owed.set(root, [...(owed.get(root) ?? []), text]); };
+  let pairHinted = false;
+  const lastUnrun = new Map<string, string>();
+  /** Which cells the agent changed in notebooks it worked in this prompt have not run (said once per set). */
+  const unrunNote = async (): Promise<string | undefined> => {
+    const touched = () => (watcher?.followed() ?? []).filter((f) => touchedAt.get(f.attachment.path) === prompts);
+    if (!touched().some((f) => f.notebook.agentChanges.size)) return undefined;
+    // A run started in the same call reports its queued cells a moment after the call returns.
+    await new Promise((r) => setTimeout(r, 300));
+    const lines: string[] = [];
+    for (const f of touched()) {
+      const cells = f.notebook.unrunAgentCells();
+      const key = cells.map((c) => `${c.id}:${c.code.length}`).join(",");
+      if (!cells.length) { lastUnrun.delete(f.attachment.path); continue; }
+      if (lastUnrun.get(f.attachment.path) === key) continue;
+      lastUnrun.set(f.attachment.path, key);
+      const names = cells.map((c) => (c.name !== "_" ? c.name : c.id));
+      const list = names.length > 10 ? `${names.slice(0, 10).join(", ")} and ${names.length - 10} more` : names.join(", ");
+      const one = cells.length === 1;
+      lines.push(`pi-marimo: in ${basename(f.attachment.path)}, ${one ? "1 cell you changed has" : `${cells.length} cells you changed have`} not run since: ${list}. The user sees ${one ? "its" : "their"} old output (or none) until ${one ? "it runs" : "they run"}. Run ${one ? "it" : "them"} with ctx.run_cell unless that is slow; if you leave ${one ? "it" : "them"}, tell the user.`);
+    }
+    return lines.length ? lines.join("\n") : undefined;
+  };
+
+  pi.on("tool_result", async (event) => {
+    const root = event.toolCallId.split("/")[0]!;
+    const nested = event.toolCallId.includes("/");
+    const viaBash = pairTargets(JSON.stringify(event.input ?? {})).length > 0;
+    const pairCall = viaBash || event.toolName === "marimo_execute";
+    let changed = false;
+    const content = event.content.map((c) => {
+      if (!viaBash || c.type !== "text") return c;
+      const text = stripScratchLens(c.text);
+      if (text === c.text) return c;
+      changed = true;
+      return { ...c, text };
+    });
+    if (pairCall) {
+      if (viaBash && event.toolName === "bash" && !pairHinted && typeof pi.getActiveTools === "function" && pi.getActiveTools().includes("marimo_execute")) {
+        pairHinted = true;
+        owe(root, PAIR_HINT);
+      }
+      owe(root, await unrunNote());
+    }
+    const structured = event.structuredContent !== undefined ? { structuredContent: event.structuredContent } : {};
+    if (nested) return changed ? { content, ...structured } : undefined;
+    const notes = [...(ambiguous.has(root) ? [ambiguous.get(root)!] : []), ...(owed.get(root) ?? [])];
+    ambiguous.delete(root);
+    owed.delete(root);
+    if (!notes.length && !changed) return undefined;
+    return { content: [...content, ...notes.map((text) => ({ type: "text" as const, text }))], ...structured };
   });
 
   pi.on("agent_start", () => {

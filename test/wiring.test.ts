@@ -554,6 +554,51 @@ test("marimo_chart hands the agent the picture, and show: false keeps the transc
   } finally { view?.dispose(); await x.fire("session_shutdown"); }
 });
 
+test("a notebook call's result says which cells the agent changed and has not run, once", async () => {
+  const x = setup();
+  let view: any;
+  try {
+    const nb = await followedNotebook(x);
+    view = nb.view;
+    await x.fire("before_agent_start");
+    await x.fire("tool_call", { toolCallId: "u1", input: { command: pair } });
+    nb.f.notebook.agentChanges.set("Hbol", { kind: "edited", before: "", at: Date.now() });
+    nb.f.notebook.cells.get("Hbol")!.lastRunCode = "old";
+    const [toolResult] = x.handlers.get("tool_result")!;
+    const call = { toolName: "bash", input: { command: pair }, content: [{ type: "text", text: "ok" }] };
+    const first = (await toolResult!({ toolCallId: "u1", ...call }, undefined)) as { content: Array<{ text: string }> };
+    expect(first.content.at(-1)!.text).toMatch(/1 cell you changed has not run since: .*Run it with ctx\.run_cell/u);
+    await x.fire("tool_call", { toolCallId: "u2", input: { command: pair } });
+    expect(await toolResult!({ toolCallId: "u2", ...call }, undefined)).toBeUndefined();
+  } finally { view?.dispose(); await x.fire("session_shutdown"); }
+});
+
+test("the first bash pair call is told about marimo_execute, only when it is active", async () => {
+  for (const [active, hinted] of [[["bash", "marimo_execute"], true], [["bash"], false]] as const) {
+    const x = setup();
+    (x.pi as any).getActiveTools = () => active;
+    try {
+      await x.fire("session_start");
+      const [toolResult] = x.handlers.get("tool_result")!;
+      const call = { toolName: "bash", input: { command: pair }, content: [{ type: "text", text: "ok" }] };
+      const first = (await toolResult!({ toolCallId: "h1", ...call }, undefined)) as { content: Array<{ text: string }> } | undefined;
+      expect(first?.content.some((c) => c.text.includes("Use them instead of execute-code.sh")) ?? false).toBe(hinted);
+      expect(await toolResult!({ toolCallId: "h2", ...call }, undefined)).toBeUndefined();
+    } finally { await x.fire("session_shutdown"); }
+  }
+});
+
+test("a bash pair call's result loses the scratch Lens html", async () => {
+  const x = setup();
+  try {
+    await x.fire("session_start");
+    const [toolResult] = x.handlers.get("tool_result")!;
+    const lens = "<div style='display: flex;gap: 0.5rem'><marimo-ui-element object-id='__scratch__-0'><marimo-anywidget data-label='null'></marimo-anywidget></marimo-ui-element></div>";
+    const out = (await toolResult!({ toolCallId: "s1", toolName: "bash", input: { command: pair }, content: [{ type: "text", text: `42\n\n${lens}\n` }] }, undefined)) as { content: Array<{ text: string }> };
+    expect(out.content[0]!.text).toBe("42\n");
+  } finally { await x.fire("session_shutdown"); }
+});
+
 test("/marimo names its subcommands when given one it does not know", async () => {
   const x = setup([], "rpc");
   await x.fire("session_start");

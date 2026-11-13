@@ -641,6 +641,16 @@ export class NotebookState {
     return this.ordered().filter((c) => c.error);
   }
 
+  /** Cells the agent created or edited since the user's last prompt whose current code has not run, and is not about to. */
+  unrunAgentCells(): Cell[] {
+    return this.ordered().filter((c) => {
+      const change = this.agentChanges.get(c.id);
+      if (!change || (change.kind !== "created" && change.kind !== "edited")) return false;
+      if (c.disabled || c.status === "queued" || c.status === "running") return false;
+      return c.lastRunCode === undefined || !sameCode(c.lastRunCode, c.code);
+    });
+  }
+
   /** Code changed since the kernel last ran it (only known once a run was seen). */
   edited(cell: Cell): boolean {
     return cell.lastRunCode !== undefined && !sameCode(cell.lastRunCode, cell.code);

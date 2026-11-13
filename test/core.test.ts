@@ -669,3 +669,20 @@ describe("notebook model additions", () => {
     expect(text).toContain("c99");
   });
 });
+
+describe("unrunAgentCells", () => {
+  test("lists the agent's created and edited cells whose code has not run, in notebook order", () => {
+    const nb = new NotebookState();
+    nb.apply("kernel-ready", { cell_ids: ["a", "b", "c", "d", "e"], codes: ["a=1", "b=2", "c=3", "d=4", "e=5"], names: ["_", "_", "_", "_", "_"] });
+    const at = Date.now();
+    nb.agentChanges.set("e", { kind: "created", before: "", at });
+    nb.agentChanges.set("a", { kind: "edited", before: "x", at });
+    nb.cells.get("a")!.lastRunCode = "a=0";
+    nb.agentChanges.set("b", { kind: "edited", before: "x", at });
+    nb.cells.get("b")!.lastRunCode = "b=2";
+    nb.agentChanges.set("c", { kind: "edited", before: "x", at });
+    nb.cells.get("c")!.status = "queued";
+    nb.agentChanges.set("d", { kind: "moved", before: "d=4", at });
+    expect(nb.unrunAgentCells().map((c) => c.id)).toEqual(["a", "e"]);
+  });
+});
