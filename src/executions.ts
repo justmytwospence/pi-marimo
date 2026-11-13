@@ -456,13 +456,14 @@ export function registerExecutionTools(pi: Pick<ExtensionAPI, "registerTool">, s
     url: Type.Optional(Type.String({ description: "Server URL to disambiguate the same notebook on different servers" })),
   };
   const guidelines = [
+    "Use marimo_execute, not the marimo-pair skill's execute-code.sh or `marimo pair execute` in bash, to run Python in a followed notebook; the skill's workflow (code mode, help(cm) first) otherwise applies unchanged.",
     "marimo_execute supervises the official marimo pair execute CLI; it is transport, not a new notebook editing API. Follow the marimo-pair workflow and use marimo._code_mode for durable notebook changes, never direct .py edits.",
     "The dedicated first inspection is import marimo._code_mode as cm; help(cm). Run that by itself before other code-mode work.",
     "Never poll a busy kernel with Python or queue inspection behind a fit. Use marimo_watch to subscribe and marimo_execution to read results or unsubscribe. Yield/abort and unsubscribe do not interrupt Python. Never automatically retry an unknown outcome.",
   ];
   pi.registerTool({
     ...executionToolRenderers("execute"),
-    name: "marimo_execute", label: "Execute Python", description: "Run Python through the official marimo CLI in an already-followed connected notebook. Returns inline within 1000 ms or a supervised execution handle; subscribed completion resumes this session with a native follow-up.",
+    name: "marimo_execute", label: "Execute Python", description: "Run Python in a followed marimo notebook's kernel through the official marimo CLI (marimo pair execute): the same scratchpad and code mode as the marimo-pair skill's execute-code.sh, which it replaces while pi-marimo is active. Pass notebook (path or file name) unless you already worked in exactly one. Returns inline within 1000 ms or a supervised execution handle; subscribed completion resumes this session with a native follow-up.",
     promptGuidelines: guidelines,
     parameters: Type.Object({ ...selector, code: Type.String({ minLength: 1 }), label: Type.Optional(Type.String()), subscribe: Type.Optional(Type.Boolean()), yield_ms: Type.Optional(Type.Integer({ minimum: 0, maximum: 1000 })) }),
     execute: (_id, params, signal) => session.execute(params, signal),
