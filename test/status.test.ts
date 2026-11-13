@@ -1,9 +1,9 @@
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { NotebookState } from "../src/core/notebook.js";
 import { notebookLines } from "../src/ui/outline.js";
 import { setIcons } from "../src/ui/glyphs.js";
-import { STATUS_STYLE, cellBadges, fitBadges, renderBadge, spinner, statusLabel } from "../src/ui/status.js";
+import { STATUS_STYLE, cellBadges, fitBadges, renderBadge, spinner, statusIcon, statusLabel } from "../src/ui/status.js";
 
 const theme = { fg: (_: string, text: string) => text, bold: (text: string) => text };
 function setup() {
@@ -36,41 +36,48 @@ describe("state chips", () => {
     cell.status = "disabled-transitively";
     expect(cellBadges(nb, cell, 0).map((b) => b.kind)).toEqual(["blocked", "stale", "edited", "disabled"]);
   });
-  test("semantic backgrounds when available, brackets for absent/inert/unsupported backgrounds", () => {
-    const badge = { kind: "error", text: "error" } as const;
-    expect(renderBadge(badge, { ...theme, bg: (token, text) => `<${token}>${text}</${token}>` })).toBe("<toolErrorBg> error </toolErrorBg>");
-    expect(renderBadge(badge, theme)).toBe("[error]");
-    expect(renderBadge(badge, { ...theme, bg: (_, text) => text })).toBe("[error]");
-    expect(renderBadge(badge, { ...theme, bg: () => { throw new Error("unsupported"); } })).toBe("[error]");
+  test("chips are bare colored icons: no background, no brackets", () => {
+    const badge = { kind: "error", text: "x" } as const;
+    const bg = vi.fn((_token: string, text: string) => `<bg>${text}</bg>`);
+    expect(renderBadge(badge, { ...theme, bg } as typeof theme)).toBe("x");
+    expect(bg).not.toHaveBeenCalled();
+    expect(renderBadge(badge, theme)).toBe("x");
   });
   test("fitting keeps whole chips in attention order", () => {
-    const badges = [{ kind: "queued", text: statusLabel("queued") }, { kind: "changed", text: statusLabel("changed") }] as const;
-    expect(fitBadges(badges, 23, theme)).toBe("[ wait] [ agent]");
-    expect(fitBadges(badges, 9, theme)).toBe("[ wait]");
-    expect(fitBadges(badges, 7, theme)).toBe("");
+    const queued = statusIcon("queued"), changed = statusIcon("changed");
+    const badges = [{ kind: "queued", text: queued }, { kind: "changed", text: changed }] as const;
+    expect(fitBadges(badges, 3, theme)).toBe(`${queued} ${changed}`);
+    expect(fitBadges(badges, 2, theme)).toBe(queued);
+    expect(fitBadges(badges, 0, theme)).toBe("");
     expect(fitBadges(badges, -1, theme)).toBe("");
   });
-  test("view.icons false shows labels without icons", () => {
+  test("view.icons false shows plain symbols and bare labels", () => {
     setIcons(false);
     try {
-      expect(statusLabel("new")).toBe("new");
-      expect(statusLabel("error")).toBe("err");
-      for (const kind of Object.keys(STATUS_STYLE) as Array<keyof typeof STATUS_STYLE>) expect(statusLabel(kind)).not.toMatch(/[\uE000-\uF8FF]/u);
+      expect(statusIcon("stale")).toBe("↻");
+      expect(statusLabel("error")).toBe("error");
+      for (const kind of Object.keys(STATUS_STYLE) as Array<keyof typeof STATUS_STYLE>) {
+        expect(statusIcon(kind)).not.toMatch(/[\uE000-\uF8FF]/u);
+        expect(statusLabel(kind)).not.toMatch(/[\uE000-\uF8FF]/u);
+      }
     } finally { setIcons(true); }
   });
-  test("each compact badge has a distinct Nerd Font glyph and a readable caption", () => {
-    expect(Object.entries(STATUS_STYLE).map(([kind, style]) => [kind, style.icon, style.label])).toEqual([
-      ["queued", "", "wait"], ["error", "", "err"], ["blocked", "", "block"],
-      ["stale", "", "old"], ["edited", "", "edit"], ["changed", "", "agent"],
-      ["new", "", "new"], ["disabled", "", "off"],
-    ]);
-    expect(new Set(Object.values(STATUS_STYLE).map(({ icon }) => icon)).size).toBe(8);
-    for (const kind of Object.keys(STATUS_STYLE) as Array<keyof typeof STATUS_STYLE>) {
-      expect(visibleWidth(statusLabel(kind))).toBeLessThanOrEqual(8);
-    }
+  test("each chip has a distinct Nerd Font icon and plain symbol, one column wide", () => {
+    const styles = Object.values(STATUS_STYLE);
+    expect(new Set(styles.map(({ icon }) => icon)).size).toBe(8);
+    expect(new Set(styles.map(({ plain }) => plain)).size).toBe(8);
+    expect(Object.values(STATUS_STYLE).map(({ plain }) => plain).join("")).toBe("◌✗⊘↻✎✦+–");
+    for (const kind of Object.keys(STATUS_STYLE) as Array<keyof typeof STATUS_STYLE>) expect(visibleWidth(statusIcon(kind))).toBe(1);
     const { nb, cell } = setup();
     cell.error = "SomeExceptionName: long exception";
-    expect(cellBadges(nb, cell, 0).map(b => b.text)).toEqual([" err"]);
+    expect(cellBadges(nb, cell, 0).map(b => b.text)).toEqual([statusIcon("error")]);
+  });
+  test("stale and edited cells show their chip and no gutter dot", () => {
+    const { nb, cell } = setup();
+    cell.stale = true;
+    const plain = notebookLines(nb, theme, 0, { width: 46 }).lines[0]!.replace(/\x1b\[[0-9;]*m/gu, "");
+    expect(plain).toContain(statusIcon("stale"));
+    expect(plain).not.toContain("•");
   });
   test("outline omits whole chips at narrow widths, keeps human titles and shape fallback", () => {
     const { nb, cell } = setup();

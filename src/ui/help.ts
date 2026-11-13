@@ -2,7 +2,7 @@
 import { matchesKey, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import type { FrameTheme } from "../frame.ts";
 import { COMMANDS, GROUPS, commandFor } from "./keys.js";
-import { type BadgeKind, statusLabel } from "./status.js";
+import { type BadgeKind, statusIcon } from "./status.js";
 
 export interface HelpState {
   group: string;
@@ -175,7 +175,7 @@ export class Help {
       for (const command of entries) body.push(...commandRows(command, listWidth, theme, searching));
     }
     if (!searching && this.state.group === "Display") {
-      const legend = (items: Array<[Exclude<BadgeKind, "running">, string]>) => items.map(([kind, meaning]) => `${statusLabel(kind)} ${meaning}`).join(" · ");
+      const legend = (items: Array<[Exclude<BadgeKind, "running">, string]>) => items.map(([kind, meaning]) => `${statusIcon(kind)} ${meaning}`).join(" · ");
       for (const line of [
         legend([["queued", "queued"], ["edited", "edited, not rerun"], ["changed", "changed by agent"]]),
         legend([["new", "created by agent"], ["stale", "stale"], ["blocked", "ancestor failed"], ["disabled", "disabled"], ["error", "error"]]),

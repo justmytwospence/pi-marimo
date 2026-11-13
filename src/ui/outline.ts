@@ -33,16 +33,14 @@ export const headingText = (theme: FrameTheme, h: { level: number; text: string 
 
 /** The glyph at the start of a code cell's line. */
 
-export function cellGlyph(nb: NotebookState, theme: FrameTheme, c: Cell, now = Date.now()): string {
+export function cellGlyph(_nb: NotebookState, theme: FrameTheme, c: Cell, now = Date.now()): string {
   return c.status === "running"
     ? theme.fg("accent", spinner(now))
     : c.error || c.blocked
       ? theme.fg("error", "✗")
       : c.status === "queued"
         ? theme.fg("muted", "◌")
-        : c.stale || nb.edited(c)
-          ? theme.fg("warning", "•")
-          : " ";
+        : " ";
 }
 
 /** The notebook as outline rows, in notebook order. */

@@ -6,6 +6,7 @@ import { readFileSync } from "node:fs";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import type { Cancellable, Io, StreamEnd } from "../src/core/io.js";
+import { statusIcon } from "../src/ui/status.js";
 
 const CWD = "/w";
 const SERVER = "http://127.0.0.1:2799";
@@ -650,10 +651,10 @@ test("the agent's changes show in the view until the user's next prompt", async 
   const view = x.customs.at(-1)?.view;
   await until(() => view.render(120).join("\n").includes("agent: 1 changed"));
   view.handleInput("j");
-  expect(view.render(120).join("\n")).toContain(" agent");
+  expect(view.render(120).join("\n")).toContain(statusIcon("changed"));
   expect(view.render(120).join("\n")).not.toContain("PKri");
   await x.fire("before_agent_start");
-  expect(view.render(120).join("\n")).not.toContain(" agent");
+  expect(view.render(120).join("\n")).not.toContain(statusIcon("changed"));
   expect(view.render(120).join("\n")).not.toContain("agent: 1 changed");
   view.dispose();
   await x.fire("session_shutdown");

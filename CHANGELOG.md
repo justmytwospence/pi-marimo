@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Status chips are bare colored icons, without words or a background; the detail and the help legend spell them out. The outline's `•` mark for stale or edited cells is gone, since the chip shows it.
+
 ## 0.6.1
 
 - `marimo_execute` waits up to 30s (was 5s) for its `marimo pair execute --help` check, so a busy machine no longer fails it, and a timeout now says it is transient and safe to retry instead of pointing at `execution.command`.

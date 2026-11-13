@@ -15,6 +15,7 @@ vi.mock("../src/ui/keys.js", async (importOriginal) => {
 
 import { Help, helpLines, formatHelpKey } from "../src/ui/help.js";
 import { COMMANDS, GROUPS } from "../src/ui/keys.js";
+import { STATUS_STYLE } from "../src/ui/status.js";
 
 const theme = { fg: (_: string, text: string) => text, bold: (text: string) => text };
 const textOf = (command: (typeof COMMANDS)[number]) => `${command.keys.map(formatHelpKey).join(" / ")} · ${command.label} — ${command.description}`;
@@ -337,8 +338,8 @@ test("resizing switches between row scrolling and category selection", () => {
 test.each([24, 46, 90, 180])("Display legend is reachable and fits at width %i", width => {
   const help = new Help({ group: "Display", query: "", typing: false, scroll: 0 });
   const text = [...collect(help, width)].filter(row => !row.includes("Tab categories") && !row.includes("/ search")).join(" ").replace(/\s+/gu, " ");
-  for (const phrase of [" wait queued", " edit edited, not rerun", " agent changed by agent", " new created by agent", " old stale", " block ancestor failed", " off disabled", " err error"]) {
-    expect(text).toContain(phrase);
+  for (const [kind, meaning] of [["queued", "queued"], ["edited", "edited, not rerun"], ["changed", "changed by agent"], ["new", "created by agent"], ["stale", "stale"], ["blocked", "ancestor failed"], ["disabled", "disabled"], ["error", "error"]] as const) {
+    expect(text).toContain(`${STATUS_STYLE[kind].icon} ${meaning}`);
   }
 });
 

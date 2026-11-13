@@ -15,6 +15,7 @@ import { InlineEditorManager } from "../src/ui/inline-editor.js";
 import { paletteBounds } from "../src/ui/palette.js";
 import type { NeovimOpenOptions, NeovimSession } from "../src/core/neovim.js";
 import type { PackageClient, PackageConfirmation } from "../src/core/packages.js";
+import { statusIcon } from "../src/ui/status.js";
 
 function fakeEditors() {
   let options: NeovimOpenOptions;
@@ -504,9 +505,9 @@ test("e and E jump between failed cells; / filters by name, variable or code and
   const v = make(f);
   try {
     v.handleInput("e");
-    expect(screen(v)).toMatch(/▌✗ boom\(\) +\[ err\]/u);
+    expect(screen(v)).toMatch(/▌✗ boom\(\) +/u);
     v.handleInput("E");
-    expect(screen(v)).toMatch(/▌✗ boom\(\) +\[ err\]/u);
+    expect(screen(v)).toMatch(/▌✗ boom\(\) +/u);
     expect(screen(v)).toContain("E: m");
     v.handleInput("/");
     expect(v[INPUT_CONTEXT]()).toBe("filter");
@@ -1142,12 +1143,12 @@ test("the agent's changes since the last prompt: marked, counted, c jumps to the
     const v = make(f);
     try {
       const text = screen(v);
-      expect(text).toMatch(/  y = x \+ 2 +\[ agent\]/u);
+      expect(text).toMatch(/  y = x \+ 2 +/u);
       expect(text).toContain("agent: 1 changed · 1 removed");
       expect(text).toMatch(/✗ Removed: z = 3/u);
       v.handleInput("c");
       expect(screen(v)).toMatch(/▌  y = x \+ 2/u);
-      expect(screen(v)).toContain(" agent");
+      expect(screen(v)).toContain(statusIcon("changed"));
       v.handleInput("d");
       const diff = screen(v);
       expect(diff).toMatch(/-\s*\d+ y = x \+ 1/u);
@@ -1406,7 +1407,7 @@ test("narrow, a few outline rows around the cursor sit above the detail, and the
     const lines = v.render(80);
     const text = lines.join("\n");
     // A single blank gap separates the outline from the detail, not a decorative rule.
-    expect(text).toMatch(/daily[\s\S]*▌ {2}✗ [●│├┌└ ] model +\[ err\][\s\S]*chart[\s\S]*Traceback \(most recent call last\)/u);
+    expect(text).toMatch(/daily[\s\S]*▌ {2}✗ [●│├┌└ ] model +[\s\S]*chart[\s\S]*Traceback \(most recent call last\)/u);
     expect(text).toContain("enter edit");
     const rule = 2 + (v as any).panes.detailTop - 1;
     expect(plain(lines[rule]!).trim()).toBe("");
@@ -1445,7 +1446,7 @@ test("the detail of a failed cell shows its error, traceback and source", async 
   try {
     v.handleInput("e");
     const text = screen(v);
-    expect(text).toMatch(/▌ {2}✗ [●│├┌└ ] model +\[ err\]/u);
+    expect(text).toMatch(/▌ {2}✗ [●│├┌└ ] model +/u);
     expect(text).toContain("KeyError: 'revenue'");
     expect(text).toContain("Traceback (most recent call last)");
     expect(text).toContain("  model = boom(daily)");
@@ -2095,8 +2096,8 @@ test("r shows the cell queued at once, then marimo's run: a spinner in the outli
     v.handleInput("r");
     expect(run).toHaveBeenCalledOnce();
     let text = screen(v);
-    expect(text).toMatch(/▌◌ load +\[ wait\]/u);
-    expect(text).toContain(" wait");
+    expect(text).toMatch(/▌◌ load +/u);
+    expect(text).toContain(statusIcon("queued"));
     expect(text).toContain("◌ 1 queued");
     f.notebook.apply("cell-op", { cell_id: "a", status: "running", timestamp: Date.now() / 1000 });
     text = screen(v);
