@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- `marimo_execute` waits up to 30s (was 5s) for its `marimo pair execute --help` check, so a busy machine no longer fails it, and a timeout now says it is transient and safe to retry instead of pointing at `execution.command`.
+
 ## 0.6.0
 
 - `marimo_chart` gives the agent the chart's picture (up to 4 for a cell with several figures), and `show: false` lets it look without showing you, instead of saving figures to files to read them.

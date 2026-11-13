@@ -4,7 +4,7 @@ import { PassThrough } from "node:stream";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import {
-  ExecutionHost, executionTargetKey, stripScratchLens, isExecutionTerminal, ownExecutions,
+  ExecutionHost, PROBE_TIMEOUT_MS, executionTargetKey, stripScratchLens, isExecutionTerminal, ownExecutions,
   type ExecutionHostOptions, type ExecutionObserverOptions, type ExecutionOwner,
   type ExecutionRecord, type ExecutionStartSpec, type ExecutionTarget, type ExecutionWatchSpec, type WaveObserver,
 } from "../src/core/execution.js";
@@ -201,16 +201,21 @@ describe("capability checks and dispatch", () => {
     expect(observerFactory).not.toHaveBeenCalled();
   });
 
-  test("a hung help probe is killed at exactly 5s, never dispatches source, and failure is not cached", async () => {
+  test("a hung help probe is killed at exactly 30s as a transient, retryable failure that never dispatches source and is not cached", async () => {
     vi.useFakeTimers();
     const native = runner({ hang: true });
     const { host, observerFactory } = setup({ spawn: native.spawn });
     host.start(spec());
-    await vi.advanceTimersByTimeAsync(4999);
+    await vi.advanceTimersByTimeAsync(29_999);
     expect(host.get(owner, "exec-1").state).toBe("starting");
     expect(native.probes()[0]!.child.kill).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(1);
-    expect(host.get(owner, "exec-1")).toMatchObject({ state: "failed", summary: expect.stringContaining("timed out (5s)") });
+    const { summary } = host.get(owner, "exec-1");
+    expect(host.get(owner, "exec-1").state).toBe("failed");
+    expect(summary).toContain("Nothing was submitted.");
+    expect(summary).toContain("within 30s");
+    expect(summary).toContain("transient: retrying is safe");
+    expect(summary).not.toContain("execution.command");
     expect(native.probes()[0]!.child.kill).toHaveBeenCalledExactlyOnceWith("SIGKILL");
     expect(native.probes()[0]!.child.source).toBe("");
     expect(native.executions()).toHaveLength(0);
@@ -476,7 +481,7 @@ describe("owned POSIX process groups", () => {
     const killGroup = vi.fn();
     const { host } = setup({ spawn: native.spawn, killGroup });
     host.start(spec());
-    await vi.advanceTimersByTimeAsync(5000);
+    await vi.advanceTimersByTimeAsync(PROBE_TIMEOUT_MS);
     if (process.platform !== "win32") {
       expect(killGroup).toHaveBeenCalledExactlyOnceWith(1234, "SIGKILL");
       expect(native.probes()[0]!.child.kill).not.toHaveBeenCalled();

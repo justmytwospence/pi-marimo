@@ -109,6 +109,10 @@ export function stripScratchLens(text: string): string {
   return out.replace(/\n{3,}/gu, "\n\n").replace(/\s+$/u, "") + (text.endsWith("\n") && out.trim() ? "\n" : "");
 }
 
+/** How long `marimo pair execute --help` may take: a cold Python start on a loaded machine can take several seconds. */
+export const PROBE_TIMEOUT_MS = 30_000;
+/** The probe did not answer in time: transient, nothing was submitted, and a retry is safe. */
+class ProbeTimeout extends Error {}
 const MAX_BYTES = 16 * 1024;
 const MAX_LINES = 200;
 /** A draining streaming decoder: neither split UTF-8 nor arbitrarily large output grows memory. */
@@ -575,7 +579,7 @@ export class ExecutionHost {
       const message = error instanceof Error ? error.message : String(error);
       this.finish(entry, entry.child ? "unknown" : "failed", entry.child
         ? `Execution transport failed; outcome unknown. Do not retry automatically. ${message}`
-        : `Nothing was submitted. ${message} Check execution.command.`);
+        : `Nothing was submitted. ${message}${error instanceof ProbeTimeout ? "" : " Check execution.command."}`);
     }
   }
 
@@ -601,8 +605,8 @@ export class ExecutionHost {
       };
       const timer = setTimeout(() => {
         this.terminate(child, "SIGKILL");
-        done(new Error("marimo pair execute --help timed out (5s); configure execution.command."));
-      }, 5000);
+        done(new ProbeTimeout(`marimo pair execute --help did not answer within ${PROBE_TIMEOUT_MS / 1000}s, probably because the machine is busy. This is transient: retrying is safe.`));
+      }, PROBE_TIMEOUT_MS);
       this.stopProbes.set(child, () => done(new Error("Execution host was disposed; nothing was submitted.")));
       child.once("error", (e) => done(e));
       child.stdout?.on("error", (e) => done(e));
