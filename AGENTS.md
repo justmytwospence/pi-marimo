@@ -8,11 +8,12 @@ Pi package for live marimo notebooks (npm: `pi-marimo`, repo `justmytwospence/pi
 - Live e2e (needs `marimo` on PATH): `PI_MARIMO_LIVE_TEST=1 npx vitest run test/e2e.test.ts test/e2e-actions.test.ts test/e2e-host.test.ts`
 - Live against marimo main (host protocol): `PI_MARIMO_LIVE_TEST=1 PI_MARIMO_LIVE_MARIMO="uvx --from git+https://github.com/marimo-team/marimo@main marimo" npx vitest run test/e2e-host.test.ts`
 - Docs: `npm run docs:build` (strict). `docs/reference/keys.md` is generated: after changing `src/ui/keys.ts`, run `UPDATE_DOCS=1 npx vitest run test/docs.test.ts`.
-- Demo: `uvx --with pandas,numpy,matplotlib,plotly,altair,vl-convert-python,rich,tqdm,marimo-lens marimo edit --no-token examples/coffee.py`
+- Testing notebook: `uvx --with pandas,numpy,matplotlib,plotly,altair,vl-convert-python,rich,tqdm,marimo-lens marimo edit --no-token examples/testing.py`
+- Demo video: `npm run demo` (see docs/development.md).
 
 ## Browser-free pairing
 
-With pi-marimo active, open an existing notebook via `/marimo edit <file>`: it reuses a running server or starts one, connects a headless kernel session and opens the Pi view without a browser. Discover and reuse the server before starting another, especially for the coffee demo with its `uvx --with ...` dependencies. A marimo-pair `execute-code.sh --url URL --file FILE` call to a waiting server also makes pi-marimo attach without a browser; use the exact notebook file when multiple are available. The pinned marimo-pair skill's instruction to wait for a browser applies only without pi-marimo's headless-session support. Suggest a browser only if headless attachment fails, never as a prerequisite.
+With pi-marimo active, open an existing notebook via `/marimo edit <file>`: it reuses a running server or starts one, connects a headless kernel session and opens the Pi view without a browser. Discover and reuse the server before starting another, especially for the testing notebook with its `uvx --with ...` dependencies. A marimo-pair `execute-code.sh --url URL --file FILE` call to a waiting server also makes pi-marimo attach without a browser; use the exact notebook file when multiple are available. The pinned marimo-pair skill's instruction to wait for a browser applies only without pi-marimo's headless-session support. Suggest a browser only if headless attachment fails, never as a prerequisite.
 
 ## Contract copies
 

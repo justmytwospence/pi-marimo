@@ -7,7 +7,7 @@ npm ci && npm run check
 - Live tests (need `marimo` on PATH): `PI_MARIMO_LIVE_TEST=1 npx vitest run test/e2e.test.ts test/e2e-actions.test.ts test/e2e-host.test.ts`.
 - Against marimo main: `PI_MARIMO_LIVE_TEST=1 PI_MARIMO_LIVE_MARIMO="uvx --from git+https://github.com/marimo-team/marimo@main marimo" npx vitest run test/e2e-host.test.ts`.
 - The documentation: `npm run docs` serves it, `npm run docs:build` builds it strictly. [`reference/keys.md`](reference/keys.md) is generated from `src/ui/keys.ts`: after changing a key, run `UPDATE_DOCS=1 npx vitest run test/docs.test.ts`.
-- The big demo notebook: `uvx --with pandas,numpy,matplotlib,plotly,altair,vl-convert-python,rich,tqdm,marimo-lens marimo edit --no-token examples/coffee.py`. If it is already running, `/marimo edit examples/coffee.py` opens its Pi view using that server.
+- The testing notebook, every surface the view draws: `uvx --with pandas,numpy,matplotlib,plotly,altair,vl-convert-python,rich,tqdm,marimo-lens marimo edit --no-token examples/testing.py`. If it is already running, `/marimo edit examples/testing.py` opens its Pi view using that server.
 - To try changes in Pi before releasing them, add a project `.pi/settings.json` to the checkout that turns off the installed package and loads the checkout, then start Pi there and `/reload` after edits:
 
   ```json
