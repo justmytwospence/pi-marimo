@@ -3,8 +3,9 @@
 // pooling and subscription lifetimes; this class owns only a kiosk stream.
 
 import { randomUUID } from "node:crypto";
-import type { Cancellable, Io } from "./io.js";
+import { type Cancellable, type Io, normalize } from "./io.js";
 import { nodeIo } from "./node-io.js";
+import { listSessions } from "./registry.js";
 import { streamSession } from "./sse.js";
 
 export type WaveState = "running" | "reconnecting" | "succeeded" | "failed" | "interrupted" | "unknown";
@@ -34,6 +35,28 @@ interface ObserverOptions {
   seedBusyCells?: string[];
   graceMs?: number;
   retryMs?: number;
+  /** The id to connect under (default: observerConsumerId); a string connects at once. */
+  consumerId?: () => string | Promise<string>;
+}
+
+/**
+ * The id the read-only stream connects under. marimo files a kiosk consumer under the id it connects
+ * with, replacing any consumer already registered under it, and drops that registration when the
+ * stream closes (marimo 0.25 and main). Connecting under the target's own session id therefore
+ * evicts the session's editor (Pi's headless session, or a browser tab) once observation ends, and
+ * marimo answers its next widget change, run or interrupt with 403. So connect under our own id,
+ * which marimo resolves by file, whenever the target is the only session holding the file. When
+ * several hold it, the file lookup could pick another session: only then use the exact id.
+ */
+export async function observerConsumerId(io: Io, target: { url: string; path: string; sessionId: string }, own: string, token?: string): Promise<string> {
+  try {
+    const file = normalize(await io.realpath(target.path));
+    const holders: string[] = [];
+    for (const s of await listSessions(io, target.url, token)) if (normalize(await io.realpath(s.path)) === file) holders.push(s.sessionId);
+    return holders.length === 1 && holders[0] === target.sessionId ? own : target.sessionId;
+  } catch {
+    return target.sessionId;
+  }
 }
 
 interface CellEvidence {
@@ -59,6 +82,8 @@ export class ExecutionWaveObserver {
   private readonly token?: string;
   private readonly graceMs: number;
   private readonly retryMs: number;
+  /** This observer's own consumer id, stable across reconnects. */
+  private readonly ownId = `pi-marimo-observer-${randomUUID().slice(0, 8)}`;
   private connection: WaveSnapshot["connection"] = "stopped";
   private wave?: NonNullable<WaveSnapshot["wave"]>;
   private readonly cells = new Map<string, CellEvidence>();
@@ -150,9 +175,17 @@ export class ExecutionWaveObserver {
     this.changed();
     // A listener may synchronously release the last host reference.
     if (!this.active || generation !== this.generation) return;
+    const id = this.options.consumerId ? this.options.consumerId() : observerConsumerId(this.io, this.target, this.ownId, this.token);
+    if (typeof id === "string") this.open(generation, id);
+    else void id.then(resolved => this.open(generation, resolved), () => this.open(generation, this.target.sessionId));
+    this.armGrace();
+  }
+
+  private open(generation: number, sessionId: string): void {
+    if (!this.active || generation !== this.generation) return;
     try {
       const stream = streamSession({
-        io: this.io, url: this.target.url, sessionId: this.target.sessionId, file: this.target.path, token: this.token,
+        io: this.io, url: this.target.url, sessionId, file: this.target.path, token: this.token,
         onMessage: (op, data) => {
           if (this.active && generation === this.generation) this.message(op, record(data));
         },
@@ -163,7 +196,6 @@ export class ExecutionWaveObserver {
     } catch {
       this.disconnected(generation);
     }
-    this.armGrace();
   }
 
   private disconnected(generation: number): void {

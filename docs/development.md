@@ -28,4 +28,3 @@ Tape rules:
 - Select cells with `/name` then Enter; where the cursor lands after a run depends on timing.
 - Slash commands need Enter twice: the first accepts the completion.
 - Keep `yield_ms: 0` in scripted executions, so every take takes the same path.
-- Set widgets before the agent's turn: after an agent `marimo_execute`, widget changes from the view currently fail with a 403.

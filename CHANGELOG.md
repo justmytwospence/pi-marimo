@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Widget changes, runs and interrupts from the Pi view no longer fail with "marimo answered 403" after the agent runs Python: watching the run no longer evicts the notebook's own session.
 - The agent's changes stay marked (`c`, `d`, `u`, "agent: N new") when a background run's completion resumes the agent; only your next prompt clears them.
 - `view.icons: false` drops Nerd Font icons and symbols that some fonts lack, for terminals and recordings without a Nerd Font.
 - `examples/demo.py` replaces the quickstart notebook: dark charts, a headline, and table selections marked on the chart.

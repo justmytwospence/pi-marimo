@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, expect, test } from "vitest";
 import { EditCellService } from "../src/core/edit-cell.js";
+import { ExecutionWaveObserver } from "../src/core/execution-observer.js";
 import { PackageClient } from "../src/core/packages.js";
 import { HeadlessSessions } from "../src/core/headless.js";
 import { nodeIo } from "../src/core/node-io.js";
@@ -108,6 +109,40 @@ async function until<T>(check: () => T | undefined | false, ms = 30_000, diagnos
     await new Promise((r) => setTimeout(r, 100));
   }
 }
+
+// Regression: the execution observer's kiosk stream once connected under the headless session's own
+// id; when it closed, marimo dropped that id's registration and answered every later widget change 403.
+test.skipIf(!live)("observing an execution leaves the notebook's own session writable", async () => {
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), "pi-marimo-observer-")));
+  const file = join(dir, "nb.py");
+  writeFileSync(file, NOTEBOOK);
+  const server = await servers.start({ command: MARIMO, file, cwd: dir, timeoutMs: 60_000 });
+  const sessionId = await headless.attach(server.url, file);
+  const watcher = new MarimoWatcher({ io: nodeIo(), cwd: dir, pollMs: 300, onChange: () => undefined });
+  watcher.start();
+  try {
+    const f = await until(() => watcher.followed().find((o) => o.attachment.path === file && o.connection === "connected" && o.notebook.ready));
+    const nb = f.notebook;
+    const target = { url: server.url, sessionId };
+    await runCells(target, nb.ordered().map((c) => ({ id: c.id, code: c.code })));
+    const slider = await until(() => nb.ordered().map((c) => c.output?.widgets?.[0]).find((w) => w?.kind === "slider"));
+    await setUiValues(target, [slider.objectId], [4]);
+    for (let round = 0; round < 2; round++) {
+      const states: string[] = [];
+      const observer = new ExecutionWaveObserver({ target: { url: server.url, path: file, sessionId }, io: nodeIo(), onChange: (snapshot) => states.push(snapshot.connection) });
+      observer.start();
+      await until(() => states.includes("connected"), 30_000, () => states);
+      observer.stop();
+      // Give marimo time to drop the closed stream's consumer.
+      await new Promise((r) => setTimeout(r, 1500));
+      await setUiValues(target, [slider.objectId], [5 + round]);
+    }
+    const doubled = await until(() => nb.ordered().find((c) => c.code.includes("doubled =") && scalarResult(c.output) === "12"), 30_000, () => nb.ordered());
+    expect(doubled).toBeDefined();
+  } finally {
+    await watcher.stop();
+  }
+}, 120_000);
 
 test.skipIf(!live)("a notebook Pi starts: run, set a widget, run Python, mark a cell", async () => {
   const dir = realpathSync(mkdtempSync(join(tmpdir(), "pi-marimo-actions-")));

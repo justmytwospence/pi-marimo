@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
-import { ExecutionWaveObserver, type WaveSnapshot } from "../src/core/execution-observer.js";
+import { ExecutionWaveObserver, observerConsumerId, type WaveSnapshot } from "../src/core/execution-observer.js";
 import type { Cancellable, Io, StreamEnd } from "../src/core/io.js";
 import { SseParser } from "../src/core/sse.js";
 
@@ -47,7 +47,7 @@ function setup(options: Partial<ConstructorParameters<typeof ExecutionWaveObserv
   const io = new FakeIo();
   const changes: WaveSnapshot[] = [];
   let id = 0;
-  const observer = new ExecutionWaveObserver({ target, io, token: "", now: Date.now, id: () => `wave-${++id}`, onChange: snapshot => changes.push(snapshot), ...options });
+  const observer = new ExecutionWaveObserver({ target, io, token: "", now: Date.now, id: () => `wave-${++id}`, onChange: snapshot => changes.push(snapshot), consumerId: () => target.sessionId, ...options });
   observers.push(observer);
   return { io, observer, changes, wave: () => observer.snapshot().wave! };
 }
@@ -473,5 +473,42 @@ describe("stream uncertainty and lifetime", () => {
     expect(wave().state).toBe("unknown");
     expect(observer.snapshot().connection).toBe("stopped");
     expect(io.stream).toHaveBeenCalledTimes(3);
+  });
+});
+
+describe("the consumer id the stream connects under", () => {
+  const sessions = (body: unknown) => { const io = new FakeIo(); io.getJson = vi.fn(async () => body); return io; };
+  test("its own id when the target is the only session holding the file, so closing never evicts the session's editor", async () => {
+    const io = sessions({ "selected-session": { path: "/tmp/notebook.py" }, other: { path: "/tmp/other.py" } });
+    await expect(observerConsumerId(io, target, "pi-marimo-observer-1", "tok")).resolves.toBe("pi-marimo-observer-1");
+    expect(io.getJson).toHaveBeenCalledWith(`${target.url}/api/sessions`, { Authorization: "Bearer tok" }, 2000);
+  });
+  test("the exact id when several sessions hold the file, or the server cannot say", async () => {
+    await expect(observerConsumerId(sessions({ "selected-session": { path: "/tmp/notebook.py" }, older: { path: "/tmp/notebook.py" } }), target, "own")).resolves.toBe("selected-session");
+    await expect(observerConsumerId(sessions({ other: { path: "/tmp/notebook.py" } }), target, "own")).resolves.toBe("selected-session");
+    await expect(observerConsumerId(sessions(undefined), target, "own")).resolves.toBe("selected-session");
+    await expect(observerConsumerId(new FakeIo(), target, "own")).resolves.toBe("selected-session");
+  });
+  test("compares files by real path", async () => {
+    const io = sessions({ "selected-session": { path: "/private/tmp/notebook.py" } });
+    io.realpath = vi.fn(async (path: string) => path.replace(/^\/tmp\//u, "/private/tmp/"));
+    await expect(observerConsumerId(io, target, "own")).resolves.toBe("own");
+  });
+  test("by default the stream opens under the resolved id, and not after stop", async () => {
+    const io = sessions({ "selected-session": { path: "/tmp/notebook.py" } });
+    const observer = new ExecutionWaveObserver({ target, io, token: "" });
+    observers.push(observer);
+    observer.start();
+    expect(io.stream).not.toHaveBeenCalled();
+    await tick();
+    expect(io.stream).toHaveBeenCalledTimes(1);
+    const id = new URL(io.streams[0]!.url).searchParams.get("session_id");
+    expect(id).toMatch(/^pi-marimo-observer-/u);
+    expect(id).not.toBe(target.sessionId);
+    const late = new ExecutionWaveObserver({ target, io, token: "" });
+    late.start();
+    late.stop();
+    await tick();
+    expect(io.stream).toHaveBeenCalledTimes(1);
   });
 });
