@@ -18,9 +18,9 @@ Table design references (interaction ideas, not copied implementations): [Textua
 
 ## Recording the demo
 
-`npm run demo` records `docs/assets/demo.mp4` and `docs/assets/demo.gif` with [foley](https://github.com/GH-Jaider/foley), which renders the tape (`demo/demo.tape`) headlessly, Kitty graphics included. It needs `pi`, `uvx`, `ffmpeg`, `curl` and `node` on PATH, on macOS or Linux, and downloads a checksummed foley 0.1.0 into `~/.cache/pi-marimo/`.
+`npm run demo` records `docs/assets/demo.mp4` and `docs/assets/demo.gif` with [foley](https://github.com/GH-Jaider/foley), which renders the tape (`demo/demo.tape`) headlessly, Kitty graphics included. It needs `pi`, `uvx`, `ffmpeg`, `ffprobe`, `curl` and `node` on PATH, on macOS or Linux, and downloads a checksummed foley 0.1.0 into `~/.cache/pi-marimo/`.
 
-The model is scripted (`demo/scripted-model.ts`, Pi's faux provider); the notebook (`examples/demo.py`), its kernel and pi-marimo are real. The keys pressed show on foley's keys reel under the window, and `demo/captions.ts` draws a caption card in the chat pane; the tape advances it by pressing Insert inside `Hide`/`Show`, so that key stays off the reel. A take fails, leaving `docs/assets` untouched, when its final screen differs from `demo/expected.txt` or shows an error. After an intended change, run `UPDATE_EXPECTED=1 npm run demo`, review the beat screenshots it prints, and commit `demo/expected.txt` with the assets.
+The model is scripted (`demo/scripted-model.ts`, Pi's faux provider); the notebook (`examples/demo.py`), its kernel and pi-marimo are real. The keys pressed show on foley's keys reel under the window. Captions (`demo/captions.json`) are drawn above the window afterwards by `demo/annotate.py`, in Inter (downloaded, checksummed): at each beat the tape presses Insert inside `Hide`/`Show`, `demo/captions.ts` writes an invisible marker into the take's asciicast, and the marker's time starts the next caption. A take fails, leaving `docs/assets` untouched, when its final screen differs from `demo/expected.txt` or shows an error. After an intended change, run `UPDATE_EXPECTED=1 npm run demo`, review the beat screenshots it prints, and commit `demo/expected.txt` with the assets.
 
 Tape rules:
 

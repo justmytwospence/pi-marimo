@@ -5,7 +5,7 @@ set -euo pipefail
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 STAGE=/tmp/pi-marimo-demo
 FOLEY_VERSION=0.1.0
-for tool in pi uvx ffmpeg curl node; do command -v "$tool" >/dev/null || { echo "demo: $tool is not on PATH" >&2; exit 1; }; done
+for tool in pi uvx ffmpeg ffprobe curl node; do command -v "$tool" >/dev/null || { echo "demo: $tool is not on PATH" >&2; exit 1; }; done
 
 case "$(uname -s)-$(uname -m)" in
   Darwin-arm64) PLATFORM=darwin_arm64 SHA=f859833a39577f263ef0c15e46f295ba5c0b5e85b48bc8a8630c34d7635d0fea ;;
@@ -23,6 +23,17 @@ if [ ! -x "$FOLEY" ]; then
   else echo "$SHA  $CACHE/foley.tar.gz" | shasum -a 256 -c - >/dev/null; fi
   tar -xzf "$CACHE/foley.tar.gz" -C "$CACHE" foley
   rm "$CACHE/foley.tar.gz"
+fi
+
+# Captions are drawn in Inter, from its release tag.
+FONT="${XDG_CACHE_HOME:-$HOME/.cache}/pi-marimo/InterVariable-4.1.ttf"
+if [ ! -f "$FONT" ]; then
+  mkdir -p "$(dirname "$FONT")"
+  curl -fsSL -o "$FONT.part" "https://raw.githubusercontent.com/rsms/inter/v4.1/docs/font-files/InterVariable.ttf"
+  FONT_SHA=4989b125924991b90d05b2d16e0e388c48f7d5bb8b30539bbf9c755278d0ccaf
+  if command -v sha256sum >/dev/null; then echo "$FONT_SHA  $FONT.part" | sha256sum -c - >/dev/null
+  else echo "$FONT_SHA  $FONT.part" | shasum -a 256 -c - >/dev/null; fi
+  mv "$FONT.part" "$FONT"
 fi
 
 rm -rf "$STAGE"
@@ -51,6 +62,7 @@ elif ! diff -u "$REPO/demo/expected.txt" <(normalize "$OUT/demo.txt"); then
   exit 1
 fi
 
+uvx -q --with pillow==13.0.0 python "$REPO/demo/annotate.py" "$OUT/take.mp4" "$OUT/take.cast" "$REPO/demo/captions.json" "$FONT" "$OUT/demo.mp4"
 ffmpeg -v error -y -i "$OUT/demo.mp4" -vf "fps=12,scale=1200:-1:flags=lanczos,split[a][b];[a]palettegen=stats_mode=diff[p];[b][p]paletteuse=dither=bayer:bayer_scale=5:diff_mode=rectangle" "$OUT/demo.gif"
 mkdir -p "$REPO/docs/assets"
 cp "$OUT/demo.mp4" "$OUT/demo.gif" "$REPO/docs/assets/"
