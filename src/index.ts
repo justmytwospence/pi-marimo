@@ -205,6 +205,11 @@ export function withExecutionHint(text: string, runningPaths: string[]): string 
   return text.endsWith(close) ? `${text.slice(0, -close.length).replace(/\n?$/u, "\n")}${hint}\n${close}` : `${text}\n${hint}`;
 }
 
+/** A user's prompt ends the window of "the agent's changes since your last message"; a background run's completion resuming the agent does not. */
+export function clearsAgentChanges(event: { messageType?: string; message?: { customType?: string } } | undefined): boolean {
+  return !(event?.messageType === "custom" && event.message?.customType === COMPLETION_MESSAGE);
+}
+
 /** Execute with the explicit CLI prefix, the server's original project, then normal server-command defaults. */
 export function executionCommand(config: Pick<Config, "execution" | "server">, cwd: string, server?: { command?: string[]; cwd?: string }): { command: string[]; cwd: string } {
   if (config.execution.command.length) return { command: [...config.execution.command], cwd };
@@ -936,7 +941,7 @@ export default function piMarimo(pi: ExtensionAPI): void {
     offering = busy = false;
   });
 
-  pi.on("before_agent_start", async () => {
+  pi.on("before_agent_start", async (event) => {
     turn = undefined;
     prompts++;
     if (!watcher) return;
@@ -954,7 +959,8 @@ export default function piMarimo(pi: ExtensionAPI): void {
     // `context: false` affects automatic snapshots, not real tool results or completion messages.
     turn = config.context !== false && (text || note || activeExecutions) ? { text: [text, note, activeExecutions].filter(Boolean).join("\n") } : undefined;
     // The state is taken: the agent's changes and the user's widget values before this prompt are no longer new.
-    for (const f of watcher.followed()) f.notebook.markPrompt();
+    // A completion follow-up resumes the same request, so the agent's changes stay marked.
+    if (clearsAgentChanges(event)) for (const f of watcher.followed()) f.notebook.markPrompt();
   });
 
   // The notebook this session's agent works in (through marimo-pair) becomes current for this

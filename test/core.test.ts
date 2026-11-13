@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, test, vi } from "vitest";
-import { insertState } from "../src/index.js";
+import { clearsAgentChanges, insertState } from "../src/index.js";
 import { editableMarkdown, markdownCellCode, headingsFromCode, isMarkdownCell, mdLiterals } from "../src/core/markdown.js";
 import { NotebookState } from "../src/core/notebook.js";
 import { snapshot, statusParts, shortWhere, statusText } from "../src/core/render.js";
@@ -616,6 +616,14 @@ describe("what the view shows beyond the agent's snapshot", () => {
       nb.markPrompt();
       expect(nb.agentChanges.size).toBe(0);
     } finally { vi.useRealTimers(); }
+  });
+
+  test("a completion follow-up keeps the agent's changes; a prompt clears them", () => {
+    expect(clearsAgentChanges(undefined)).toBe(true);
+    expect(clearsAgentChanges({})).toBe(true);
+    expect(clearsAgentChanges({ messageType: "user" })).toBe(true);
+    expect(clearsAgentChanges({ messageType: "custom", message: { customType: "other" } })).toBe(true);
+    expect(clearsAgentChanges({ messageType: "custom", message: { customType: "pi-marimo-completion" } })).toBe(false);
   });
 
   test("widget values: kernel-ready's, then the user's from Pi, dropped when their cell runs again", () => {

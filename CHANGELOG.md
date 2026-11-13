@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- The agent's changes stay marked (`c`, `d`, `u`, "agent: N new") when a background run's completion resumes the agent; only your next prompt clears them.
+
 ## 0.4.0
 
 - Works with marimo's upcoming host protocol as well as 0.25.x. Notebooks are followed on marimo main, and run and interrupt go through `/api/marimo/v1` when the server publishes a host record.
