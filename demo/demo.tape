@@ -1,5 +1,7 @@
 # The demo video. Run through `npm run demo` (demo/record.sh), which stages /tmp/pi-marimo-demo.
 # foley v0.1.0 cannot send Ctrl chords to Pi, so the tape never uses them; cells are selected with /name.
+# Insert inside Hide/Show advances demo/captions.ts's caption card without showing on the keys reel.
+# foley: keys
 Output demo.mp4
 Output demo.txt
 Set Shell bash
@@ -15,9 +17,14 @@ Type "./launch.sh"
 Enter
 Wait+Screen /scripted/
 Show
-Sleep 800ms
+Sleep 2500ms
 
 # Open the notebook docked beside the chat, and run it.
+Hide
+Insert
+Sleep 200ms
+Show
+Sleep 2s
 Type "/marimo edit demo.py"
 Sleep 400ms
 Enter
@@ -25,10 +32,20 @@ Sleep 300ms
 Enter
 Wait+Screen /Notebook demo\.py/
 Sleep 1s
+Hide
+Insert
+Sleep 200ms
+Show
+Sleep 2s
 Type "AA"
 Sleep 3s
 Wait+Screen /demo\.py  idle/
 Sleep 1s
+Hide
+Insert
+Sleep 200ms
+Show
+Sleep 2s
 Type "/rides_chart"
 Sleep 300ms
 Enter
@@ -36,6 +53,11 @@ Sleep 2500ms
 Screenshot beat1_chart.png
 
 # Drive the slider.
+Hide
+Insert
+Sleep 200ms
+Show
+Sleep 2s
 Type "/smoothing_control"
 Sleep 300ms
 Enter
@@ -53,6 +75,11 @@ Sleep 2500ms
 Screenshot beat2_smoothed.png
 
 # Select two days in the table; the chart marks them.
+Hide
+Insert
+Sleep 200ms
+Show
+Sleep 2s
 Type "/daily_table"
 Sleep 300ms
 Enter
@@ -75,6 +102,11 @@ Sleep 3s
 Screenshot beat4_marked.png
 
 # Ask the agent from the chart cell.
+Hide
+Insert
+Sleep 200ms
+Show
+Sleep 2s
 Type "a"
 Sleep 600ms
 Type "compare weekdays and weekends"
@@ -85,10 +117,20 @@ Sleep 1500ms
 Screenshot beat5_agent.png
 
 # Jump to its change, then its diff.
+Hide
+Insert
+Sleep 200ms
+Show
+Sleep 2s
 Type "c"
 Sleep 3s
 Screenshot beat6_change.png
 # Hide the output so the diff has room.
+Hide
+Insert
+Sleep 200ms
+Show
+Sleep 2s
 Type `\`
 Sleep 800ms
 Type "d"

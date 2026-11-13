@@ -20,11 +20,11 @@ Table design references (interaction ideas, not copied implementations): [Textua
 
 `npm run demo` records `docs/assets/demo.mp4` and `docs/assets/demo.gif` with [foley](https://github.com/GH-Jaider/foley), which renders the tape (`demo/demo.tape`) headlessly, Kitty graphics included. It needs `pi`, `uvx`, `ffmpeg`, `curl` and `node` on PATH, on macOS or Linux, and downloads a checksummed foley 0.1.0 into `~/.cache/pi-marimo/`.
 
-The model is scripted (`demo/scripted-model.ts`, Pi's faux provider); the notebook (`examples/demo.py`), its kernel and pi-marimo are real. A take fails, leaving `docs/assets` untouched, when its final screen differs from `demo/expected.txt` or shows an error. After an intended change, run `UPDATE_EXPECTED=1 npm run demo`, review the beat screenshots it prints, and commit `demo/expected.txt` with the assets.
+The model is scripted (`demo/scripted-model.ts`, Pi's faux provider); the notebook (`examples/demo.py`), its kernel and pi-marimo are real. The keys pressed show on foley's keys reel under the window, and `demo/captions.ts` draws a caption card in the chat pane; the tape advances it by pressing Insert inside `Hide`/`Show`, so that key stays off the reel. A take fails, leaving `docs/assets` untouched, when its final screen differs from `demo/expected.txt` or shows an error. After an intended change, run `UPDATE_EXPECTED=1 npm run demo`, review the beat screenshots it prints, and commit `demo/expected.txt` with the assets.
 
 Tape rules:
 
-- No Ctrl chords: foley 0.1.0 cannot send them to Pi once Pi enables the Kitty keyboard protocol.
+- No Ctrl or Alt chords: foley 0.1.0 cannot send them to Pi once Pi enables the Kitty keyboard protocol (Alt arrives as the bare key).
 - Select cells with `/name` then Enter; where the cursor lands after a run depends on timing.
 - Slash commands need Enter twice: the first accepts the completion.
 - Keep `yield_ms: 0` in scripted executions, so every take takes the same path.
