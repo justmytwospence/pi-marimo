@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.5.0
 
 - Widget changes, runs and interrupts from the Pi view no longer fail with "marimo answered 403" after the agent runs Python: watching the run no longer evicts the notebook's own session.
 - The agent's changes stay marked (`c`, `d`, `u`, "agent: N new") when a background run's completion resumes the agent; only your next prompt clears them.
