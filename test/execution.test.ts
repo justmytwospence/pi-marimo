@@ -4,7 +4,7 @@ import { PassThrough } from "node:stream";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import {
-  ExecutionHost, executionTargetKey, isExecutionTerminal, ownExecutions,
+  ExecutionHost, executionTargetKey, stripScratchLens, isExecutionTerminal, ownExecutions,
   type ExecutionHostOptions, type ExecutionObserverOptions, type ExecutionOwner,
   type ExecutionRecord, type ExecutionStartSpec, type ExecutionTarget, type ExecutionWatchSpec, type WaveObserver,
 } from "../src/core/execution.js";
@@ -893,4 +893,22 @@ test("process singleton is stable and inert on retrieval (never dispose the shar
   const first = ownExecutions();
   expect(first).toBeInstanceOf(ExecutionHost);
   expect(ownExecutions()).toBe(first);
+});
+
+describe("stripScratchLens", () => {
+  const lens = "<div style='display: flex;flex: 1;flex-direction: column;justify-content: flex-start;align-items: normal;flex-wrap: nowrap;gap: 0.5rem'><marimo-ui-element object-id='__scratch__-0' random-id='7543c403-2059-7c6d-0aef-623cb0e830ba'><marimo-anywidget data-initial-value='{&quot;model_id&quot;:&quot;7f2d&quot;}' data-label='null' data-model-id='&quot;7f2d&quot;'></marimo-anywidget></marimo-ui-element></div>";
+  test("drops the Lens marimo mounts in the scratchpad", () => {
+    expect(stripScratchLens(`printed\n\n${lens}\n`)).toBe("printed\n");
+    expect(stripScratchLens(`${lens}\n`)).toBe("");
+  });
+  test("keeps the agent's own output beside it", () => {
+    const out = stripScratchLens("<div style='display: flex;gap: 0.5rem'><pre>x</pre><marimo-ui-element object-id='__scratch__-1'><marimo-anywidget data-label='null'></marimo-anywidget></marimo-ui-element></div>");
+    expect(out).toBe("<div style='display: flex;gap: 0.5rem'><pre>x</pre></div>");
+  });
+  test("leaves other text and non-empty scratch widgets alone", () => {
+    const plain = "no html here";
+    expect(stripScratchLens(plain)).toBe(plain);
+    const slider = "<marimo-ui-element object-id='__scratch__-2'><marimo-slider data-start='0'></marimo-slider></marimo-ui-element>";
+    expect(stripScratchLens(slider)).toBe(slider);
+  });
 });

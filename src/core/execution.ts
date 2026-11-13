@@ -99,6 +99,16 @@ function clean(text: string): string {
   return stripVTControlCharacters(text).replace(/[\x00-\x08\x0b-\x1f\x7f]/gu, "");
 }
 
+const SCRATCH_ANYWIDGET = /<marimo-ui-element object-id='__scratch__-\d+'[^>]*><marimo-anywidget\b[^>]*><\/marimo-anywidget><\/marimo-ui-element>/gu;
+const EMPTY_STACK = /<div style='display: flex;[^']*'><\/div>/gu;
+/** marimo 0.25 mounts a Lens in every code-mode scratch run (hooks_lens.mount_lens); its HTML is noise to an agent. */
+export function stripScratchLens(text: string): string {
+  if (!text.includes("__scratch__")) return text;
+  const out = text.replace(SCRATCH_ANYWIDGET, "").replace(EMPTY_STACK, "");
+  if (out === text) return text;
+  return out.replace(/\n{3,}/gu, "\n\n").replace(/\s+$/u, "") + (text.endsWith("\n") && out.trim() ? "\n" : "");
+}
+
 const MAX_BYTES = 16 * 1024;
 const MAX_LINES = 200;
 /** A draining streaming decoder: neither split UTF-8 nor arbitrarily large output grows memory. */
@@ -526,7 +536,7 @@ export class ExecutionHost {
       const stdout = new Tail();
       const stderr = new Tail();
       const take = () => {
-        entry.record.stdout = clean(stdout.text); entry.record.stderr = clean(stderr.text);
+        entry.record.stdout = stripScratchLens(clean(stdout.text)); entry.record.stderr = clean(stderr.text);
         entry.record.stdoutOmittedBytes = stdout.omitted; entry.record.stderrOmittedBytes = stderr.omitted;
         this.changed(entry.record);
       };
