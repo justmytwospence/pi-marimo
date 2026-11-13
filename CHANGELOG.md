@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.6.0
 
 - `marimo_chart` gives the agent the chart's picture (up to 4 for a cell with several figures), and `show: false` lets it look without showing you, instead of saving figures to files to read them.
 - When the agent changes cells and does not run them, the result of its notebook call says which, so it runs them or tells you instead of leaving stale output.
