@@ -1,0 +1,38 @@
+[
+  {
+    "time": 0.0,
+    "title": "pi-marimo"
+  },
+  {
+    "time": 2.54,
+    "title": "/marimo edit demo.py"
+  },
+  {
+    "time": 9.65,
+    "title": "A A  \u00b7  run all"
+  },
+  {
+    "time": 15.93,
+    "title": "/  \u00b7  find a cell"
+  },
+  {
+    "time": 22.06,
+    "title": "w  \u00b7  drive widgets"
+  },
+  {
+    "time": 33.4,
+    "title": "t  \u00b7  tables"
+  },
+  {
+    "time": 46.3,
+    "title": "a  \u00b7  ask the agent"
+  },
+  {
+    "time": 58.9,
+    "title": "c  \u00b7  the agent's change"
+  },
+  {
+    "time": 64.12,
+    "title": "d  \u00b7  the diff"
+  }
+]

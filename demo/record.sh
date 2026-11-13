@@ -65,5 +65,5 @@ fi
 uvx -q --with pillow==13.0.0 python "$REPO/demo/annotate.py" "$OUT/take.mp4" "$OUT/take.cast" "$REPO/demo/demo.tape" "$REPO/demo/captions.json" "$FONT" "$OUT/demo.mp4"
 ffmpeg -v error -y -i "$OUT/demo.mp4" -vf "fps=12,scale=1200:-1:flags=lanczos,split[a][b];[a]palettegen=stats_mode=diff[p];[b][p]paletteuse=dither=bayer:bayer_scale=5:diff_mode=rectangle" "$OUT/demo.gif"
 mkdir -p "$REPO/docs/assets"
-cp "$OUT/demo.mp4" "$OUT/demo.gif" "$REPO/docs/assets/"
-echo "demo: docs/assets/demo.mp4 and demo.gif updated; beat screenshots in $OUT"
+cp "$OUT/demo.mp4" "$OUT/demo.gif" "$OUT/demo.json" "$REPO/docs/assets/"
+echo "demo: docs/assets/demo.mp4, demo.gif and demo.json updated; beat screenshots in $OUT"

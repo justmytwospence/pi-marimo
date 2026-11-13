@@ -2,6 +2,8 @@
 
 Usage: annotate.py IN.mp4 IN.cast TAPE CAPTIONS.json FONT.ttf OUT.mp4
 
+Also writes OUT.json: each caption's start time and title, for the docs page's scrub bar.
+
 demo/captions.ts writes a marker into the terminal stream for every key Pi receives, and the take's
 asciicast (foley's `.cast` output) timestamps them. The markers are matched, in order, to the keys
 the tape sends after its first `Show` (a `Type` sends one key per character). Then:
@@ -165,6 +167,9 @@ def main() -> None:
              "-c:v", "libx264", "-pix_fmt", "yuv420p", "-crf", "20", "-preset", "slow", "-movflags", "+faststart", output],
             check=True,
         )
+    # The docs page's scrub bar marks where each caption starts.
+    chapters = [{"time": round(starts[n], 2), "title": caption["title"]} for n, caption in enumerate(captions)]
+    Path(output).with_suffix(".json").write_text(json.dumps(chapters, indent=2) + "\n")
     for n, caption in enumerate(captions):
         print(f"annotate: {starts[n]:6.2f}s  {caption['title']}")
     print(f"annotate: {len(shortcuts)} shortcuts shown")

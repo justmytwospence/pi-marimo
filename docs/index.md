@@ -2,7 +2,11 @@
 
 **The [marimo](https://marimo.io) notebook your agent is editing, live in your terminal beside the chat.**
 
-<video src="assets/demo.mp4" autoplay loop muted playsinline controls width="100%"></video>
+<figure class="demo-player" data-chapters="assets/demo.json">
+  <video src="assets/demo.mp4" autoplay loop muted playsinline preload="auto" aria-label="pi-marimo demo"></video>
+  <div class="demo-scrub" role="slider" tabindex="0" aria-label="Demo timeline" aria-valuemin="0" aria-valuenow="0"><div class="demo-scrub-fill"></div></div>
+  <figcaption><span class="demo-chapter">pi-marimo</span> · drag the bar to scrub, click the video to pause</figcaption>
+</figure>
 
 pi-marimo is an extension for the [Pi](https://pi.dev) coding agent. Your agent edits a marimo notebook through [marimo pair](https://docs.marimo.io/guides/generate_with_ai/marimo_pair/); you watch it run, read it, and steer it from the terminal, without leaving the conversation.
 

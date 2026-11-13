@@ -1,0 +1,42 @@
+/* The home page's GIF-like demo video and its timeline (docs/javascripts/demo-player.js). */
+.demo-player {
+  margin: 1.5em 0;
+}
+.demo-player video {
+  display: block;
+  width: 100%;
+  border-radius: 6px 6px 0 0;
+  cursor: pointer;
+}
+.demo-scrub {
+  position: relative;
+  height: 10px;
+  background: #2a2b3d;
+  border-radius: 0 0 6px 6px;
+  cursor: pointer;
+  touch-action: none;
+}
+.demo-scrub:focus-visible {
+  outline: 2px solid var(--md-accent-fg-color);
+  outline-offset: 2px;
+}
+.demo-scrub-fill {
+  height: 100%;
+  width: 0;
+  background: #f5a97f;
+  border-radius: 0 0 0 6px;
+  pointer-events: none;
+}
+.demo-scrub-tick {
+  position: absolute;
+  top: 0;
+  width: 2px;
+  height: 100%;
+  background: rgba(17, 17, 27, 0.75);
+  pointer-events: none;
+}
+.demo-player figcaption {
+  margin-top: 0.5em;
+  font-size: 0.75rem;
+  color: var(--md-default-fg-color--light);
+}

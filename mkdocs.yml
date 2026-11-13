@@ -35,6 +35,10 @@ theme:
       toggle:
         icon: material/brightness-4
         name: Switch to system preference
+extra_css:
+  - stylesheets/demo-player.css
+extra_javascript:
+  - javascripts/demo-player.js
 markdown_extensions:
   - admonition
   - attr_list
