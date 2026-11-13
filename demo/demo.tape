@@ -1,8 +1,7 @@
 # The demo video. Run through `npm run demo` (demo/record.sh), which stages /tmp/pi-marimo-demo.
 # foley v0.1.0 cannot send Ctrl chords to Pi, so the tape never uses them; cells are selected with /name.
-# Insert inside Hide/Show cues the next caption (demo/captions.ts, drawn by demo/annotate.py) without
-# showing on the keys reel.
-# foley: keys
+# Insert inside Hide/Show cues the next caption. `# demo: show <keys>` puts the next command's keys on
+# screen; other typing (commands, cell names, the prompt) stays off it. demo/annotate.py draws both.
 Output take.mp4
 Output take.cast
 Output demo.txt
@@ -37,6 +36,7 @@ Hide
 Insert
 Show
 Sleep 2s
+# demo: show A A
 Type "AA"
 Sleep 3s
 Wait+Screen /demo\.py  idle/
@@ -45,7 +45,9 @@ Hide
 Insert
 Show
 Sleep 2s
-Type "/rides_chart"
+# demo: show /
+Type "/"
+Type "rides_chart"
 Sleep 300ms
 Enter
 Sleep 2500ms
@@ -56,17 +58,24 @@ Hide
 Insert
 Show
 Sleep 2s
-Type "/smoothing_control"
+# demo: show /
+Type "/"
+Type "smoothing_control"
 Sleep 300ms
 Enter
 Sleep 800ms
+# demo: show w
 Type "w"
 Sleep 600ms
+# demo: show L
 Type "L"
 Sleep 1200ms
+# demo: show Esc
 Escape
 Sleep 400ms
-Type "/rides_chart"
+# demo: show /
+Type "/"
+Type "rides_chart"
 Sleep 300ms
 Enter
 Sleep 2500ms
@@ -77,22 +86,32 @@ Hide
 Insert
 Show
 Sleep 2s
-Type "/daily_table"
+# demo: show /
+Type "/"
+Type "daily_table"
 Sleep 300ms
 Enter
 Sleep 1s
+# demo: show t
 Type "t"
 Sleep 800ms
+# demo: show j j
 Type "jj"
+# demo: show Space
 Space
 Sleep 400ms
+# demo: show j j j
 Type "jjj"
+# demo: show Space
 Space
 Sleep 1200ms
 Screenshot beat3_table.png
+# demo: show Esc
 Escape
 Sleep 400ms
-Type "/rides_chart"
+# demo: show /
+Type "/"
+Type "rides_chart"
 Sleep 300ms
 Enter
 Sleep 3s
@@ -103,10 +122,12 @@ Hide
 Insert
 Show
 Sleep 2s
+# demo: show a
 Type "a"
 Sleep 600ms
 Type "compare weekdays and weekends"
 Sleep 500ms
+# demo: show Enter
 Enter
 Wait+Screen /more rides than weekday/
 Sleep 1500ms
@@ -117,6 +138,7 @@ Hide
 Insert
 Show
 Sleep 2s
+# demo: show c
 Type "c"
 Sleep 3s
 Screenshot beat6_change.png
@@ -125,8 +147,10 @@ Hide
 Insert
 Show
 Sleep 2s
+# demo: show \
 Type `\`
 Sleep 800ms
+# demo: show d
 Type "d"
 Sleep 3s
 Screenshot beat7_diff.png

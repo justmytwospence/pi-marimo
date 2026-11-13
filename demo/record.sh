@@ -62,7 +62,7 @@ elif ! diff -u "$REPO/demo/expected.txt" <(normalize "$OUT/demo.txt"); then
   exit 1
 fi
 
-uvx -q --with pillow==13.0.0 python "$REPO/demo/annotate.py" "$OUT/take.mp4" "$OUT/take.cast" "$REPO/demo/captions.json" "$FONT" "$OUT/demo.mp4"
+uvx -q --with pillow==13.0.0 python "$REPO/demo/annotate.py" "$OUT/take.mp4" "$OUT/take.cast" "$REPO/demo/demo.tape" "$REPO/demo/captions.json" "$FONT" "$OUT/demo.mp4"
 ffmpeg -v error -y -i "$OUT/demo.mp4" -vf "fps=12,scale=1200:-1:flags=lanczos,split[a][b];[a]palettegen=stats_mode=diff[p];[b][p]paletteuse=dither=bayer:bayer_scale=5:diff_mode=rectangle" "$OUT/demo.gif"
 mkdir -p "$REPO/docs/assets"
 cp "$OUT/demo.mp4" "$OUT/demo.gif" "$REPO/docs/assets/"
