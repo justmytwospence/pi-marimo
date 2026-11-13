@@ -3,6 +3,7 @@
 ## Unreleased
 
 - The agent's changes stay marked (`c`, `d`, `u`, "agent: N new") when a background run's completion resumes the agent; only your next prompt clears them.
+- `view.icons: false` drops Nerd Font icons and symbols that some fonts lack, for terminals and recordings without a Nerd Font.
 
 ## 0.4.0
 

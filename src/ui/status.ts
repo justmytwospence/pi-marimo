@@ -3,6 +3,7 @@
 import { visibleWidth } from "@earendil-works/pi-tui";
 import type { Cell, NotebookState } from "../core/notebook.js";
 import type { FrameTheme } from "../frame.ts";
+import { iconsEnabled } from "./glyphs.js";
 import { duration } from "./time.js";
 
 export type BadgeKind = "running" | "queued" | "error" | "blocked" | "stale" | "edited" | "changed" | "new" | "disabled";
@@ -19,7 +20,7 @@ export const STATUS_STYLE: Readonly<Record<Exclude<BadgeKind, "running">, { icon
   new: { icon: "", label: "new" },
   disabled: { icon: "", label: "off" },
 };
-export const statusLabel = (kind: Exclude<BadgeKind, "running">): string => `${STATUS_STYLE[kind].icon} ${STATUS_STYLE[kind].label}`;
+export const statusLabel = (kind: Exclude<BadgeKind, "running">): string => iconsEnabled() ? `${STATUS_STYLE[kind].icon} ${STATUS_STYLE[kind].label}` : STATUS_STYLE[kind].label;
 
 export const SPINNER = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 export const spinner = (now: number): string => SPINNER[((Math.floor(now / 100) % SPINNER.length) + SPINNER.length) % SPINNER.length]!;

@@ -7,6 +7,7 @@ import { truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works
 import type { TableData } from "../core/output.js";
 import type { ColumnSummaries } from "../core/table-rpc.js";
 import type { PaneTheme } from "./outline.js";
+import { iconsEnabled } from "./glyphs.js";
 import { clean, oneLine } from "./text.js";
 
 // Strip control strings before folding whitespace (C1 controls can be whitespace too).
@@ -333,7 +334,7 @@ export function tableGrid(t: TableData, width: number, theme: PaneTheme, maxRows
       height = Math.max(height, parts.length);
     }
     for (let h = 0; h < height; h++) {
-      const selection = t.selection === "multi" ? (selected ? "☑" : "☐") : t.selection === "single" ? (selected ? "●" : "○") : "";
+      const selection = t.selection === "multi" ? (selected ? (iconsEnabled() ? "☑" : "■") : (iconsEnabled() ? "☐" : "□")) : t.selection === "single" ? (selected ? "●" : "○") : "";
       const gutter = h ? "" : `${cursor ? "▸" : " "}${selection}${first + i + 1}  `;
       const line = join((c, w) => {
         const value = valueAt(t, i, c);

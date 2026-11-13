@@ -12,7 +12,7 @@ Settings live in `marimo.json`.
   "view": {
     "code": "open", "outputs": false, "split": false, "autoSplit": true,
     "chain": { "order": "file", "follow": "manual" },
-    "lineNumbers": false, "diagnostics": "all", "showOutput": true,
+    "lineNumbers": false, "diagnostics": "all", "showOutput": true, "icons": true,
     "editor": {
       "command": "nvim",
       "options": { "tabstop": 4, "shiftwidth": 4, "expandtab": true, "ignorecase": true, "smartcase": true, "scrolloff": 3 }
@@ -39,6 +39,7 @@ Settings live in `marimo.json`.
 | `view.lineNumbers` | `false` | line numbers in source, fenced code and editor |
 | `view.diagnostics` | `"all"` | `"all"`, `"errors"`, `"warnings"` or `"none"` |
 | `view.showOutput` | `true` | show stdout and results; independent of diagnostics and `view.outputs` |
+| `view.icons` | `true` | Nerd Font icons on status badges and diagnostics; `false` shows their labels alone and draws table checkboxes as ■/□ and newlines in values as ⏎, for fonts without those symbols |
 | `view.editor.command` | `"nvim"` | Neovim executable as one nonempty string, not a shell command |
 | `view.editor.options` | see above | native allowlist only: `tabstop` and `shiftwidth` integers 1–16, `scrolloff` 0–20, and booleans `expandtab`, `ignorecase`, `smartcase` |
 | `server.command` | `[]` | how Pi starts marimo; empty means `uv run marimo` in a uv project, else `marimo` |

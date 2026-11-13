@@ -26,6 +26,7 @@ afterEach(() => {
 
 test("marimo.json: defaults without files, the project's file on top, wrong types ignored", () => {
   expect(loadConfig("marimo", DEFAULT_CONFIG, project)).toEqual(DEFAULT_CONFIG);
+  expect(DEFAULT_CONFIG.view.icons).toBe(true);
   mkdirSync(join(home, "agent"), { recursive: true });
   writeFileSync(join(home, "agent", "marimo.json"), JSON.stringify({ maxNotebooks: 5, liveCharts: false }));
   mkdirSync(join(project, ".pi"), { recursive: true });

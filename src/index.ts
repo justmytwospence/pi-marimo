@@ -67,6 +67,7 @@ import { type ChartRenderer, VegaRenderer } from "./core/vega.js";
 import { sharedPlotly } from "./core/plotly.js";
 import type { Followed } from "./core/watcher.js";
 import { loadConfig } from "./config.ts";
+import { setIcons } from "./ui/glyphs.js";
 import { DEFAULT_VIEW_PREFERENCES, SessionPreferences } from "./ui/settings.js";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
@@ -107,6 +108,8 @@ export const DEFAULT_CONFIG = {
     autoSplit: true,
     /** The run chain view (@): "file" or "run" order; "wave" turns it on when a run starts while following. */
     chain: { order: "file", follow: "manual" },
+    /** Nerd Font icons and symbols some fonts lack; false uses plain labels and common glyphs. */
+    icons: true,
   },
   execution: { command: [] as string[] },
   completion: { mode: "subscribed" },
@@ -871,6 +874,7 @@ export default function piMarimo(pi: ExtensionAPI): void {
     await watcher?.stop();
     config = normalizeExecutionConfig(loadConfig("marimo", DEFAULT_CONFIG, ctx.cwd), message => ctx.ui.notify(message, "warning"));
     preferences.configure(config.view, message => ctx.ui.notify(message, "warning"));
+    setIcons(config.view.icons !== false);
     const maxNotebooks = Math.max(1, Math.min(32, Math.floor(Number(config.maxNotebooks) || DEFAULT_CONFIG.maxNotebooks)));
     watcher = new MarimoWatcher({ io: nodeIo(), cwd: ctx.cwd, token: process.env.MARIMO_TOKEN, maxNotebooks, onChange: schedule });
     const branch = ctx.sessionManager.getBranch() as Entry[];

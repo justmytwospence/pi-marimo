@@ -2,6 +2,7 @@ import { describe, expect, test } from "vitest";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { NotebookState } from "../src/core/notebook.js";
 import { notebookLines } from "../src/ui/outline.js";
+import { setIcons } from "../src/ui/glyphs.js";
 import { STATUS_STYLE, cellBadges, fitBadges, renderBadge, spinner, statusLabel } from "../src/ui/status.js";
 
 const theme = { fg: (_: string, text: string) => text, bold: (text: string) => text };
@@ -48,6 +49,14 @@ describe("state chips", () => {
     expect(fitBadges(badges, 9, theme)).toBe("[ wait]");
     expect(fitBadges(badges, 7, theme)).toBe("");
     expect(fitBadges(badges, -1, theme)).toBe("");
+  });
+  test("view.icons false shows labels without icons", () => {
+    setIcons(false);
+    try {
+      expect(statusLabel("new")).toBe("new");
+      expect(statusLabel("error")).toBe("err");
+      for (const kind of Object.keys(STATUS_STYLE) as Array<keyof typeof STATUS_STYLE>) expect(statusLabel(kind)).not.toMatch(/[\uE000-\uF8FF]/u);
+    } finally { setIcons(true); }
   });
   test("each compact badge has a distinct Nerd Font glyph and a readable caption", () => {
     expect(Object.entries(STATUS_STYLE).map(([kind, style]) => [kind, style.icon, style.label])).toEqual([

@@ -2,6 +2,7 @@
 // severity-colored rail and the host theme's subtle tool background when available.
 import { sliceByColumn, visibleWidth } from "@earendil-works/pi-tui";
 import type { FrameTheme } from "../frame.ts";
+import { iconsEnabled } from "./glyphs.js";
 import type { Row } from "./rows.js";
 
 type Severity = "error" | "warning";
@@ -21,7 +22,9 @@ export function diagnosticPanelRows(rows: readonly Row[], severity: Severity, wi
       return padded.split(/(\x1b\[[0-9;:]*m)/u).map(run => run.startsWith("\x1b[") ? run : bg(token, run)).join("");
     } catch { return padded; }
   };
-  const icon = severity === "error" ? " ERROR" : " WARNING";
+  const glyph = severity === "error" ? "" : "";
+  const word = severity === "error" ? "ERROR" : "WARNING";
+  const icon = iconsEnabled() ? `${glyph} ${word}` : word;
   const result: Row[] = [{ text: tint(theme.fg(severity, icon)) }];
   const room = columns - visibleWidth(rail);
   for (const row of rows) {

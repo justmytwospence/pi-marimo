@@ -13,11 +13,21 @@ import { runCells } from "../src/core/kernel.js";
 import { mermaidRows, outputRows } from "../src/ui/outputs.js";
 import { detailRows } from "../src/ui/detail.js";
 import { diagnosticPanelRows } from "../src/ui/diagnostics.js";
+import { setIcons } from "../src/ui/glyphs.js";
 
 // The diagnostic panel formats already-inert terminal rows, never producer escape sequences.
 describe("tinted diagnostic panels", () => {
   const theme = { fg: (color: string, text: string) => `\x1b[${color === "error" ? 31 : 33}m${text}\x1b[0m`, bold: (text: string) => text };
   const plain = (text: string) => stripTerminalSequences(text);
+
+  test("diagnostic header drops its icon when icons are off", () => {
+    setIcons(false);
+    try {
+      const header = plain(diagnosticPanelRows([{ text: "boom" }], "error", 40, theme)[0]!.text);
+      expect(header).toContain("ERROR");
+      expect(header).not.toMatch(/[\uE000-\uF8FF]/u);
+    } finally { setIcons(true); }
+  });
 
   test("wraps text at columns without losing traceback indentation, Unicode, or row ownership", () => {
     const owner = { kind: "text", text: "" } as const;

@@ -2,6 +2,7 @@
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import type { NotebookState } from "../core/notebook.js";
 import type { FrameTheme } from "../frame.ts";
+import { iconsEnabled } from "./glyphs.js";
 import type { Row } from "./rows.js";
 import { cellTitle } from "./titles.js";
 
@@ -26,7 +27,7 @@ export function variableList(nb: NotebookState, filter = "", sort: VariableSort 
     .sort((a, b) => (sort === "type" ? compare(a.datatype, b.datatype) : sort === "definition" ? (index.get(a.definedBy ?? "") ?? Infinity) - (index.get(b.definedBy ?? "") ?? Infinity) : 0) || compare(a.name, b.name));
 }
 const fit = (text: string, width: number): string => {
-  const cut = truncateToWidth(text.replace(/\n/g, "↵"), Math.max(0, width), "…");
+  const cut = truncateToWidth(text.replace(/\n/g, iconsEnabled() ? "↵" : "⏎"), Math.max(0, width), "…");
   return cut + " ".repeat(Math.max(0, width - visibleWidth(cut)));
 };
 export function variableRows(list: VariableRow[], nb: NotebookState, theme: FrameTheme, cursor: string | undefined, width: number, filter = ""): { rows: Row[]; index: Map<string, number> } {
