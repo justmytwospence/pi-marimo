@@ -6,6 +6,7 @@
 - `view.icons: false` drops Nerd Font icons and symbols that some fonts lack, for terminals and recordings without a Nerd Font.
 - `examples/demo.py` replaces the quickstart notebook: dark charts, a headline, and table selections marked on the chart.
 - `examples/testing.py` replaces the coffee notebook: the same coverage on bike-share data, with a checklist in each section.
+- A scripted, reproducible demo video: `npm run demo`.
 
 ## 0.4.0
 

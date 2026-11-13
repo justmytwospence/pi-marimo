@@ -39,7 +39,8 @@
     "test": "vitest run",
     "prepublishOnly": "npm run check",
     "docs": "uvx --from 'mkdocs>=1.6,<2' --with 'mkdocs-material>=9.6,<10' mkdocs serve",
-    "docs:build": "uvx --from 'mkdocs>=1.6,<2' --with 'mkdocs-material>=9.6,<10' mkdocs build --strict"
+    "docs:build": "uvx --from 'mkdocs>=1.6,<2' --with 'mkdocs-material>=9.6,<10' mkdocs build --strict",
+    "demo": "bash demo/record.sh"
   },
   "peerDependencies": {
     "@earendil-works/pi-agent-core": "*",

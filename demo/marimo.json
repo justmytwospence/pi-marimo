@@ -1,0 +1,4 @@
+{
+  "view": { "split": true, "icons": false },
+  "server": { "command": ["uvx", "--from", "marimo==0.25.0", "--with", "numpy==2.5.3", "--with", "pandas==3.0.6", "--with", "plotly==7.1.0", "marimo"] }
+}

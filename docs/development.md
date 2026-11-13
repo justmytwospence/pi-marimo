@@ -18,8 +18,14 @@ Table design references (interaction ideas, not copied implementations): [Textua
 
 ## Recording the demo
 
-Charts use Kitty graphics, which VHS and asciinema cannot record, so record the real terminal.
+`npm run demo` records `docs/assets/demo.mp4` and `docs/assets/demo.gif` with [foley](https://github.com/GH-Jaider/foley), which renders the tape (`demo/demo.tape`) headlessly, Kitty graphics included. It needs `pi`, `uvx`, `ffmpeg`, `curl` and `node` on PATH, on macOS or Linux, and downloads a checksummed foley 0.1.0 into `~/.cache/pi-marimo/`.
 
-1. Ghostty, 140x40, dark theme, a fresh `pi` in a scratch copy of `examples/`.
-2. Script: `/marimo edit quickstart.py`; `ctrl+'` docks; prompt "add a weekday vs weekend comparison chart"; watch the spinner and the run chain (`@`); `c` jumps to the agent's change, `d` shows the diff, `u` reverts; `w` drives the slider and the chart updates; `t` pages and sorts the table, Space selects rows; on marimo main, show "Pi" in the browser footer and send a message from the notebook.
-3. Record with macOS screen recording, then `ffmpeg -i demo.mov -vf "fps=15,scale=1280:-1" docs/assets/demo.mp4`.
+The model is scripted (`demo/scripted-model.ts`, Pi's faux provider); the notebook (`examples/demo.py`), its kernel and pi-marimo are real. A take fails, leaving `docs/assets` untouched, when its final screen differs from `demo/expected.txt` or shows an error. After an intended change, run `UPDATE_EXPECTED=1 npm run demo`, review the beat screenshots it prints, and commit `demo/expected.txt` with the assets.
+
+Tape rules:
+
+- No Ctrl chords: foley 0.1.0 cannot send them to Pi once Pi enables the Kitty keyboard protocol.
+- Select cells with `/name` then Enter; where the cursor lands after a run depends on timing.
+- Slash commands need Enter twice: the first accepts the completion.
+- Keep `yield_ms: 0` in scripted executions, so every take takes the same path.
+- Set widgets before the agent's turn: after an agent `marimo_execute`, widget changes from the view currently fail with a 403.
