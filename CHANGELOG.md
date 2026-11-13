@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.7.0
 
 - Status chips are bare colored icons, without words or a background; the detail and the help legend spell them out. The outline's `•` mark for stale or edited cells is gone, since the chip shows it.
 

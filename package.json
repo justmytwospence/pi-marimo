@@ -1,6 +1,6 @@
 {
   "name": "pi-marimo",
-  "version": "0.6.1",
+  "version": "0.7.0",
   "description": "Live marimo notebooks in Pi: kernel state in context, and a terminal notebook view (outline and detail, docked beside the chat) where you run cells, drive widgets and tables, and read what the agent changed.",
   "type": "module",
   "license": "MIT",
