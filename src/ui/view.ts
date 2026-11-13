@@ -175,6 +175,9 @@ export interface ViewActions {
   /** The run chain view's order (default file), and whether a run turns it on while following. */
   chainOrder?: "file" | "run";
   chainFollow?: "manual" | "wave";
+  /** When following resumes on its own after you move away: "agent" (default) when the agent starts a turn or a run during
+   * one, "always" at any new run, "manual" only with `f`. Never within a few seconds of your last key, nor in an editor or prompt. */
+  autoFollow?: "agent" | "always" | "manual";
   /** A marimo table's kernel functions (search, summaries...), for driving tables. */
   table?: TableRpc;
   /** Writes a table's selection to the kernel as the browser does. */
@@ -208,11 +211,17 @@ function dockedBanner(file: string, width: number, th: FrameTheme, focused: bool
   return frameRow(th.fg("accent", th.bold(truncateToWidth(label.trim(), bodyWidth(width)))), width, th);
 }
 
+/** Following does not resume within this long of your last key in the view. */
+const FOLLOW_GRACE_MS = 5000;
+
 const message = (e: unknown): string => (e instanceof Error ? e.message : String(e));
 
 export class NotebookView implements Component, Focusable {
   private scroll = 0;
   private follow = true;
+  /** When the view last took a key, so following never resumes under your hands. */
+  private lastInput = 0;
+  private agentWasBusy = false;
   private cursor: string | undefined;
   /** Cells whose code is flipped from the default (`view.code`). */
   private codeOpen = new Set<string>();
@@ -936,6 +945,7 @@ export class NotebookView implements Component, Focusable {
 
   handleInput(data: string): void {
     if (this.closed || this.confirming) return;
+    this.lastInput = Date.now();
     this.syncConfirmation();
     if (this.ownerInput(data)) return;
     const command = commandFor(this.commandMode(), data);
@@ -1415,6 +1425,7 @@ export class NotebookView implements Component, Focusable {
         : [...kernelStateParts(f).filter(part => part !== "idle" || !native?.running), ...lensParts(f)].join(" · ");
     const dot = th.fg("dim", " · ");
     const working = this.actions.agentBusy?.() === true ? `${dot}${th.fg("accent", "agent working")}` : "";
+    const following = run && !this.follow ? `${dot}${th.fg("dim", "not following · f")}` : "";
     const servers = this.actions.servers?.(f) ?? [];
     const changes = [...nb.agentChanges.values()];
     const edited = changes.filter((c) => c.kind === "edited" || c.kind === "moved" || c.kind === "renamed").length;
@@ -1424,7 +1435,7 @@ export class NotebookView implements Component, Focusable {
     const prefs = this.preferences.snapshot();
     const context = [this.palette ? "palette" : this.help ? "help" : this.commandMode(), this.chainView && this.mode === "cells" ? `chain · ${this.chainOrder} order` : "", this.mode === "variables" ? this.variables.filter : this.mode === "packages" ? this.packages.pane.state.filter : this.filter].filter(Boolean).join(" · ");
     const visibility = [context, prefs.diagnostics !== "all" ? `diagnostics ${prefs.diagnostics === "none" ? "hidden" : prefs.diagnostics}` : "", !prefs.showOutput ? "output hidden" : ""].filter(Boolean).join(" · ");
-    const left = `${visibility ? `${th.fg("dim", visibility)}${dot}` : ""}${busy ? `${th.fg("accent", "●")} ` : errors ? `${th.fg("error", "✗")} ` : ""}${th.bold(file)}  ${[state, ...(native?.detail ?? [])].filter(Boolean).join(" · ")}${working}${agent}`;
+    const left = `${visibility ? `${th.fg("dim", visibility)}${dot}` : ""}${busy ? `${th.fg("accent", "●")} ` : errors ? `${th.fg("error", "✗")} ` : ""}${th.bold(file)}  ${[state, ...(native?.detail ?? [])].filter(Boolean).join(" · ")}${following}${working}${agent}`;
     const right = th.fg("dim", [this.actions.lastRun?.(f) ?? "", shortWhere(f.attachment.url) ?? "", servers.length ? `server ${servers.join(", ")}` : ""].filter(Boolean).join(" · "));
     const gap = inner - visibleWidth(left) - visibleWidth(right);
     return visibleWidth(right) && gap >= 2 ? `${left}${" ".repeat(gap)}${right}` : left;
@@ -1616,8 +1627,12 @@ export class NotebookView implements Component, Focusable {
       out.push(row(this.header(f, file, inner)));
       const nb = f.notebook;
       const chain = nb.chain.current;
+      const agentBusy = this.actions.agentBusy?.() === true;
+      if (agentBusy && !this.agentWasBusy) this.resumeFollow("agent");
+      this.agentWasBusy = agentBusy;
       if (chain && nb.chain.active() && chain.id !== this.lastChainId) {
         this.lastChainId = chain.id;
+        this.resumeFollow(agentBusy ? "agent" : "always");
         if (this.actions.chainFollow === "wave" && this.follow) this.chainView = true;
       }
       const cells = this.cells(f);
@@ -1896,6 +1911,15 @@ export class NotebookView implements Component, Focusable {
     this.confirming = true;
     try { return await this.actions.confirm?.(question, choices); }
     finally { this.confirming = false; }
+  }
+
+  /** Following resumes at a boundary (the agent starts a turn, a run starts) unless you are busy in the view. */
+  private resumeFollow(trigger: "agent" | "always"): void {
+    const mode = this.actions.autoFollow ?? "agent";
+    if (this.follow || mode === "manual" || (mode === "agent" && trigger !== "agent")) return;
+    if (Date.now() - this.lastInput < FOLLOW_GRACE_MS) return;
+    if (this.commandMode() !== "notebook" || this.palette || this.help || this.typing || this.sourceFocus || this.messageView) return;
+    this.follow = true;
   }
 
   private commandMode(): CommandMode {

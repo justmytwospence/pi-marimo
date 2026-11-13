@@ -108,6 +108,8 @@ export const DEFAULT_CONFIG = {
     autoSplit: true,
     /** The run chain view (@): "file" or "run" order; "wave" turns it on when a run starts while following. */
     chain: { order: "file", follow: "manual" },
+    /** When the view resumes following the running cell after you move away: "agent" (its turns and runs), "always" (any run) or "manual" (only f). */
+    follow: "agent",
     /** Nerd Font icons and symbols some fonts lack; false uses plain labels and common glyphs. */
     icons: true,
   },
@@ -585,6 +587,7 @@ export default function piMarimo(pi: ExtensionAPI): void {
       code: config.view.code === "folded" ? "folded" : "open",
       chainOrder: config.view.chain.order === "run" ? "run" : "file",
       chainFollow: config.view.chain.follow === "wave" ? "wave" : "manual",
+      autoFollow: config.view.follow === "always" || config.view.follow === "manual" ? config.view.follow : "agent",
       keybindings: keys,
       ...(suite ? { editorFactory: suite.factory } : {}),
       // Docking waits for the overlay to close, or Pi's focus restore takes focus back from the docked view.

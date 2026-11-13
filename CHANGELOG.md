@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- The view follows the running cell again on its own when the agent starts a turn or runs cells during one, after you moved away to read; it waits until you have left the keys alone for five seconds and never takes over an editor, prompt or widget. The header says `not following · f` while a run goes on without it. `view.follow` sets it: `"agent"` (default), `"always"` (any run) or `"manual"` (only `f`, as before).
+
 ## 0.5.0
 
 - Widget changes, runs and interrupts from the Pi view no longer fail with "marimo answered 403" after the agent runs Python: watching the run no longer evicts the notebook's own session.

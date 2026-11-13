@@ -35,6 +35,7 @@ Settings live in `marimo.json`.
 | `view.split` | `false` | open the view docked instead of full screen |
 | `view.autoSplit` | `true` | dock a notebook when the agent starts running it |
 | `view.chain.order` | `"file"` | the run chain's starting order: `"file"` or `"run"` |
+| `view.follow` | `"agent"` | when following the running cell resumes after you move away: `"agent"` when the agent starts a turn or runs cells during one, `"always"` at any run, `"manual"` only with `f` |
 | `view.chain.follow` | `"manual"` | `"wave"` shows the run chain when a run starts while you are following |
 | `view.lineNumbers` | `false` | line numbers in source, fenced code and editor |
 | `view.diagnostics` | `"all"` | `"all"`, `"errors"`, `"warnings"` or `"none"` |

@@ -3442,6 +3442,72 @@ test("chainFollow wave turns the chain view on at the first run while following;
   }
 });
 
+describe("following resumes on its own", () => {
+  const setup = (extra: Partial<ConstructorParameters<typeof NotebookView>[3]> = {}) => {
+    const state = { busy: false };
+    const f = chainNb();
+    const v = make(f, { agentBusy: () => state.busy, ...extra });
+    screen(v);
+    v.handleInput("j");
+    expect(v.snapshot().follow).toBe(false);
+    return { f, v, state };
+  };
+  const later = (ms: number) => vi.setSystemTime(Date.now() + ms);
+
+  test("agent: when the agent starts a turn, once you have left the keys alone", () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const { v, state } = setup();
+    try {
+      state.busy = true; screen(v);
+      expect(v.snapshot().follow).toBe(false);
+      state.busy = false; screen(v);
+      later(6000);
+      state.busy = true; screen(v);
+      expect(v.snapshot().follow).toBe(true);
+    } finally { v.dispose(); vi.useRealTimers(); }
+  });
+
+  test("agent: at a run during the agent's turn, not at your own run", () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const { f, v, state } = setup();
+    try {
+      later(6000);
+      runChain(f); screen(v);
+      expect(v.snapshot().follow).toBe(false);
+      f.notebook.apply("cell-op", { cell_id: "a", status: "idle", timestamp: 3 });
+      f.notebook.apply("cell-op", { cell_id: "c", status: "idle", timestamp: 3 });
+      state.busy = true; v.handleInput("j"); screen(v);
+      later(6000);
+      runChain(f); screen(v);
+      expect(v.snapshot().follow).toBe(true);
+      expect(v.snapshot().cursor).toBe("a");
+    } finally { v.dispose(); vi.useRealTimers(); }
+  });
+
+  test("always resumes at any run; manual never", () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    for (const [mode, expected] of [["always", true], ["manual", false]] as const) {
+      const { f, v, state } = setup({ autoFollow: mode });
+      try {
+        later(6000);
+        state.busy = true; runChain(f); screen(v);
+        expect(v.snapshot().follow).toBe(expected);
+      } finally { v.dispose(); }
+    }
+    vi.useRealTimers();
+  });
+
+  test("the header says when a run goes on without following", () => {
+    const { f, v } = setup();
+    try {
+      runChain(f);
+      expect(plain(screen(v))).toContain("not following · f");
+      v.handleInput("f");
+      expect(plain(screen(v))).not.toContain("not following");
+    } finally { v.dispose(); }
+  });
+});
+
 test("< to a cell outside the chain leaves the chain view", () => {
   const f = chainNb(); runChain(f);
   const v = make(f);
