@@ -2,6 +2,8 @@
 
 **The [marimo](https://marimo.io) notebook your agent is editing, live in your terminal beside the chat.**
 
+<video src="assets/demo.mp4" autoplay loop muted playsinline controls width="100%"></video>
+
 pi-marimo is an extension for the [Pi](https://pi.dev) coding agent. Your agent edits a marimo notebook through [marimo pair](https://docs.marimo.io/guides/generate_with_ai/marimo_pair/); you watch it run, read it, and steer it from the terminal, without leaving the conversation.
 
 - **The notebook beside the chat.** `ctrl+'` docks a notebook view next to the conversation: an outline of sections and cells, and the selected cell's output, error and code.
