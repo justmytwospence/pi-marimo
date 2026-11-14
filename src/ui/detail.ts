@@ -16,6 +16,8 @@ import { statusLabel } from "./status.js";
 import { MAX_WIDGETS, type Row, type RowOptions, diffLines } from "./rows.js";
 import { codePanelRows } from "./code.js";
 import { diagnosticPanelRows } from "./diagnostics.js";
+import { warningRows } from "./warnings.js";
+import type { ConsoleLine } from "../core/output.js";
 import { markdownRows } from "./markdown.js";
 import { cellTitle, sectionOf } from "./titles.js";
 import { oneLine } from "./text.js";
@@ -240,32 +242,48 @@ export function detailRows(nb: NotebookState, theme: FrameTheme, now: number, o:
     const warnings = diagnostics === "all" || diagnostics === "warnings";
     const diagnosticLines = lines.filter(x => x.severity === "error" ? errors : (x.severity === "warning" || (x.stream === "stderr" && x.severity !== "progress")) && warnings);
     let diagnosticPart: ReturnType<typeof part> | undefined;
-    const addDiagnostics = (textRows: readonly Row[], severity: "error" | "warning") => {
+    const addDiagnosticsNow = (textRows: readonly Row[], severity: "error" | "warning") => {
       if (!textRows.length) return;
       const p = diagnosticPart ??= part("error", cell);
       for (const r of diagnosticPanelRows(textRows, severity, width, theme)) rows.push({ ...r, part: p.index });
     };
+    // Without an error, console warnings follow the cell's output instead of pushing it down.
+    const deferWarnings = !(cell.error && errors) && !diagnosticLines.some(l => l.severity === "error");
+    const deferred: Row[] = [];
+    const flush = () => { if (deferred.length) addDiagnosticsNow(deferred.splice(0), "warning"); };
+    const addDiagnostics = (textRows: readonly Row[], severity: "error" | "warning") => {
+      if (severity === "warning" && deferWarnings) deferred.push(...textRows);
+      else addDiagnosticsNow(textRows, severity);
+    };
     let group: Row[] = cell.error && errors ? truncate(clean(cell.error), 300).split("\n").map(text => ({ text: theme.fg("error", text) })) : [];
+    let warningGroup: ConsoleLine[] = [];
     let level: "error" | "warning" | undefined = group.length ? "error" : undefined;
+    const endRun = () => {
+      if (level === "warning") addDiagnostics(warningRows(warningGroup, theme), "warning");
+      else if (level) addDiagnostics(group, level);
+      group = []; warningGroup = [];
+    };
     for (const line of diagnosticLines) {
       const severity = line.severity === "error" ? "error" : "warning";
-      if (level && severity !== level) { addDiagnostics(group, level); group = []; }
-      group.push({ text: consoleLineText(line, theme) });
+      if (level && severity !== level) endRun();
+      if (severity === "warning") warningGroup.push(line);
+      else group.push({ text: consoleLineText(line, theme) });
       level = severity;
     }
-    if (level) addDiagnostics(group, level);
+    if (level) endRun();
     rows.push(...progressRows(visibleProgress(cell.progress ?? [], o.showOutput !== false), width, theme, now));
     const diagnosticOutput = cell.output?.severity;
     if (diagnosticOutput && (diagnosticOutput === "error" ? errors : warnings)) {
-      addDiagnostics(outputRows(cell, theme, { ...sub, bar: "", showOutput: true }, limits), diagnosticOutput);
+      flush();
+      addDiagnosticsNow(outputRows(cell, theme, { ...sub, bar: "", showOutput: true }, limits), diagnosticOutput);
     }
-    if (o.showOutput === false || literal) return;
+    if (o.showOutput === false || literal) { flush(); return; }
     const stdout = lines.filter((x) => x.stream === "stdout" && (!x.severity || x.severity === "output"));
     if (stdout.length) {
       const p = part("printed", cell);
       for (const l of stdout.slice(-printed)) p.add(consoleLineText(l, theme));
     }
-    if (diagnosticOutput) return;
+    if (diagnosticOutput) { flush(); return; }
     const output = cell.output;
     const kind: Part["kind"] = output?.table ? "table" : output?.kind === "image" || output?.kind === "chart" ? "chart" : "output";
     // A part is only taken when the output has rows of its own; it would be the next one.
@@ -276,6 +294,7 @@ export function detailRows(nb: NotebookState, theme: FrameTheme, now: number, o:
       for (const r of shown) appendRendered(r, p?.index ?? parts.length, cell);
     }
     if (!output?.blocks) widgetBlock(cell);
+    flush();
   };
 
   if (o.section) {

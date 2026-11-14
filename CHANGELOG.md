@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Python warnings in a cell's detail are grouped by where they were raised: one entry per call site with its count, a short location and the message once, with the words that differ listed after it, instead of every repeat with its `warnings.warn(` line. When the cell has no error, warnings show after its output.
+
 ## 0.7.0
 
 - Status chips are bare colored icons, without words or a background; the detail and the help legend spell them out. The outline's `•` mark for stale or edited cells is gone, since the chip shows it.

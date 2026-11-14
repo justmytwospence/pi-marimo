@@ -6,7 +6,7 @@ import { tableGrid } from "../src/ui/table.js";
 import { codeRows } from "../src/ui/code.js";
 import { markdownRows } from "../src/ui/markdown.js";
 import { NotebookState } from "../src/core/notebook.js";
-import { CellConsole } from "../src/core/console.js";
+import { CellConsole, consoleSeverity } from "../src/core/console.js";
 import { htmlToText, summarizeOutput } from "../src/core/output.js";
 import { snapshot } from "../src/core/render.js";
 import { runCells } from "../src/core/kernel.js";
@@ -126,6 +126,26 @@ describe("cell output for the notebook view", () => {
     expect(cell.console).toBeUndefined();
     expect(cell.output?.text).toBe("secret-output");
   });
+});
+
+test("detail puts warnings after output when the cell has no error", () => {
+  const nb = new NotebookState();
+  nb.apply("kernel-ready", { cell_ids: ["a"], codes: ["x = 1"], names: ["model"] });
+  const cell = nb.cells.get("a")!;
+  const header = (n: string) => `/v/lib/python3.12/site-packages/sklearn/base.py:525: InconsistentVersionWarning: Trying to unpickle estimator ${n} from version 1.8.0 when using version 1.9.0.`;
+  cell.console = ["A", "B", "C", "D", "E", "F"].flatMap(n => [header(n), "  warnings.warn("]).map(text => ({ stream: "stderr" as const, text, severity: consoleSeverity("stderr", text) }));
+  cell.output = { kind: "text", text: "result" };
+  const theme = { fg: (_: string, value: string) => value, bold: (value: string) => value };
+  for (const width of [20, 46, 80]) {
+    const shown = detailRows(nb, theme, 0, { cell, width, section: false, codeOpen: false, diff: false, diagnostics: "all", showOutput: true }).rows;
+    expect(shown.every(row => visibleWidth(row.text) <= width)).toBe(true);
+    const text = shown.map(row => row.text).join("\n");
+    if (width === 80) {
+      expect(shown.findIndex(row => row.text.includes("result"))).toBeLessThan(shown.findIndex(row => row.text.includes(" WARNING")));
+      expect(text.match(/ WARNING/gu)).toHaveLength(1);
+      expect(text).toContain("×6");
+    }
+  }
 });
 
 test("detail groups error and warning streams into one focusable part without hiding diagnostic output or progress", () => {
