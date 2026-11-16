@@ -9,9 +9,9 @@
 // - Session scope: footer, Lens and context cover only the notebooks this session uses (pinned, or
 //   worked in by its agent through marimo-pair, saved with the session). Other notebooks open under
 //   the cwd, such as one another session in this checkout works in, get a one-line mention in context.
-// - Context: the notebooks' state, taken when you send a prompt, sits right
-//   after that prompt for the whole turn. It is never stored in the session, so
-//   the model sees only the current turn's copy and old copies never pile up.
+// - Context: the notebooks' state, taken when you send a prompt, is added right after it as a hidden
+//   session message (before_agent_start), only when it differs from the last one the model still
+//   sees. It is never moved or removed, so the prompt cache stays valid.
 // - /marimo: pin notebooks, follow every notebook under the cwd, or turn it off.
 // - marimo-lens (core/lens.ts): open selections enter the context and get their own status
 //   (`marimo-lens`); a new one made while Pi is idle is offered as the next prompt through
@@ -186,22 +186,22 @@ function savedMode(entries: readonly Entry[]): Mode | undefined {
 }
 
 /**
- * Where this turn's state block goes: right after the prompt that started the
- * turn (the last user message when the turn's first request is built). It stays
- * there, unchanged, for every request of the turn, so the thinking the model
- * writes after it stays valid: Anthropic drops a thinking block when anything
- * before it changes. At the next prompt the old block is gone (it is never
- * stored), which drops that earlier turn's thinking once.
+ * The text of the last pi-marimo state block the model still sees on this branch, or undefined.
+ * Walks back from the leaf; past a compaction entry only blocks at or after its firstKeptEntryId count.
  */
-export function insertState<M extends { role?: string; timestamp?: number }>(messages: M[], block: M, anchor: number | undefined): { messages: M[]; anchor: number | undefined } {
-  let at = -1;
-  if (anchor !== undefined) at = messages.findIndex((m) => m.role === "user" && m.timestamp === anchor);
-  if (at < 0) {
-    for (let i = messages.length - 1; i >= 0; i--) if (messages[i]?.role === "user") { at = i; break; }
-    anchor = at >= 0 ? messages[at]?.timestamp : undefined;
+export function lastStateText(branch: ReadonlyArray<{ id?: string; type?: string; customType?: string; content?: unknown; firstKeptEntryId?: string }>): string | undefined {
+  let keptFrom: number | undefined;
+  for (let i = branch.length - 1; i >= 0; i--) {
+    const entry = branch[i]!;
+    if (entry.type === "compaction" && keptFrom === undefined) {
+      keptFrom = branch.findIndex((e) => e.id === entry.firstKeptEntryId);
+      if (keptFrom < 0) return undefined;
+    } else if (entry.type === "custom_message" && entry.customType === MESSAGE_TYPE) {
+      if (keptFrom !== undefined && i < keptFrom) return undefined;
+      return typeof entry.content === "string" ? entry.content : undefined;
+    }
   }
-  if (at < 0) return { messages: [...messages, block], anchor };
-  return { messages: [...messages.slice(0, at + 1), block, ...messages.slice(at + 1)], anchor };
+  return undefined;
 }
 
 /** Native subscriptions leave the conversation free; no companion extension is required. */
@@ -317,8 +317,6 @@ export default function piMarimo(pi: ExtensionAPI): void {
   const lensSeen = new Set<string>();
   let offering = false;
   let busy = false;
-  // The state taken when the current turn's prompt was sent, and that prompt's timestamp.
-  let turn: { text: string; anchor?: number } | undefined;
   // A cell the agent started that outlives its turn, shown in herdr (interactive sessions only).
   const hold = new KernelHold();
   let herdr: HerdrHold | undefined;
@@ -968,8 +966,7 @@ export default function piMarimo(pi: ExtensionAPI): void {
     offering = busy = false;
   });
 
-  pi.on("before_agent_start", async (event) => {
-    turn = undefined;
+  pi.on("before_agent_start", async (event, ctx) => {
     prompts++;
     if (!watcher) return;
     watcher.refresh();
@@ -984,10 +981,12 @@ export default function piMarimo(pi: ExtensionAPI): void {
     const runningPaths = watcher.followed().filter(f => kernelBusy(f) || executionActivity(f).running).map(f => f.canonicalPath ?? f.attachment.path);
     const text = entries.length ? withExecutionHint(snapshot(entries, { refresh: "prompt" }), runningPaths) : "";
     // `context: false` affects automatic snapshots, not real tool results or completion messages.
-    turn = config.context !== false && (text || note || activeExecutions) ? { text: [text, note, activeExecutions].filter(Boolean).join("\n") } : undefined;
+    const state = config.context !== false && (text || note || activeExecutions) ? [text, note, activeExecutions].filter(Boolean).join("\n") : undefined;
     // The state is taken: the agent's changes and the user's widget values before this prompt are no longer new.
     // A completion follow-up resumes the same request, so the agent's changes stay marked.
     if (clearsAgentChanges(event)) for (const f of watcher.followed()) f.notebook.markPrompt();
+    if (!state || state === lastStateText(ctx.sessionManager.getBranch() as never)) return undefined;
+    return { message: { customType: MESSAGE_TYPE, content: state, display: false } };
   });
 
   // The notebook this session's agent works in (through marimo-pair) becomes current for this
@@ -1090,14 +1089,6 @@ export default function piMarimo(pi: ExtensionAPI): void {
   // Browser edits made after this point are flagged as new in the next turn.
   pi.on("agent_end", () => {
     for (const f of watcher?.followed() ?? []) seen.set(f.attachment.path, f.notebook.seq);
-  });
-
-  pi.on("context", (event) => {
-    if (!turn) return undefined;
-    const block = { role: "custom", customType: MESSAGE_TYPE, content: turn.text, display: false, timestamp: 0 } as (typeof event.messages)[number];
-    const placed = insertState(event.messages as Array<{ role?: string; timestamp?: number }>, block as { role?: string; timestamp?: number }, turn.anchor);
-    turn.anchor = placed.anchor;
-    return { messages: placed.messages as typeof event.messages };
   });
 
   pi.registerEntryRenderer<ChartEntry>(CHART_ENTRY, (entry, _options, theme) => {

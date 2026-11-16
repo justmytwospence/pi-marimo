@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, test, vi } from "vitest";
-import { clearsAgentChanges, insertState } from "../src/index.js";
+import { clearsAgentChanges, lastStateText } from "../src/index.js";
 import { editableMarkdown, markdownCellCode, headingsFromCode, isMarkdownCell, mdLiterals } from "../src/core/markdown.js";
 import { NotebookState } from "../src/core/notebook.js";
 import { snapshot, statusParts, shortWhere, statusText } from "../src/core/render.js";
@@ -387,16 +387,20 @@ describe("render", () => {
   });
 });
 
-describe("turn state placement", () => {
-  test("after the turn's prompt, at the same place on every request of the turn", () => {
-    const block = { role: "custom", timestamp: 0 };
-    const prompt = { role: "user", timestamp: 5 };
-    const first = insertState([{ role: "user", timestamp: 1 }, { role: "assistant" }, prompt], block, undefined);
-    expect(first.messages.indexOf(block)).toBe(3);
-    expect(first.anchor).toBe(5);
-    // Later in the turn: tool results and a steering message follow; the block stays put.
-    const later = insertState([{ role: "user", timestamp: 1 }, { role: "assistant" }, prompt, { role: "assistant" }, { role: "toolResult" }, { role: "user", timestamp: 9 }], block, first.anchor);
-    expect(later.messages.indexOf(block)).toBe(3);
+describe("last state block in context", () => {
+  const block = (id: string, text: string, customType = "pi-marimo-state") => ({ id, type: "custom_message", customType, content: text });
+  const other = (id: string) => ({ id, type: "message" });
+  test("the newest block on the branch", () => {
+    expect(lastStateText([])).toBeUndefined();
+    const branch = [other("u1"), block("a", "A"), other("a1"), block("b", "B"), other("a2")];
+    expect(lastStateText(branch)).toBe("B");
+    expect(lastStateText([...branch, block("x", "X", "other")])).toBe("B");
+  });
+  test("compaction hides blocks it dropped", () => {
+    const base = [other("u1"), block("a", "A"), other("a1"), block("b", "B"), other("a2")];
+    expect(lastStateText([...base, { id: "c", type: "compaction", firstKeptEntryId: "a2" }])).toBeUndefined();
+    expect(lastStateText([...base, { id: "c", type: "compaction", firstKeptEntryId: "b" }])).toBe("B");
+    expect(lastStateText([...base, { id: "c", type: "compaction", firstKeptEntryId: "a2" }, block("n", "N")])).toBe("N");
   });
 });
 

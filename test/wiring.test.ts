@@ -215,9 +215,16 @@ function setup(branch: unknown[] = [], mode = "tui") {
     const w = widgets.get("pi-marimo-pill") ?? [...widgets.values()][0];
     return w ? w({ requestRender: () => undefined }, { fg: (_c: string, t: string) => t, bold: (t: string) => t }).render(80).join("\n") : undefined;
   };
+  /** Runs before_agent_start as Pi would and returns the message it adds, persisting it on the branch. */
+  const prompt = async (event: unknown = {}) => {
+    let message: any;
+    for (const h of handlers.get("before_agent_start") ?? []) message = ((await h(event, ctx)) as any)?.message ?? message;
+    if (message) branch.push({ type: "custom_message", customType: message.customType, content: message.content, display: message.display });
+    return message as { customType: string; content: string; display: boolean } | undefined;
+  };
   /** Runs `/name args` as pi would. */
   const command = (name: string, args: string) => commands.get(name)!.handler(args, ctx);
-  return { pi, fire, sent, of, widgets, customs, pillText, ui, entries, statuses, handlers, command, notes, tools, messageRenderers };
+  return { pi, prompt, fire, sent, of, widgets, customs, pillText, ui, entries, statuses, handlers, command, notes, tools, messageRenderers };
 }
 
 const pair = `bash .agents/skills/marimo-pair/scripts/execute-code.sh --url ${SERVER} --file nb.py - <<'PY'\nfit()\nPY`;
@@ -449,10 +456,10 @@ test("session scope: a notebook open under the cwd gets no footer until this ses
   await until(() => x.of("bg:external").some((d) => d.state === "running"));
   // Another session's notebook: no footer, only a mention in the turn's context.
   expect(x.statuses.get("marimo")).toBeUndefined();
-  await x.fire("before_agent_start");
-  const [context] = x.handlers.get("context")!;
-  const placed = (await context!({ messages: [{ role: "user", timestamp: 1 }] }, undefined)) as { messages: Array<{ content?: string }> };
-  expect(placed.messages[1]?.content).toMatch(/^Other marimo notebooks open under this directory, not used in this session.*\/w\/nb\.py$/u);
+  const msg = await x.prompt();
+  expect(msg?.display).toBe(false);
+  expect(x.handlers.get("context")).toBeUndefined();
+  expect(msg?.content).toMatch(/^Other marimo notebooks open under this directory, not used in this session.*\/w\/nb\.py$/u);
 
   // The agent works in it: footer, and saved with the session.
   await x.fire("tool_call", { input: { command: pair } });
@@ -482,10 +489,7 @@ test("several notebooks at once: a footer line each, in file order, recent ones 
   await until(() => /prep\.py/u.test(x.statuses.get("marimo-2") ?? ""));
   expect(x.statuses.get("marimo")).toMatch(/^marimo: nb\.py · :2799 · running Data loading › Slow model fit \(\w+\) · 1 queued$/u);
   expect(x.statuses.get("marimo-2")).toMatch(/^marimo: prep\.py · :2799 · running /u);
-  await x.fire("before_agent_start");
-  const [context] = x.handlers.get("context")!;
-  const placed = (await context!({ messages: [{ role: "user", timestamp: 1 }] }, undefined)) as { messages: Array<{ content?: string }> };
-  const block = placed.messages[1]?.content ?? "";
+  const block = (await x.prompt())?.content ?? "";
   expect(block).toMatch(/=== \/w\/prep\.py \(current;[\s\S]*=== \/w\/nb\.py \(also followed;/u);
   expect(block).toContain("each is shown in full");
   // Both list their code cells, not just the ones that need attention.
@@ -508,8 +512,8 @@ test("several notebooks at once: a footer line each, in file order, recent ones 
   expect(await toolResult!({ toolCallId: "t2", content: [] }, undefined)).toBeUndefined();
 
   // After three prompts without work in prep.py, it drops to an outline; nb.py, worked in just now, stays in full.
-  for (let i = 0; i < 3; i++) await x.fire("before_agent_start");
-  const later = ((await context!({ messages: [{ role: "user", timestamp: 1 }] }, undefined)) as { messages: Array<{ content?: string }> }).messages[1]?.content ?? "";
+  let later = "";
+  for (let i = 0; i < 3; i++) later = (await x.prompt())?.content ?? later;
   expect(later).toMatch(/=== \/w\/nb\.py \(current;/u);
   expect(later.match(/ {2}Hbol: defines mo, time\n/gu)).toHaveLength(1);
   expect(later).toContain("the others are outlines");
@@ -624,14 +628,51 @@ test("marimo.json context: false keeps the notebooks out of the model's context"
     await until(() => server.feeds.length > 0);
     server.feeds.at(-1)!(untilRunning);
     await x.fire("tool_call", { input: { command: pair } });
-    await x.fire("before_agent_start");
-    const [context] = x.handlers.get("context")!;
-    expect(await context!({ messages: [{ role: "user", timestamp: 1 }] }, undefined)).toBeUndefined();
+    expect(await x.prompt()).toBeUndefined();
     await x.fire("session_shutdown");
   } finally {
     if (saved.agent === undefined) delete process.env.PI_CODING_AGENT_DIR; else process.env.PI_CODING_AGENT_DIR = saved.agent;
     if (saved.xdg === undefined) delete process.env.XDG_CONFIG_HOME; else process.env.XDG_CONFIG_HOME = saved.xdg;
   }
+});
+
+test("the state block is a persisted message: requests stay append-only", async () => {
+  const x = setup([], "rpc");
+  await x.fire("session_start");
+  await until(() => server.feeds.length > 0);
+  server.feeds.at(-1)!(untilRunning);
+  await x.fire("tool_call", { input: { command: pair } });
+  expect(x.handlers.get("context")).toBeUndefined();
+  const history: any[] = [{ role: "user", timestamp: 1 }];
+  const m1 = await x.prompt();
+  expect(m1?.customType).toBe("pi-marimo-state");
+  expect(m1?.display).toBe(false);
+  history.push({ role: "custom", ...m1, timestamp: 2 }, { role: "assistant", timestamp: 3 });
+  const request1 = [...history];
+  history.push({ role: "user", timestamp: 4 });
+  const m2 = await x.prompt();
+  if (m2) history.push({ role: "custom", ...m2, timestamp: 5 });
+  expect(history.slice(0, request1.length)).toEqual(request1);
+  await x.fire("session_shutdown");
+});
+
+test("unchanged state adds no block", async () => {
+  const x = setup([], "rpc");
+  await x.fire("session_start");
+  await until(() => server.feeds.length > 0);
+  server.feeds.at(-1)!(untilRunning);
+  await x.fire("tool_call", { input: { command: pair } });
+  vi.useFakeTimers({ toFake: ["Date"] });
+  try {
+    const first = await x.prompt();
+    await x.prompt();
+    const third = await x.prompt();
+    expect(first?.content).toBeDefined();
+    expect(third).toBeUndefined();
+  } finally {
+    vi.useRealTimers();
+  }
+  await x.fire("session_shutdown");
 });
 
 test("the agent's changes show in the view until the user's next prompt", async () => {

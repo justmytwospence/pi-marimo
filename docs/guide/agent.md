@@ -23,10 +23,10 @@ If you detach Pi in marimo, it stays detached; `/marimo attach` reattaches. `"pa
 
 ## What the agent sees
 
-When you send a prompt, pi-marimo places the state of the notebooks this session uses right after it, for every model request of that turn:
+When you send a prompt, pi-marimo adds the state of the notebooks this session uses right after it, as a hidden message the model sees:
 
 - the current notebook in full: its headings, one line per code cell with what it defines, and what needs attention (running, queued, errors, stale, edited, changed in the browser, widgets you set);
 - every other notebook the agent worked in during the last three prompts, also in full; the rest as short outlines;
 - each notebook's `marimo-pair --url … --file …` flags, and open Lens selections.
 
-The block is never stored in the session and stays in the same place during the turn, so it does not invalidate the model's thinking. `/marimo show` prints it; `"context": false` turns it off.
+The block is stored in the session like any message and never moved or removed afterwards, so the model's prompt cache and thinking stay valid. A prompt whose state is the same as the last block the model sees adds nothing. `/marimo show` prints it; `"context": false` turns it off.

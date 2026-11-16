@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- The notebook state block is now a hidden session message added after your prompt, instead of a request-only block replaced every prompt. Replacing it changed earlier parts of every request, so each prompt re-billed the whole conversation (and tripped pi-cache-guard). Unchanged state is not repeated.
+
 ## 0.8.0
 
 - Python warnings in a cell's detail are grouped by where they were raised: one entry per call site with its count, a short location and the message once, with the words that differ listed after it, instead of every repeat with its `warnings.warn(` line. When the cell has no error, warnings show after its output.
