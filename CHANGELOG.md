@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.8.1
 
 - The notebook state block is now a hidden session message added after your prompt, instead of a request-only block replaced every prompt. Replacing it changed earlier parts of every request, so each prompt re-billed the whole conversation (and tripped pi-cache-guard). Unchanged state is not repeated.
 
