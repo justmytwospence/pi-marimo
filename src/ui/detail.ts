@@ -17,7 +17,7 @@ import { MAX_WIDGETS, type Row, type RowOptions, diffLines } from "./rows.js";
 import { codePanelRows } from "./code.js";
 import { diagnosticPanelRows } from "./diagnostics.js";
 import { warningRows } from "./warnings.js";
-import type { ConsoleLine } from "../core/output.js";
+import { outputLeaves, type ConsoleLine } from "../core/output.js";
 import { markdownRows } from "./markdown.js";
 import { cellTitle, sectionOf } from "./titles.js";
 import { oneLine } from "./text.js";
@@ -172,7 +172,7 @@ export function detailRows(nb: NotebookState, theme: FrameTheme, now: number, o:
   };
 
   const orderedWidgets = (cell: Cell, indices: number[]): Row[] => indices.map(index => {
-    const w = (cell.output?.blocks?.length ? cell.output.blocks.flatMap(block => block.output.widgets ?? []) : cell.output?.widgets ?? [])[index]!;
+    const w = outputLeaves(cell.output).flatMap(leaf => leaf.widgets ?? [])[index]!;
     const focused = o.widgetFocus?.cell === cell.id && o.widgetFocus.index === index;
     const safe = { ...w, label: oneLine(w.label), tag: oneLine(w.tag), options: w.options.map(oneLine) };
     const value = widgetValue(nb, w);

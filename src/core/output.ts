@@ -64,9 +64,32 @@ export interface Widget {
   disabled: boolean;
 }
 
+export interface StatItem { label?: string; value: string; caption?: string; direction?: "increase" | "decrease"; good?: boolean }
+export type CalloutTone = "neutral" | "info" | "success" | "warn" | "danger";
+export interface OutputContainer {
+  type: "callout" | "disclosure";
+  /** callout only */
+  tone?: CalloutTone;
+  /** The callout's title, or the section's header label (plain text). */
+  title?: string;
+  /** disclosure only: whether the HTML opens it. */
+  open?: boolean;
+  body?: CellOutput;
+}
+
 export interface CellOutput {
   kind: OutputKind;
   text: string;
+  /** The same prose as `text`, as Markdown, for HTML outputs. */
+  markdown?: string;
+  /** `mo.stat` cards, one row of them. */
+  stats?: StatItem[];
+  /** Side-by-side prose columns, each as Markdown. */
+  columns?: string[];
+  /** A callout or a collapsible section around a nested output. */
+  container?: OutputContainer;
+  /** Internal: the flex row stats were found in, while merging them. */
+  statRow?: string;
   /** Authoritative document-order display; scalar fields below are compatibility projections. */
   blocks?: Array<{ id: string; output: OutputLeaf }>;
   progress?: ProgressTask[];
@@ -312,7 +335,8 @@ export function htmlTable(html: string): TableData | undefined {
   }
   const headerAt = rows.findIndex((r) => r.header);
   const header = headerAt === 0 ? rows[0]! : undefined;
-  const body = (header ? rows.slice(1) : rows).slice(0, MAX_TABLE_ROWS);
+  const all = header ? rows.slice(1) : rows;
+  const body = all.slice(0, MAX_TABLE_ROWS);
   if (!body.length) return undefined;
   const width = Math.max(header?.cells.length ?? 0, ...body.map((r) => r.cells.length));
   const columns = Array.from({ length: width }, (_, i) => header?.cells[i] ?? `col ${i + 1}`);
@@ -321,6 +345,7 @@ export function htmlTable(html: string): TableData | undefined {
     columns,
     numeric: columns.map((_, i) => cells.some((r) => r[i]) && cells.every((r) => !r[i] || NUMBER.test(r[i]!))),
     rows: cells,
+    totalRows: all.length,
   };
 }
 
@@ -379,23 +404,120 @@ export function parseWidgets(html: string): Widget[] {
 const rowCount = (n: number | "many" | undefined): string =>
   n === undefined ? "[table]" : n === "many" ? "[table, many rows]" : `[table, ${n} row${n === 1 ? "" : "s"}]`;
 
-function orderedHtml(html: string): CellOutput | undefined {
+/** Backslash-escapes what Markdown would read as syntax; at a line start, list markers too. */
+export function escapeMarkdown(text: string, lineStart: boolean): string {
+  const escaped = text.replace(/[\\`*_[\]<>#|~$!]/gu, "\\$&");
+  return lineStart ? escaped.replace(/^(\s*)(?:([-+])|(\d+)([.)]))(?= )/u, (_, space: string, bullet?: string, digits?: string, dot?: string) => bullet ? `${space}\\${bullet}` : `${space}${digits}\\${dot}`) : escaped;
+}
+
+/** Every leaf in display order, descending into container bodies (closed ones too). */
+export function outputLeaves(output: CellOutput | undefined): OutputLeaf[] {
+  if (!output) return [];
+  if (output.blocks) return output.blocks.flatMap(block => [block.output, ...outputLeaves(block.output.container?.body)]);
+  return [output, ...outputLeaves(output.container?.body)];
+}
+
+const TONES = new Set<string>(["neutral", "info", "success", "warn", "danger"]);
+const ADMONITION_TONES: Record<string, CalloutTone> = {
+  note: "info", info: "info", abstract: "info", summary: "info", question: "info",
+  tip: "success", hint: "success", success: "success", check: "success", done: "success",
+  warning: "warn", caution: "warn", attention: "warn",
+  danger: "danger", error: "danger", failure: "danger", bug: "danger",
+};
+const MAX_NESTING = 6;
+
+const attr = (node: OutputNode, name: string): string | undefined => "attrs" in node ? node.attrs.find(a => a.name === name)?.value : undefined;
+const classes = (node: OutputNode): string[] => (attr(node, "class") ?? "").split(/\s+/u).filter(Boolean);
+const elementChildren = (node: OutputNode): Array<Extract<OutputNode, { tagName: string }>> => "childNodes" in node ? node.childNodes.filter((child): child is Extract<OutputNode, { tagName: string }> => "tagName" in child) : [];
+const isFlexRow = (node: OutputNode): boolean => {
+  const style = attr(node, "style") ?? "";
+  return /display:\s*flex/iu.test(style) && !/flex-direction:\s*column/iu.test(style);
+};
+const COMPONENT_TAGS = new Set(["pre", "table", "img", "svg", "canvas", "iframe", "progress", "details"]);
+const hasComponent = (node: OutputNode): boolean => {
+  if ("tagName" in node) {
+    if (COMPONENT_TAGS.has(node.tagName) || node.tagName.startsWith("marimo-")) return true;
+    const names = classes(node);
+    if (node.tagName === "div" && (names.includes("nutpie") || names.includes("admonition"))) return true;
+  }
+  return "childNodes" in node && node.childNodes.some(hasComponent);
+};
+/** A node's HTML, text nodes included. */
+const outerHtml = (node: OutputNode): string => {
+  if ("tagName" in node) return serializeOuter(node);
+  if (node.nodeName === "#text" && "value" in node) return node.value.replace(/&/gu, "&amp;").replace(/</gu, "&lt;").replace(/>/gu, "&gt;");
+  return "";
+};
+const plainTitle = (html: string): string => htmlToText(html).replace(/\s+/gu, " ").trim();
+/** Whitespace-only newlines in `s` to at least `n` newlines at its end; empty text stays empty. */
+function ensureEnd(s: string, n: number): string {
+  if (!s.trim()) return s;
+  const base = s.replace(/\s+$/u, "");
+  const have = (s.slice(base.length).match(/\n/gu) ?? []).length;
+  return base + "\n".repeat(Math.max(have, n));
+}
+const PARAGRAPH_TAGS = /^(?:p|h[1-6]|ul|ol|blockquote|hr|section)$/u;
+const LINE_TAGS = /^(?:div|li|tr|dt|dd|summary)$/u;
+
+function statOf(props: Record<string, unknown>): StatItem {
+  const value = props.value;
+  const shown = typeof value === "number" ? value.toLocaleString("en-US") : typeof value === "boolean" ? (value ? "✓" : "✗") : typeof value === "string" ? value : value === null || value === undefined ? "" : JSON.stringify(value);
+  const direction = props.direction === "increase" || props.direction === "decrease" ? props.direction : undefined;
+  const target = props.target_direction === "decrease" ? "decrease" : "increase";
+  const text = (v: unknown) => typeof v === "string" || typeof v === "number" ? String(v) : undefined;
+  const label = text(props.label);
+  const caption = text(props.caption);
+  return { value: shown, ...(label ? { label } : {}), ...(caption ? { caption } : {}), ...(direction ? { direction, good: direction === target } : {}) };
+}
+
+function orderedHtml(html: string, scope = "", depth = 0): CellOutput | undefined {
   const blocks: NonNullable<CellOutput["blocks"]> = [];
   let residual = "";
+  let md = "";
+  let listItems = 0;
+  let noColumns = false;
+  const lists: Array<{ ordered: boolean; n: number }> = [];
+  const root = scope ? `${scope}>0` : "0";
+  const tidy = (text: string) => text.replace(/\\\n(?=[ \t]*(?:\n|$))/gu, "\n").replace(/\n{3,}/gu, "\n\n").trim();
   const flush = () => {
     const text = residual.replace(/\n{3,}/gu, "\n\n").trim();
-    if (text) blocks.push({ id: `html:text:${blocks.length}`, output: { kind: "text", text: clip(text) } });
-    residual = "";
+    const markdown = tidy(md);
+    if (text || markdown) blocks.push({ id: `html:text:${scope ? `${scope}>` : ""}${blocks.length}`, output: { kind: "text", text: clip(text), markdown: clip(markdown) } });
+    residual = ""; md = "";
   };
-  const newline = () => { residual = residual.replace(/[ \t\r\f]*$/gu, "") + "\n"; };
-  const visit = (node: OutputNode, path: string, objectId?: string) => {
+  const line = () => { if (residual.trim() && !residual.endsWith("\n")) residual = residual.replace(/[ \t\r\f]*$/gu, "") + "\n"; };
+  const paragraph = () => { residual = ensureEnd(residual, 2); };
+  const mdBreak = (n: number) => { md = ensureEnd(md, n); };
+  /** Runs `fn` with an empty Markdown buffer and returns what it wrote there; plain text carries on. */
+  const markdownOf = (fn: () => void): string => { const saved = md; md = ""; fn(); const out = md; md = saved; return out; };
+  /** A node visited into fresh buffers, for a column. */
+  const capture = (node: OutputNode, path: string, flexRow?: string): { text: string; markdown: string } => {
+    const saved = { residual, md, noColumns };
+    residual = ""; md = ""; noColumns = true;
+    visit(node, path, undefined, flexRow);
+    const out = { text: residual.replace(/\n{3,}/gu, "\n\n").trim(), markdown: tidy(md) };
+    residual = saved.residual; md = saved.md; noColumns = saved.noColumns;
+    return out;
+  };
+  const push = (id: string, output: OutputLeaf) => { flush(); blocks.push({ id, output }); };
+  const nested = (nodes: OutputNode[] | string, at: string): CellOutput | undefined =>
+    depth + 1 >= MAX_NESTING ? undefined : orderedHtml(typeof nodes === "string" ? nodes : nodes.map(outerHtml).join(""), at, depth + 1);
+  const sections = (path: string, tag: string, panels: Array<{ title: string; nodes: OutputNode[]; open: boolean }>) => {
+    panels.forEach((panel, i) => {
+      const body = nested(panel.nodes, `${path}:${i}`);
+      push(`html:${path}:${tag}:${i}`, { kind: "text", text: panel.title, container: { type: "disclosure", title: panel.title, open: panel.open, ...(body ? { body } : {}) } });
+    });
+  };
+  const visit = (node: OutputNode, path: string, objectId?: string, flexRow?: string) => {
     if (node.nodeName === "#text" && "value" in node) {
       const text = node.value.replace(/[ \t\r\n\f]+/gu, " ");
-      residual += residual.endsWith("\n") ? text.replace(/^ /u, "") : text;
+      residual += residual === "" || residual.endsWith("\n") ? text.replace(/^ /u, "") : text;
+      const lineStart = md === "" || md.endsWith("\n");
+      md += escapeMarkdown(lineStart ? text.replace(/^ /u, "") : text, lineStart);
       return;
     }
     if (!("tagName" in node)) {
-      if ("childNodes" in node) node.childNodes.forEach((child, i) => visit(child, `${path}.${i}`, objectId));
+      if ("childNodes" in node) node.childNodes.forEach((child, i) => visit(child, `${path}.${i}`, objectId, flexRow));
       return;
     }
     const tag = node.tagName;
@@ -403,11 +525,64 @@ function orderedHtml(html: string): CellOutput | undefined {
     const id = node.attrs.find(a => a.name === "object-id")?.value ?? objectId;
     const props = componentProps(node);
     const markup = () => serializeOuter(node).replace(/="([^"]*)"/gu, (_, value: string) => `="${value.replace(/>/gu, "&gt;").replace(/</gu, "&lt;")}"`);
+    const special = depth < MAX_NESTING;
     let leaf: OutputLeaf | undefined;
     if (tag === "div" && node.attrs.some(a => a.name === "class" && a.value.split(/\s+/u).includes("nutpie"))) {
       const progress = nutpieProgressFromNode(node, `nutpie:${path}`);
       if (progress) leaf = { kind: "text", text: "", progress };
     }
+    // Sections: details, accordions and tabs.
+    if (!leaf && special && tag === "details") {
+      const children = "childNodes" in node ? node.childNodes : [];
+      const summary = elementChildren(node).find(child => child.tagName === "summary");
+      sections(path, tag, [{ title: summary ? plainTitle(textContent(summary)) || "Details" : "Details", nodes: children.filter(child => child !== summary), open: node.attrs.some(a => a.name === "open") }]);
+      return;
+    }
+    if (!leaf && special && tag === "marimo-accordion") {
+      const labels = Array.isArray(props.labels) ? props.labels : [];
+      const expanded = Array.isArray(props.expanded) ? props.expanded : [];
+      sections(path, tag, elementChildren(node).map((panel, i) => ({ title: plainTitle(String(labels[i] ?? "")) || `Section ${i + 1}`, nodes: [panel], open: expanded.includes(i) })));
+      return;
+    }
+    const tabs = special && tag === "marimo-ui-element" ? elementChildren(node).find(child => child.tagName === "marimo-tabs") : undefined;
+    if (!leaf && tabs) {
+      const tabProps = componentProps(tabs);
+      const labels = Array.isArray(tabProps.tabs) ? tabProps.tabs : [];
+      const selected = Number(tabProps["initial-value"]) || 0;
+      sections(path, "marimo-tabs", elementChildren(tabs).filter(panel => attr(panel, "data-kind") === "tab").map((panel, i) => ({ title: plainTitle(String(labels[i] ?? "")) || `Tab ${i + 1}`, nodes: [panel], open: i === selected })));
+      return;
+    }
+    // Callouts: marimo's and admonitions.
+    if (!leaf && special && tag === "marimo-callout-output" && typeof props.html === "string") {
+      const kind = typeof props.kind === "string" && TONES.has(props.kind) ? props.kind as CalloutTone : "neutral";
+      const title = typeof props.title === "string" && props.title ? props.title : undefined;
+      const body = nested(props.html, path);
+      push(`html:${path}:${tag}:`, { kind: "text", text: [title, ...(body?.blocks?.map(block => block.output.text) ?? [])].filter(Boolean).join("\n"), container: { type: "callout", tone: kind, ...(title ? { title } : {}), ...(body ? { body } : {}) } });
+      return;
+    }
+    if (!leaf && special && tag === "div" && classes(node).includes("admonition")) {
+      const children = elementChildren(node);
+      const titleNode = children.find(child => classes(child).includes("admonition-title"));
+      const title = titleNode ? plainTitle(textContent(titleNode)) : undefined;
+      const tone = ADMONITION_TONES[classes(node)[1] ?? ""] ?? "neutral";
+      const body = nested(("childNodes" in node ? node.childNodes : []).filter(child => child !== titleNode), path);
+      push(`html:${path}:${tag}:`, { kind: "text", text: [title, ...(body?.blocks?.map(block => block.output.text) ?? [])].filter(Boolean).join("\n"), container: { type: "callout", tone, ...(title ? { title } : {}), ...(body ? { body } : {}) } });
+      return;
+    }
+    // Side-by-side prose.
+    const row = tag === "div" && isFlexRow(node);
+    if (!leaf && row && !noColumns && special) {
+      const children = elementChildren(node);
+      const direct = "childNodes" in node && node.childNodes.some(child => child.nodeName === "#text" && "value" in child && child.value.trim());
+      if (children.length >= 2 && !direct && !children.some(hasComponent)) {
+        const parts = children.map((child, i) => capture(child, `${path}.${i}`, path)).filter(part => part.text || part.markdown);
+        if (parts.length >= 2) {
+          push(`html:${path}:columns:`, { kind: "text", text: parts.map(part => part.text).join("\n\n"), markdown: parts.map(part => part.markdown).join("\n\n"), columns: parts.map(part => part.markdown) });
+          return;
+        }
+      }
+    }
+    const here = row ? path : flexRow;
     if (!leaf && tag === "marimo-mermaid" && typeof props.diagram === "string") leaf = { kind: "chart", text: "[Mermaid]", mermaid: [props.diagram] };
     else if (tag === "pre") {
       const code = [...outputElements(node)].find(child => child.tagName === "code");
@@ -421,7 +596,10 @@ function orderedHtml(html: string): CellOutput | undefined {
       if (parsed) leaf = { kind: "table", text: rowCount(parsed.totalRows), ...(parsed.table ? { table: { ...parsed.table, ...(id ? { objectId: id } : {}) } } : {}) };
     } else if (tag === "table") {
       const table = htmlTable(markup());
-      if (table) leaf = { kind: "table", text: rowCount(table.rows.length), table };
+      if (table) leaf = { kind: "table", text: rowCount(table.totalRows ?? table.rows.length), table };
+    } else if (tag === "marimo-stat") {
+      const stat = statOf(props);
+      leaf = { kind: "text", text: [stat.label, stat.value, stat.caption].filter(Boolean).join(" "), stats: [stat], ...(here ? { statRow: here } : {}) };
     } else if (tag === "marimo-ui-element") {
       const widgets = parseWidgets(markup());
       if (widgets.length) leaf = { kind: "widgets", text: "", widgets };
@@ -438,22 +616,96 @@ function orderedHtml(html: string): CellOutput | undefined {
     if (!leaf && ["marimo-plotly", "marimo-vega", "iframe", "svg", "canvas"].includes(tag)) leaf = { kind: "chart", text: "[interactive output: o opens the notebook]" };
     if (leaf) {
       if (leaf.progress) leaf.progress = leaf.progress.map(task => ({ ...task, id: blocks.some(block => block.output.progress?.some(previous => previous.id === task.id)) ? `${path}:${task.id}` : task.id }));
-      flush(); blocks.push({ id: `html:${path}:${tag}:${id ?? ""}`, output: leaf }); return;
+      push(`html:${path}:${tag}:${id ?? ""}`, leaf); return;
     }
-    const boundary = /^(?:p|div|li|h[1-6]|ul|ol|section|blockquote)$/u.test(tag);
-    if (boundary || tag === "br") newline();
-    if (tag !== "br") node.childNodes.forEach((child, i) => visit(child, `${path}.${i}`, id));
-    if (boundary) newline();
+    const children = () => { if ("childNodes" in node) node.childNodes.forEach((child, i) => visit(child, `${path}.${i}`, id, here)); };
+    if (tag === "br") { residual = residual.replace(/[ \t\r\f]*$/gu, "") + "\n"; md += "\\\n"; return; }
+    if (tag === "hr") { paragraph(); mdBreak(2); md += "---"; mdBreak(2); return; }
+    if (tag === "code") {
+      const code = textContent(node);
+      residual += code;
+      const longest = Math.max(0, ...(code.match(/`+/gu) ?? []).map(run => run.length));
+      const fence = "`".repeat(longest + 1);
+      md += code ? `${fence}${code.startsWith("`") || code.endsWith("`") ? ` ${code} ` : code}${fence}` : "";
+      return;
+    }
+    if (tag === "a") {
+      const href = attr(node, "href") ?? "";
+      const inner = markdownOf(children);
+      md += /^https?:\/\//iu.test(href) && inner.trim() ? `[${inner}](${href.replace(/\)/gu, "%29").replace(/\s/gu, "%20")})` : inner;
+      return;
+    }
+    const mark = tag === "strong" || tag === "b" ? "**" : tag === "em" || tag === "i" ? "*" : tag === "del" || tag === "s" || tag === "strike" ? "~~" : "";
+    if (mark) {
+      const inner = markdownOf(children);
+      const core = inner.trim();
+      const lead = inner.slice(0, inner.length - inner.trimStart().length);
+      const trail = inner.slice(inner.trimEnd().length);
+      md += core ? `${lead}${mark}${core}${mark}${trail}` : inner;
+      return;
+    }
+    const heading = /^h([1-6])$/u.exec(tag);
+    if (heading) {
+      paragraph(); mdBreak(2);
+      const inner = markdownOf(children).replace(/\s*\n\s*/gu, " ").trim();
+      md += `${"#".repeat(Number(heading[1]))} ${inner}`;
+      paragraph(); mdBreak(2);
+      return;
+    }
+    if (tag === "ul" || tag === "ol") {
+      paragraph(); mdBreak(listItems ? 1 : 2);
+      lists.push({ ordered: tag === "ol", n: Number(attr(node, "start")) || 1 });
+      children();
+      lists.pop();
+      paragraph(); mdBreak(listItems ? 1 : 2);
+      return;
+    }
+    if (tag === "li") {
+      line();
+      const list = lists.at(-1);
+      const prefix = list?.ordered ? `${list.n++}. ` : "- ";
+      listItems++;
+      const inner = tidy(markdownOf(children));
+      listItems--;
+      md = ensureEnd(md, 1);
+      md += `${prefix}${inner.split("\n").map((l, i) => i && l ? " ".repeat(prefix.length) + l : l).join("\n")}\n`;
+      line();
+      return;
+    }
+    if (tag === "blockquote") {
+      paragraph(); mdBreak(2);
+      const inner = tidy(markdownOf(children));
+      md += inner.split("\n").map(l => l ? `> ${l}` : ">").join("\n");
+      paragraph(); mdBreak(2);
+      return;
+    }
+    const paragraphTag = PARAGRAPH_TAGS.test(tag) || (tag === "span" && classes(node).includes("paragraph"));
+    const lineTag = LINE_TAGS.test(tag);
+    if (paragraphTag) { paragraph(); mdBreak(2); } else if (lineTag) { line(); mdBreak(2); }
+    children();
+    if (paragraphTag) { paragraph(); mdBreak(2); } else if (lineTag) { line(); mdBreak(2); }
   };
-  visit(parseOutputFragment(html), "0"); flush();
+  visit(parseOutputFragment(html), root, undefined); flush();
   if (!blocks.length) return undefined;
+  // Stats of one flex row become one block of cards.
+  for (let i = 0; i < blocks.length - 1;) {
+    const a = blocks[i]!.output;
+    const b = blocks[i + 1]!.output;
+    if (a.stats && b.stats && a.statRow !== undefined && a.statRow === b.statRow) {
+      a.stats = [...a.stats, ...b.stats];
+      a.text = `${a.text} · ${b.text}`;
+      blocks.splice(i + 1, 1);
+    } else i++;
+  }
+  for (const block of blocks) delete block.output.statRow;
   const result: CellOutput = { ...(blocks.find(block => block.output.kind === "text" && block.output.text)?.output ?? blocks[0]!.output), blocks };
+  const leaves = outputLeaves(result);
   for (const key of ["table", "image", "vega", "plotly"] as const) {
-    const leaf = blocks.find(b => b.output[key] !== undefined)?.output;
+    const leaf = leaves.find(b => b[key] !== undefined);
     if (leaf) Object.assign(result, { [key]: leaf[key] });
   }
   for (const key of ["widgets", "progress", "codeBlocks", "mermaid"] as const) {
-    const values = blocks.flatMap<unknown>(b => b.output[key] ?? []);
+    const values = leaves.flatMap<unknown>(b => b[key] ?? []);
     if (values.length) Object.assign(result, { [key]: values });
   }
   return result;

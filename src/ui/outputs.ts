@@ -1,10 +1,11 @@
 // A cell's output and console as rows of the notebook view: text, a table's grid, an inline image
 // (a PNG, or a Vega-Lite or Plotly chart drawn to one), or a live Plotly chart the mouse drives.
-import { Image, getCapabilities, visibleWidth, sliceByColumn, foregroundAnsi, backgroundAnsi, indexedColor, rgbColor, styleTextWithAnsi } from "@earendil-works/pi-tui";
+import { Image, getCapabilities, visibleWidth, sliceByColumn, truncateToWidth, wrapTextWithAnsi, foregroundAnsi, backgroundAnsi, indexedColor, rgbColor, styleTextWithAnsi } from "@earendil-works/pi-tui";
 import type { Cell } from "../core/notebook.js";
-import type { CellOutput, ConsoleLine } from "../core/output.js";
+import { outputLeaves, type CalloutTone, type CellOutput, type ConsoleLine, type StatItem } from "../core/output.js";
 import type { MermaidAppearance, MermaidRenderer } from "../core/mermaid.js";
 import { codePanelRows } from "./code.js";
+import { markdownRows } from "./markdown.js";
 import type { FrameTheme } from "../frame.ts";
 import { liveGeometry } from "./live-charts.js";
 import type { Row, RowOptions } from "./rows.js";
@@ -113,6 +114,51 @@ export function mermaidRows(source: string, theme: FrameTheme, opts: MermaidRowO
   return [{ text: `${pad}${theme.fg("dim", `Mermaid: ${clean(reason)}`)}`, blockId: opts.blockId }, ...sourceRows()];
 }
 
+
+const TONE_COLOR: Record<CalloutTone, "accent" | "success" | "warning" | "error" | "dim"> = { info: "accent", success: "success", warn: "warning", danger: "error", neutral: "dim" };
+const CARD_MAX = 32;
+const CARD_GAP = "    ";
+
+/** `mo.stat` cards as bands of label, value and caption lines, as many cards across as fit. */
+export function statRows(stats: StatItem[], theme: FrameTheme, width: number): string[] {
+  const room = Math.max(1, width);
+  const cards = stats.map(stat => {
+    const arrow = stat.direction ? ` ${stat.direction === "increase" ? "▲" : "▼"}` : "";
+    const value = `${stat.value}${arrow}`;
+    const w = Math.min(room, CARD_MAX, Math.max(visibleWidth(clean(stat.label ?? "")), visibleWidth(clean(value)), visibleWidth(clean(stat.caption ?? ""))));
+    return {
+      w,
+      label: stat.label ? theme.fg("dim", clean(stat.label)) : undefined,
+      value: theme.bold(clean(stat.value)) + (arrow ? theme.fg(stat.good ? "success" : "error", arrow) : ""),
+      caption: stat.caption ? theme.fg("dim", clean(stat.caption)) : undefined,
+    };
+  });
+  const bands: typeof cards[] = [];
+  let used = 0;
+  for (const card of cards) {
+    if (!bands.length || used + CARD_GAP.length + card.w > room) { bands.push([card]); used = card.w; }
+    else { bands.at(-1)!.push(card); used += CARD_GAP.length + card.w; }
+  }
+  const out: string[] = [];
+  for (const band of bands) {
+    if (out.length) out.push("");
+    const keys = (["label", "value", "caption"] as const).filter(key => band.some(card => card[key] !== undefined));
+    for (const key of keys) {
+      out.push(band.map(card => {
+        const text = truncateToWidth(card[key] ?? "", card.w, "…");
+        return text + " ".repeat(Math.max(0, card.w - visibleWidth(text)));
+      }).join(CARD_GAP).replace(/\s+$/u, ""));
+    }
+  }
+  return out;
+}
+
+const trimBlank = (rows: Row[]): Row[] => {
+  const out = [...rows];
+  while (out.length && !out.at(-1)!.text.trim() && !out.at(-1)!.blockId) out.pop();
+  return out;
+};
+
 /** The last `max` lines a cell printed. */
 export function consoleRows(cell: Cell, theme: FrameTheme, max: number): Row[] {
   return (cell.console ?? []).slice(-max).map((l) => ({ text: `${PAD}${theme.fg("dim", "▍")} ${consoleLineText(l, theme)}` }));
@@ -127,14 +173,45 @@ export function outputRows(cell: Cell, theme: FrameTheme, opts: RowOptions, limi
   const push = (text: string) => out.push({ text });
   const output = leaf ?? cell.output;
   if (output?.blocks) {
-    let widgetIndex = 0;
+    const counter = opts.widgetCounter ?? { next: 0 };
     return output.blocks.flatMap(block => {
-      const indices = (block.output.widgets ?? []).map(() => widgetIndex++);
+      const indices = (block.output.widgets ?? []).map(() => counter.next++);
       const id = `${cell.id}:${block.id}`;
-      const rendered = outputRows(cell, theme, { ...opts, blockPrefix: id }, limits, block.output);
+      const rendered = outputRows(cell, theme, { ...opts, blockPrefix: id, widgetCounter: counter }, limits, block.output);
       const widgets = indices.length ? opts.widgetRows?.(cell, indices) ?? [] : [];
-      return [...rendered, ...widgets].map(row => ({ ...row, blockId: row.blockId ?? id, output: block.output, ...(block.output.table?.objectId ? { tableObjectId: block.output.table.objectId } : {}) }));
+      return [...rendered, ...widgets].map(row => ({ ...row, blockId: row.blockId ?? id, output: row.output ?? block.output, ...(row.tableObjectId ?? block.output.table?.objectId ? { tableObjectId: row.tableObjectId ?? block.output.table!.objectId! } : {}) }));
     });
+  }
+  const avail = Math.max(1, (opts.width ?? 80) - visibleWidth(prefix));
+  if (output?.container) {
+    const { container } = output;
+    const body = container.body;
+    if (container.type === "callout") {
+      const color = TONE_COLOR[container.tone ?? "neutral"];
+      const bar = theme.fg(color, "▍");
+      if (container.title) out.push({ text: `${pad}${bar} ${theme.bold(theme.fg(color, clean(oneLine(container.title))))}` });
+      if (body) out.push(...outputRows(cell, theme, { ...opts, bar }, limits, body));
+      return out;
+    }
+    const id = opts.blockPrefix ?? `${cell.id}:disclosure`;
+    const open = opts.disclosureOpen?.(id, container.open ?? false) ?? container.open ?? false;
+    const marker = theme.fg("accent", open ? "▾" : "▸");
+    wrapTextWithAnsi(theme.bold(clean(oneLine(container.title ?? "Details"))), Math.max(1, avail - 2)).forEach((line, i) => out.push({ text: `${prefix}${i ? "  " : `${marker} `}${line}`, disclosure: id }));
+    if (open && body) out.push(...outputRows(cell, theme, { ...opts, pad: `${pad}  ` }, limits, body));
+    else if (!open && body && opts.widgetCounter) opts.widgetCounter.next += outputLeaves(body).reduce((n, leaf) => n + (leaf.widgets?.length ?? 0), 0);
+    return out;
+  }
+  if (output?.stats?.length) return statRows(output.stats, theme, avail).map(text => ({ text: `${prefix}${text}` }));
+  if (output?.columns?.length) {
+    const render = (md: string, width: number) => trimBlank(markdownRows(md, { ...opts, width, blockPrefix: opts.blockPrefix ?? cell.id })).map(row => ({ ...row, text: row.text.replace(/\s+$/u, "") }));
+    const natural = output.columns.map(md => render(md, avail));
+    const widths = natural.map(rows => Math.max(1, ...rows.map(row => visibleWidth(row.text))));
+    if (widths.reduce((a, b) => a + b, 0) + 3 * (widths.length - 1) <= avail) {
+      const columns = output.columns.map((md, i) => render(md, widths[i]!));
+      const height = Math.max(...columns.map(rows => rows.length));
+      for (let line = 0; line < height; line++) out.push({ text: `${prefix}${columns.map((rows, i) => { const text = rows[line]?.text ?? ""; return text + " ".repeat(Math.max(0, widths[i]! - visibleWidth(text))); }).join("   ").replace(/\s+$/u, "")}` });
+    } else natural.forEach((rows, i) => { if (i) out.push({ text: prefix.trimEnd() }); out.push(...rows.map(row => ({ ...row, text: `${prefix}${row.text}` }))); });
+    return out;
   }
   if (output?.progress) return progressRows(output.progress.map(task => ({ ...task, id: `output:${task.id}` })), opts.width ?? 80, theme, Date.now());
   if (output?.mermaid) return output.mermaid.flatMap((source, index) => {
@@ -184,9 +261,12 @@ export function outputRows(cell: Cell, theme: FrameTheme, opts: RowOptions, limi
       const grid = tableGrid(data, (opts.width ?? 80) - visibleWidth(prefix), theme, Math.min(limits.tableRows, Math.max(1, have)), driven.render);
       grid.lines.forEach((line, i) => out.push({ text: `${prefix}${line}`, ...(grid.rowAt[i] !== undefined ? { tableRow: grid.rowAt[i]! } : {}) }));
     }
+  } else if (output?.markdown && output.kind === "text" && !chartNote) {
+    const rows = trimBlank(markdownRows(output.markdown, { ...opts, width: avail, blockPrefix: opts.blockPrefix ?? cell.id }));
+    for (const row of rows.slice(0, limits.textLines)) out.push({ ...row, text: `${prefix}${row.text}` });
+    if (rows.length > limits.textLines) push(`${outputPrefix(opts, theme, pad, "dim")}${theme.fg("dim", `… ${rows.length - limits.textLines} more lines`)}`);
   } else if (output && !(output.kind === "widgets" && !output.text)) {
-    const text = clean(chartNote ?? output.text);
-    const lines = text.split("\n");
+    const lines = clean(chartNote ?? output.text).split("\n").flatMap(line => wrapTextWithAnsi(line, avail));
     for (const line of lines.slice(0, limits.textLines)) push(`${prefix}${output.kind === "text" || output.kind === "other" ? line : theme.fg("dim", line)}`);
     if (lines.length > limits.textLines) push(`${outputPrefix(opts, theme, pad, "dim")}${theme.fg("dim", `… ${lines.length - limits.textLines} more lines`)}`);
   }

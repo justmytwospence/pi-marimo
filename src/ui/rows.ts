@@ -37,6 +37,8 @@ export interface Row {
   tableColumns?: Array<{ column: string; start: number; end: number }>;
   tableHeader?: boolean;
   tableObjectId?: string;
+  /** A collapsible section's header: the block id its open state is kept under. */
+  disclosure?: string;
   output?: CellOutput;
   /** A line of the variables pane. */
   variable?: string;
@@ -71,6 +73,10 @@ export interface RowOptions {
   /** Runs charts live in a browser page the mouse can drive; a chart it cannot run falls back to the static image. */
   live?: LiveCharts;
   onVega?: () => void;
+  /** Whether a collapsible section is open (`initial`: what the HTML says). */
+  disclosureOpen?: (blockId: string, initial: boolean) => boolean;
+  /** Shared by the blocks of one output so widget indices run across nested sections. */
+  widgetCounter?: { next: number };
   /** The marimo table behind a cell's output, as the view drives it (its current page and cursor), when it does. */
   widgetRows?: (cell: Cell, indices: number[]) => Row[];
   /** A card for this particular table leaf, when focused. */

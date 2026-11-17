@@ -31,7 +31,7 @@ import { basename } from "./core/io.js";
 import { nodeIo } from "./core/node-io.js";
 import { HeadlessSessions, ownHeadlessSessions } from "./core/headless.js";
 import { ownExecutions, stripScratchLens } from "./core/execution.js";
-import type { CellOutput } from "./core/output.js";
+import { outputLeaves, type CellOutput } from "./core/output.js";
 import { COMPLETION_MESSAGE, EXECUTIONS_MESSAGE, ExecutionSession, normalizeExecutionConfig, registerExecutionTools } from "./executions.js";
 import { registerExecutionMessageRenderers } from "./ui/execution-render.js";
 import { EditCellService, pythonJson, type EditorSession, type SaveReceipt, type ScratchExecute } from "./core/edit-cell.js";
@@ -253,7 +253,7 @@ export default function piMarimo(pi: ExtensionAPI): void {
 
   /** Up to `max` pictures of a cell's charts, in document order, for the model to look at; `total` counts every chart leaf. */
   const chartPictures = async (out: CellOutput | undefined, max = 4): Promise<{ pngs: string[]; total: number }> => {
-    const leaves = out?.blocks?.length ? out.blocks.map((b) => b.output) : out ? [out] : [];
+    const leaves = outputLeaves(out);
     const charts = leaves.filter((l) => l.image || l.plotly || l.vega);
     const pngs: string[] = [];
     for (const leaf of charts) {

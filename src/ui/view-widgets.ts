@@ -1,7 +1,7 @@
 // The widgets mode of the notebook view (`w`): driving a cell's marimo controls from the keyboard. It owns
 // which control has focus (and a slider being dragged with the mouse); the view hosts it and draws them.
 import type { Cell } from "../core/notebook.js";
-import type { Widget } from "../core/output.js";
+import { outputLeaves, type Widget } from "../core/output.js";
 import type { Followed } from "../core/watcher.js";
 import { commandFor } from "./keys.js";
 import { MAX_WIDGETS } from "./rows.js";
@@ -18,7 +18,7 @@ export class WidgetController {
 
   /** Flatten widget leaves in output order; the indices match the rows' kernel widget indices. */
   cellWidgets(cell: Cell): Widget[] {
-    return cell.output?.blocks?.length ? cell.output.blocks.flatMap(block => block.output.widgets ?? []).slice(0, MAX_WIDGETS) : cell.output?.widgets?.slice(0, MAX_WIDGETS) ?? [];
+    return outputLeaves(cell.output).flatMap(leaf => leaf.widgets ?? []).slice(0, MAX_WIDGETS);
   }
 
   /** The widgets of the driven cell, or undefined (and widget mode ends) when they are gone. */

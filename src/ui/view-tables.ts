@@ -2,7 +2,7 @@
 // (paging, sorting, search, filters, selection, cards, copy, CSV). It owns which table has the keys and the
 // card's scroll; the per-table state lives in table-session.ts. The view hosts it and draws the table.
 import type { Cell } from "../core/notebook.js";
-import type { CellOutput, TableData } from "../core/output.js";
+import { outputLeaves, type CellOutput, type TableData } from "../core/output.js";
 import type { Followed } from "../core/watcher.js";
 import { commandFor } from "./keys.js";
 import type { Part } from "./detail.js";
@@ -28,7 +28,7 @@ export class TableController {
   sessionFor(f: Followed, cell: Cell, source?: string | CellOutput): { session: TableSession; data: TableData } | undefined {
     const id = typeof source === "string" ? source : this.active?.cell === cell.id ? this.active.objectId : undefined;
     // A supplied leaf is authoritative, including a static table without an object id.
-    const t = typeof source === "object" ? source.table : id ? [cell.output, ...(cell.output?.blocks?.map(block => block.output) ?? [])].find(output => output?.table?.objectId === id)?.table : cell.output?.table;
+    const t = typeof source === "object" ? source.table : id ? [cell.output, ...outputLeaves(cell.output)].find(output => output?.table?.objectId === id)?.table : cell.output?.table;
     if (!t?.objectId || !this.host.actions.table || f.connection !== "connected") return undefined;
     const session = tableSession(`${this.host.viewKey()}\0${t.objectId}`, cell, t);
     session.onChange = () => { if (!this.host.isClosed()) this.host.render(); };

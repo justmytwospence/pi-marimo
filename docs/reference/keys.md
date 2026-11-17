@@ -66,7 +66,7 @@ Generated from `src/ui/keys.ts`; do not edit. The `?` cheat sheet in the view sh
 | Keys | Action | Where |
 |---|---|---|
 | `F1` | help: Open help; other Vim keys remain native | editor |
-| `Enter` / `l` | edit / activate: Edit source or Markdown; activate a focused table, widget or chart | notebook |
+| `Enter` / `l` | edit / activate: Edit source or Markdown; activate a focused table, widget or chart; open or close a focused section | notebook |
 | `b` | edit source: Edit selected Python or literal Markdown inline with Neovim | notebook |
 | `u` | revert agent change: Restore the cell's code from before the agent's change, or delete a cell the agent created; asks first | notebook |
 | `F2` | save: Save only; native :w and :wq also save without running | editor |

@@ -14,7 +14,7 @@ import { Painter } from "./painter.js";
 import { type Cell, truncate } from "../core/notebook.js";
 import type { SaveReceipt } from "../core/edit-cell.js";
 import { InlineEditorManager, type InlineEditorHost } from "./inline-editor.js";
-import { summarizeOutput, type CellOutput, type TableData, type Widget } from "../core/output.js";
+import { outputLeaves, summarizeOutput, type CellOutput, type TableData, type Widget } from "../core/output.js";
 import { elapsed, shortWhere } from "../core/render.js";
 import type { Followed } from "../core/watcher.js";
 import { kernelStateParts, lensParts } from "../bg.js";
@@ -113,6 +113,7 @@ export interface ViewState {
   varScroll?: number;
   codeOffsets?: Array<[string, CodeBlockState]>;
   diagramSources?: string[];
+  disclosures?: Array<[string, boolean]>;
   sectionCodeOpen?: string[];
   sectionCodeFolded?: string[];
   focusedBlock?: string;
@@ -229,6 +230,8 @@ export class NotebookView implements Component, Focusable {
   private sectionCodeFolded = new Set<string>();
   private codeOffsets = new Map<string, CodeBlockState>();
   private diagramSources = new Set<string>();
+  /** Collapsible output sections the user opened or closed, by block id. */
+  private disclosures = new Map<string, boolean>();
   private focusedBlock: string | undefined;
   private diagramBlocks = new Set<string>();
   private readonly preferences: SessionPreferences;
@@ -437,6 +440,7 @@ export class NotebookView implements Component, Focusable {
       varSort: this.variables.sort, varDetail: this.variables.detail, varScroll: this.variables.scroll,
       codeOffsets: [...this.codeOffsets].map(([id, state]) => [id, { ...state }]),
       diagramSources: [...this.diagramSources],
+      disclosures: [...this.disclosures],
       sectionCodeOpen: [...this.sectionCodeOpen],
       sectionCodeFolded: [...this.sectionCodeFolded],
       preferences: this.preferences.snapshot(),
@@ -487,6 +491,7 @@ export class NotebookView implements Component, Focusable {
     this.variables.scroll = s.varScroll ?? 0;
     this.codeOffsets = new Map(s.codeOffsets ?? []);
     this.diagramSources = new Set(s.diagramSources ?? []);
+    this.disclosures = new Map(s.disclosures ?? []);
     this.sectionCodeOpen = new Set(s.sectionCodeOpen ?? []);
     this.sectionCodeFolded = new Set(s.sectionCodeFolded ?? []);
     this.focusedBlock = s.focusedBlock;
@@ -882,6 +887,8 @@ export class NotebookView implements Component, Focusable {
         return;
       }
     }
+    const header = this.lastDetail.find(r => r.part === this.part && r.disclosure);
+    if (header) { this.toggleDisclosure(header.disclosure!, header.output); return; }
     if (p && target) {
       switch (p.kind) {
         case "table": this.enterTable(f, target); break;
@@ -900,6 +907,10 @@ export class NotebookView implements Component, Focusable {
       return;
     }
     this.openInlineEditor(f, c);
+  }
+
+  private toggleDisclosure(id: string, output?: CellOutput): void {
+    this.disclosures.set(id, !(this.disclosures.get(id) ?? output?.container?.open ?? false));
   }
 
   private toggleCode(id: string): void {
@@ -1375,7 +1386,7 @@ export class NotebookView implements Component, Focusable {
   private chartCommand(f: Followed): void {
     const c = this.cursorCell(f);
     const focused = this.part === undefined ? undefined : this.lastParts[this.part];
-    const output = focused?.kind === "chart" ? focused.output : c?.output?.blocks?.find(block => block.output.vega || block.output.plotly)?.output ?? c?.output;
+    const output = focused?.kind === "chart" ? focused.output : outputLeaves(c?.output).find(leaf => leaf.vega || leaf.plotly) ?? c?.output;
     if (c && this.live.inspect(output)) this.note = "";
     else this.note = "Select a cell with a live chart first, then i.";
   }
@@ -1743,6 +1754,7 @@ export class NotebookView implements Component, Focusable {
           codeOffsets: this.codeOffsets,
           onReady: this.renderReady,
           diagramRows: this.diagramRows,
+          disclosureOpen: (id: string, initial: boolean) => this.disclosures.get(id) ?? initial,
           table: tableSource, tableCard, partFocus: this.part,
           ...(this.editors.owns(f) && this.editors.state ? { inlineEditor: {
             cellId: this.editors.state.cellId, kind: this.editors.state.kind,
@@ -2159,6 +2171,9 @@ export class NotebookView implements Component, Focusable {
           if (r?.tableHeader && column && this.actions.table) tf.session.toggleSort(f, this.actions.table, column, event.shift);
           else if (r?.tableRow !== undefined) { tf.session.row = r.tableRow; tf.session.card = undefined; }
         }
+      } else if (r?.disclosure) {
+        if (r.part !== undefined) this.part = r.part;
+        this.toggleDisclosure(r.disclosure, r.output);
       } else if (r?.part !== undefined && !r.widget && !r.code) {
         this.part = r.part;
         if (twice) this.activate(f);

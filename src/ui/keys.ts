@@ -63,7 +63,7 @@ export const COMMANDS: readonly Command[] = [
   command("error-previous", N, ["E"], "Navigation", "previous error"),
   command("change-next", N, ["c"], "Navigation", "next agent change"),
   command("change-previous", N, ["C"], "Navigation", "previous agent change"),
-  command("activate", N, ["enter", "l"], "Editing", "edit / activate", "Edit source or Markdown; activate a focused table, widget or chart"),
+  command("activate", N, ["enter", "l"], "Editing", "edit / activate", "Edit source or Markdown; activate a focused table, widget or chart; open or close a focused section"),
   command("edit", N, ["b"], "Editing", "edit source", "Edit selected Python or literal Markdown inline with Neovim"),
   command("fold-code", N, ["B"], "Display", "fold code", "Fold or unfold selected cell source; retained across cell and section views"),
   command("numbers", N, ["#", "f7"], "Display", "line numbers"),
