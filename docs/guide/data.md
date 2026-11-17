@@ -4,7 +4,7 @@ Drive marimo's tables and controls from the keyboard or mouse, see charts inline
 
 ## Tables
 
-`t` (or Enter on a table cell) drives a `mo.ui.table` through the table's own kernel functions, as the browser does, so paging, sorting, search and filters work on tables of any size. The table fills the detail pane with a pinned header and page-local scrollbar, a focused cell distinct from selected rows/cells, frozen columns, readable types, explicit nulls and full-value inspection. Click a cell to focus its row and column; click a header to sort (Shift-click adds a sort), or wheel through loaded rows. A static table without a live object id remains a preview, not a fake remote table. Each live table keeps its page, sort, filters and column widths until its cell reruns.
+`t` (or Enter on a table cell) drives a `mo.ui.table` through the table's own kernel functions, as the browser does, so paging, sorting, search and filters work on tables of any size. The table fills the detail pane with a pinned header and page-local scrollbar, a focused cell distinct from selected rows/cells, frozen columns, readable types, explicit nulls and full-value inspection. Click a cell to focus its row and column; click a header to sort (Shift-click adds a sort), or wheel through loaded rows. A static table without a live object id remains a preview, not a fake remote table. Each live table keeps its page, sort, filters and column widths until its cell reruns. The header and alternate rows get their own background bands across the whole row, and zeros in numeric columns are dimmed.
 
 | key | |
 |---|---|

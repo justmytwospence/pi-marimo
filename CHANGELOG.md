@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- HTML output (`mo.md`, HTML strings, pandas tables) renders as wrapped Markdown instead of cut-off plain text, with even spacing between blocks.
+- `mo.stat` cards sit side by side, callouts and admonitions get a tinted bar, prose in `hstack` columns lines up, and `<details>`, `mo.accordion` and `mo.ui.tabs` are sections that Enter or a click opens and closes.
+- Tables draw their header and alternate rows as two dedicated full-row bands instead of reusing selection and code colors, dim zeros in numeric columns, and HTML tables report their full row count.
+
 ## 0.8.2
 
 - The state block's header no longer says earlier copies are removed; the newest copy supersedes earlier ones.
