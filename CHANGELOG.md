@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.8.2
 
 - The state block's header no longer says earlier copies are removed; the newest copy supersedes earlier ones.
 
