@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.8.3
 
 - HTML output (`mo.md`, HTML strings, pandas tables) renders as wrapped Markdown instead of cut-off plain text, with even spacing between blocks.
 - `mo.stat` cards sit side by side, callouts and admonitions get a tinted bar, prose in `hstack` columns lines up, and `<details>`, `mo.accordion` and `mo.ui.tabs` are sections that Enter or a click opens and closes.
