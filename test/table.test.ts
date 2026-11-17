@@ -1,8 +1,8 @@
-import { visibleWidth } from "@earendil-works/pi-tui";
+import { rgbColor, visibleWidth } from "@earendil-works/pi-tui";
 import { expect, test } from "vitest";
 import type { TableData } from "../src/core/output.js";
 import { parseFilter } from "../src/ui/table-session.js";
-import { columnCard, layoutTable, measureColumn, rowCard, tableGrid, tableLines, tableViewport, type TableRender } from "../src/ui/table.js";
+import { columnCard, layoutTable, measureColumn, rowCard, tableBackgrounds, tableGrid, tableLines, tableViewport, type TableRender } from "../src/ui/table.js";
 
 const theme = { fg: (_: string, text: string) => text, bold: (text: string) => text };
 const plain = (s: string) => s.replace(/\x1b\[[0-9;]*m/gu, "");
@@ -192,18 +192,47 @@ test.each([false, true])("short viewports prioritize the actual column header (w
   }
 });
 
+const colored = { ...theme, colors: { text: rgbColor(200, 200, 200), accent: rgbColor(150, 100, 220) }, appearance: "dark" as const };
+const bands = tableBackgrounds(colored)!;
+
 test("header, stripe, notebook style, active cell and selection have independent styling", () => {
-  const styledTheme = { ...theme, bg: (color: string, text: string) => `\x1b[${color === "selectedBg" ? "44" : "45"}m${text}\x1b[49m` };
-  const grid = tableGrid(data({ selection: "multi-cell", cellStyles: { r1: { n: { backgroundColor: "#112233" } } } }), 70, styledTheme, 10,
+  const grid = tableGrid(data({ selection: "multi-cell", cellStyles: { r1: { n: { backgroundColor: "#112233" } } } }), 70, colored, 10,
     view({ focused: true, cursorRow: 1, cursorCol: 0, selectedCells: new Set(["r1\0n"]), filterColumns: new Set(["n"]), selectedCount: 1 }));
-  expect(grid.lines[0]).toContain("\x1b[44m");
+  expect(grid.lines[0]!.startsWith(bands.header)).toBe(true);
   expect(plain(grid.lines[0]!)).toContain("n ƒ");
   const row = grid.lines[grid.rowAt.indexOf(1)]!;
-  expect(row).toContain("\x1b[45m");
+  expect(row.startsWith(bands.stripe)).toBe(true);
   expect(row).toContain("\x1b[48;2;17;34;51m");
   expect(row).toContain("\x1b[7m");
   expect(row).toContain("\x1b[4m");
+  const even = grid.lines[grid.rowAt.indexOf(0)]!;
+  expect(even).not.toContain(bands.stripe);
+  expect(even).not.toContain(bands.header);
   expect(grid.lines.join("")).toContain("1 selected");
+});
+
+test("bands cover the gutter and the gaps, and keep their width", () => {
+  const grid = tableGrid(data(), 60, colored, 10, view());
+  const width = grid.layout.columns.at(-1)!.end;
+  for (const [index, line] of grid.lines.entries()) {
+    if (grid.rowAt[index] === 1 || index === 0) {
+      expect(visibleWidth(line)).toBe(width);
+      expect(line.endsWith("\x1b[49m")).toBe(true);
+    }
+  }
+});
+
+test("a table without theme colors draws no backgrounds", () => {
+  expect(tableBackgrounds(theme)).toBeUndefined();
+  expect(tableLines(data(), 60, theme, 10, view()).join("\n")).not.toMatch(/\x1b\[4[0-9]m|\x1b\[10[0-9]m|\x1b\[48;/u);
+});
+
+test("zeros in numeric columns are dim", () => {
+  const dimmed = { ...theme, fg: (c: string, t: string) => c === "dim" ? `<d>${t}</d>` : t };
+  const t = data({ records: [{ name: "a", n: 0, ok: true, _marimo_row_id: "r0" }, { name: "b", n: 5, ok: true, _marimo_row_id: "r1" }] });
+  const lines = tableLines(t, 60, dimmed, 10, view());
+  expect(lines.find(l => l.includes("a "))).toMatch(/<d>\s*0<\/d>/u);
+  expect(lines.find(l => l.includes("b "))).not.toMatch(/<d>\s*5<\/d>/u);
 });
 
 test("empty, loading, error and unknown totals remain honest and within dimensions", () => {
@@ -323,10 +352,10 @@ test("identical displayed column labels retain distinct raw lookups, widths and 
 });
 
 test("explicit backgrounds win over striping", () => {
-  const themed = { ...theme, bg: (_: string, text: string) => `\x1b[45m${text}\x1b[49m` };
   const t = data({ columns: ["name"], numeric: [], fieldTypes: undefined, cellStyles: { r1: { name: { backgroundColor: "#123456" } } } });
-  const grid = tableGrid(t, 40, themed, 10, view());
+  const grid = tableGrid(t, 40, colored, 10, view());
   const line = grid.lines[grid.rowAt.indexOf(1)]!;
   expect(line).toContain("\x1b[48;2;18;52;86m");
-  expect(line).not.toContain("\x1b[45m");
+  // The stripe comes back after the cell's own background ends.
+  expect(line).toContain(`\x1b[49m${bands.stripe}`);
 });

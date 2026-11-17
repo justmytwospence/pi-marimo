@@ -3,10 +3,11 @@
 // a cursor, and a footer that says which rows these are. It is drawn from a `TableData` (the page
 // marimo sent, or the one the table's `search` function returned) and a `TableRender` (the view's
 // cursor, sort and selection). Row and column cards show what a grid cell cannot.
-import { truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import { backgroundAnsi, colorToOkhsl, getTerminalColorMode, okhslColor, truncateToWidth, visibleWidth, wrapTextWithAnsi, type TerminalColorMode } from "@earendil-works/pi-tui";
 import type { TableData } from "../core/output.js";
 import type { ColumnSummaries } from "../core/table-rpc.js";
 import type { PaneTheme } from "./outline.js";
+import type { SyntaxTheme } from "./syntax.js";
 import { iconsEnabled } from "./glyphs.js";
 import { clean, oneLine } from "./text.js";
 
@@ -223,6 +224,31 @@ function styled(text: string, style: Record<string, unknown> | undefined): strin
   return out;
 }
 
+/**
+ * The table's two own backgrounds, from the theme's accent hue: a tinted one for the header and a
+ * near-neutral one for alternate rows. Undefined without theme colors, so plain themes draw none.
+ */
+export function tableBackgrounds(theme: PaneTheme, mode: TerminalColorMode = getTerminalColorMode()): { header: string; stripe: string } | undefined {
+  const colors = (theme as SyntaxTheme).colors;
+  const base = colors?.accent ?? colors?.text;
+  if (!colors || !base) return undefined;
+  try {
+    const found = colorToOkhsl(base).h;
+    const hue = Number.isFinite(found) ? found : 260;
+    const light = (theme as SyntaxTheme).appearance === "light";
+    return {
+      header: backgroundAnsi(light ? okhslColor(hue, 0.3, 0.885) : okhslColor(hue, 0.22, 0.27), mode),
+      stripe: backgroundAnsi(light ? okhslColor(hue, 0.05, 0.935) : okhslColor(hue, 0.04, 0.205), mode),
+    };
+  } catch { return undefined; }
+}
+
+/** `line` padded to `width` columns on one background; inner resets bring it back, so it shows through gaps. */
+function band(line: string, ansi: string, width: number): string {
+  const padded = line + " ".repeat(Math.max(0, width - visibleWidth(line)));
+  return `${ansi}${padded.replace(/\x1b\[(?:0|49)?m/gu, m => m + ansi)}\x1b[49m`;
+}
+
 /** A sparkline of `width` blocks over bin counts. */
 export function sparkline(counts: number[], width: number): string {
   if (!counts.length || width < 1) return "";
@@ -302,18 +328,20 @@ export function tableGrid(t: TableData, width: number, theme: PaneTheme, maxRows
   const filters = new Set(view?.filterColumns ?? []);
   const join = (cell: (column: string, width: number) => string, gutter = "") =>
     align(gutter, layout.gutter.width, "right") + layout.columns.map(c => cell(c.column, c.width)).join(SEP);
-  const background = (color: string, text: string) => theme.bg ? theme.bg(color, text) : text;
+  const bands = tableBackgrounds(theme);
+  const tableWidth = layout.columns.at(-1)?.end ?? layout.gutter.end;
+  const header = (line: string) => bands ? band(line, bands.header, tableWidth) : line;
   if (t.label) add(theme.bold(display(t.label)));
   if (t.banner) add(theme.fg("warning", display(t.banner)));
   const headerRow = lines.length;
-  add(background("selectedBg", join((c, w) => {
+  add(header(join((c, w) => {
     const mark = filters.has(c) ? " ƒ" : "";
     const label = align(display(c) + sortMark(view?.sort ?? [], c) + mark, w, justify(t, c));
     return c === active ? theme.fg("accent", underline(theme.bold(label))) : theme.bold(label);
   }, "# ")));
-  if (t.show?.types !== false && t.fieldTypes) add(background("selectedBg", join((c, w) => dim(align(display(t.fieldTypes?.[c]?.dtype ?? ""), w, "left")))));
+  if (t.show?.types !== false && t.fieldTypes) add(header(join((c, w) => dim(align(display(t.fieldTypes?.[c]?.dtype ?? ""), w, "left")))));
   if (view?.summaries) {
-    for (const n of [0, 1] as const) add(join((c, w) => dim(align(summaryCells(t, c, view.summaries!, w)[n], w, "left"))));
+    for (const n of [0, 1] as const) add(header(join((c, w) => dim(align(summaryCells(t, c, view.summaries!, w)[n], w, "left")))));
   }
   const headerRows = lines.length;
   for (let i = 0; i < shown; i++) {
@@ -342,16 +370,15 @@ export function tableGrid(t: TableData, width: number, theme: PaneTheme, maxRows
         if (value.style === "null") cell = dim(italic(cell));
         else if (value.style === "yes") cell = theme.fg("success", cell);
         else if (value.style === "no") cell = dim(cell);
-        // Apply stripes per cell so notebook backgrounds always win.
         const style = t.cellStyles?.[id]?.[c];
-        if (i % 2 && !(typeof style?.backgroundColor === "string" && hex(style.backgroundColor))) cell = background("toolPendingBg", cell);
+        if (isNumber(t, c) && typeof style?.color !== "string" && /^-?0(?:\.0+)?$/u.test(value.text)) cell = dim(cell);
         cell = styled(cell, style);
         const chosen = view?.selectedCells?.has(`${id}\0${c}`);
         if (chosen) cell = underline(theme.fg("accent", cell));
         if (cursor && c === active) cell = inverse(cell);
         return cell;
       }, cursor || selected ? theme.fg("accent", gutter) : dim(gutter));
-      add(line, i);
+      add(bands && i % 2 ? band(line, bands.stripe, tableWidth) : line, i);
     }
   }
   if (!shown) add(dim(view?.loading ? "loading…" : "no rows"));
