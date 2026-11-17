@@ -332,7 +332,7 @@ export function snapshot(entries: SnapshotEntry[], options: SnapshotOptions = {}
     `Live state of the marimo notebook${many ? "s" : ""} connected to Pi, added automatically by pi-marimo (not`,
     ...(options.refresh === "prompt"
       ? ["written by the user). Taken when the user sent their latest message and not updated during the turn;",
-        "earlier copies are removed. Check current values through marimo-pair before relying on them."]
+        "the newest copy supersedes earlier ones. Check current values through marimo-pair before relying on them."]
       : ["written by the user). It is replaced with a fresh copy on every request, so trust this over older reads."]),
     ...(many && outlines ? ["The current notebook (the one used most recently) comes first and in full; the others are outlines",
       "with only the cells that need attention."] : []),
