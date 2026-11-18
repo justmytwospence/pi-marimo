@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.8.5
+
+- 0.8.4 was not published (its release check failed). Pi starts about 0.4 s faster with pi-marimo: its modules import each other by their `.ts` paths (Pi's loader resolved every `.js` specifier by failing first), and the Neovim client and shiki load on first use.
+
 ## 0.8.4
 
 - Pi starts about 0.4 s faster with pi-marimo: its modules import each other by their `.ts` paths (Pi's loader resolved every `.js` specifier by failing first), and the Neovim client and shiki load on first use.
