@@ -364,7 +364,7 @@ export default function piMarimo(pi: ExtensionAPI): void {
   const executions = new ExecutionSession(pi, {
     command: (f, settings, cwd) => executionCommand({ execution: settings.execution, server: config.server }, cwd, ownServers().find(f.attachment.url)),
     // The official CLI uses the already selected session; do not create/retry a mutation on another kernel.
-    acquireTarget: async (f) => ({ url: f.attachment.url, sessionId: f.attachment.sessionId }),
+    acquireTarget: async (f) => ({ url: f.attachment.url, sessionId: f.attachment.sessionId, ...(f.attachment.pairSessionId ? { pairSessionId: f.attachment.pairSessionId } : {}) }),
     engage: (f) => {
       if (!watcher) return;
       const before = watcher.engaged().length;

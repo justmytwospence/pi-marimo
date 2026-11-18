@@ -7,7 +7,8 @@ import { stripVTControlCharacters } from "node:util";
 import { ExecutionWaveObserver, type WaveSnapshot } from "./execution-observer.ts";
 import { sameServer } from "./touch.ts";
 
-export interface ExecutionTarget { url: string; path: string; canonicalPath: string; sessionId: string }
+/** `pairSessionId`, when set, is what the CLI's `--session` gets (marimo 0.25.2+); `sessionId` stays the identity. */
+export interface ExecutionTarget { url: string; path: string; canonicalPath: string; sessionId: string; pairSessionId?: string }
 export interface ExecutionOwner { sessionId: string; anchorId: string }
 export type ExecutionState = "starting" | "running" | "reconnecting" | "succeeded" | "failed" | "interrupted" | "unknown";
 export interface ExecutionRecord {
@@ -532,7 +533,7 @@ export class ExecutionHost {
       } catch { /* CLI remains authoritative if read-only evidence cannot attach. */ }
       if (spec.isCurrent && !spec.isCurrent()) throw new Error("Notebook target changed or kernel is busy. Nothing was submitted.");
       const [bin, ...prefix] = spec.command;
-      const child = this.spawn(bin!, [...prefix, "pair", "execute", "--url", spec.target.url, "--session", spec.target.sessionId, "--code-file", "-", "--stream"],
+      const child = this.spawn(bin!, [...prefix, "pair", "execute", "--url", spec.target.url, "--session", spec.target.pairSessionId ?? spec.target.sessionId, "--code-file", "-", "--stream"],
         { cwd: spec.cwd, shell: false, detached: process.platform !== "win32", stdio: ["pipe", "pipe", "pipe"] });
       entry.child = child;
       this.children.add(child);

@@ -9,6 +9,8 @@ export interface Attachment {
   sessionId: string;
   path: string;
   notebookId?: string;
+  /** The session id `marimo pair execute --session` takes, when marimo reports one apart from `sessionId`. */
+  pairSessionId?: string;
 }
 
 export const STATE_TAG = "marimo_notebook_state";

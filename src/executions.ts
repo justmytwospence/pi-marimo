@@ -45,7 +45,7 @@ export interface ExecutionDependencies {
   /** Apply explicit argv, remembered own-server argv/cwd, then serverCommand fallback. */
   command(followed: Followed, config: ExecutionConfig, cwd: string): { command: string[]; cwd: string };
   /** Existing writable-target path; may reuse followed.attachment without opening a new consumer. */
-  acquireTarget(followed: Followed): Promise<{ url: string; sessionId: string }>;
+  acquireTarget(followed: Followed): Promise<{ url: string; sessionId: string; pairSessionId?: string }>;
   engage(followed: Followed): void;
   host?: () => ExecutionHost;
   id?: () => string;
@@ -225,7 +225,8 @@ export class ExecutionSession {
     const acquired = await this.deps.acquireTarget(f);
     if (!isCurrent()) throw new Error("Notebook session changed or kernel is busy; nothing was submitted.");
     this.assertNotBusy(f);
-    const target = { ...original, url: acquired.url, sessionId: acquired.sessionId };
+    const { pairSessionId: _attached, ...rest } = original;
+    const target: ExecutionTarget = { ...rest, url: acquired.url, sessionId: acquired.sessionId, ...(acquired.pairSessionId ? { pairSessionId: acquired.pairSessionId } : {}) };
     const command = this.deps.command(f, this.config, ctx.cwd);
     const id = (this.deps.id ?? randomUUID)();
     const owner = this.register(id, target);

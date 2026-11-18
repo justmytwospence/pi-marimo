@@ -156,6 +156,16 @@ test("factory registers three Type.Object native tools but initializes no host u
   expect(x.observers).toEqual([]);
 });
 
+test("marimo 0.25.2: the CLI gets the stable pair session id, while the socket id stays the target's identity", async () => {
+  const x = setup(); x.start(); x.register();
+  x.followed[0]!.attachment.pairSessionId = "sess-stable";
+  await x.tool("marimo_execute", { code: "print(1)", yield_ms: 0 });
+  expect(x.spawns.at(-1)?.args).toEqual(["pair", "execute", "--url", "http://localhost:2799", "--session", "sess-stable", "--code-file", "-", "--stream"]);
+  expect(x.acquireTarget).toHaveBeenCalledWith(x.followed[0]);
+  expect(x.followed[0]!.attachment.sessionId).toBe("kernel");
+  x.children[0]!.finish();
+});
+
 test("delayed official execution survives unrelated turns and sends exactly one native follow-up", async () => {
   const x = setup(); x.start(); x.register();
   const result = await x.tool("marimo_execute", { code: "SECRET_SOURCE()", yield_ms: 0 });

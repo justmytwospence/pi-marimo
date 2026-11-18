@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- `marimo_execute` works on marimo 0.25.2: it passes `marimo pair execute` the stable session id marimo 0.25.2 reports (`sess-…`), not the page's socket id, which that CLI rejects with "No session", so every execution ended as "outcome unknown".
+
 ## 0.8.5
 
 - 0.8.4 was not published (its release check failed). Pi starts about 0.4 s faster with pi-marimo: its modules import each other by their `.ts` paths (Pi's loader resolved every `.js` specifier by failing first), and the Neovim client and shiki load on first use.
