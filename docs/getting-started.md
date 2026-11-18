@@ -18,7 +18,7 @@ Docking the notebook beside the chat needs `"tuiMode": "fullscreen"` in Pi's set
 
 ## A 60-second tour
 
-The repository ships a small bike-share notebook with a station dropdown, a smoothing slider, a live Plotly chart and a table whose selected days are marked on the chart: [`examples/demo.py`](https://github.com/justmytwospence/pi-marimo/blob/main/examples/demo.py). Its dependencies are declared in the file. Download it, then start Pi next to it:
+The repository ships a small bike-share notebook with a station dropdown, a smoothing slider, a row of stat cards, a live Plotly chart and a table whose selected days are marked on the chart: [`examples/demo.py`](https://github.com/justmytwospence/pi-marimo/blob/main/examples/demo.py). Its dependencies are declared in the file. Download it, then start Pi next to it:
 
 ```sh
 pi
@@ -27,7 +27,7 @@ pi
 1. In Pi, open it: `/marimo edit demo.py`. Pi starts a marimo server if none is running; no browser is needed.
 2. Press `ctrl+'`. The notebook docks beside the chat. `ctrl+]` switches between the chat and the notebook, and `?` lists every key.
 3. Press `r` on a cell to run it, or `A` twice to run them all. `w` drives the controls. In the table, `t` enters it and Space selects days; the chart marks them.
-4. Ask the agent: "compare weekdays and weekends". Watch the cell run; press `c` to jump to what it changed, `d` for the diff, `u` to revert.
+4. Ask the agent: "how do weekends compare?". Watch the cell run; press `c` to jump to what it changed, `d` for the diff, `u` to revert.
 
 !!! tip
     A notebook you already have open in the browser (started with `marimo edit --no-token`) is followed automatically when it is under Pi's working directory.

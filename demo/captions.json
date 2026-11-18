@@ -1,11 +1,12 @@
 [
   { "title": "pi-marimo", "body": "A live marimo notebook beside Pi's chat. Keys pressed appear below the window." },
   { "title": "/marimo edit demo.py", "body": "Starts a marimo server and docks the notebook beside the chat. No browser." },
-  { "title": "A A  ·  run all", "body": "Every cell runs. The outline shows each cell's state; outputs render in the terminal." },
-  { "title": "/  ·  find a cell", "body": "Jump to a cell by name. Plotly charts draw as real images." },
+  { "title": "A A  ·  run all", "body": "Every cell runs. Stat cards, tables and live Plotly charts render in the terminal." },
+  { "title": "a  ·  ask the agent", "body": "It edits the notebook through marimo pair; the cells it touches are marked as it works." },
+  { "title": "The agent sees its chart", "body": "marimo_chart shows the chart in the chat and hands the agent its picture." },
   { "title": "w  ·  drive widgets", "body": "Move the slider from the keyboard; the chart reruns." },
   { "title": "t  ·  tables", "body": "Page, sort and select rows. Space selects days, and the chart marks them." },
-  { "title": "a  ·  ask the agent", "body": "Ask about the selected cell. The agent edits the notebook through marimo pair while you watch." },
-  { "title": "c  ·  the agent's change", "body": "Jump to the cell the agent created; it is marked new." },
-  { "title": "d  ·  the diff", "body": "See exactly what the agent wrote. u would revert it." }
+  { "title": "c  ·  the agent's changes", "body": "Jump between the cells the agent touched: one new, one changed." },
+  { "title": "d  ·  the diff", "body": "See exactly what the agent rewrote, and which cells rerun." },
+  { "title": "u  ·  undo", "body": "Revert and run puts the cell back as it was." }
 ]

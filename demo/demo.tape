@@ -9,7 +9,7 @@ Set Shell bash
 Set Width 1400
 Set Height 800
 Set FontSize 14
-Set TypingSpeed 45ms
+Set TypingSpeed 35ms
 Set Framerate 30
 Set WaitTimeout 120s
 
@@ -18,15 +18,15 @@ Type "./launch.sh"
 Enter
 Wait+Screen /scripted/
 Show
-Sleep 2500ms
+Sleep 2s
 
 # Open the notebook docked beside the chat, and run it.
 Hide
 Insert
 Show
-Sleep 2s
+Sleep 1200ms
 Type "/marimo edit demo.py"
-Sleep 400ms
+Sleep 300ms
 Enter
 Sleep 300ms
 Enter
@@ -35,35 +35,52 @@ Sleep 1s
 Hide
 Insert
 Show
-Sleep 2s
+Sleep 1200ms
 # demo: show A A
 Type "AA"
-Sleep 3s
-Wait+Screen /demo\.py  idle/
-Sleep 1s
-Hide
-Insert
-Show
 Sleep 2s
+Wait+Screen /demo\.py  idle/
+Sleep 500ms
 # demo: show /
 Type "/"
 Type "rides_chart"
 Sleep 300ms
 Enter
-Sleep 2500ms
+Sleep 1800ms
 Screenshot beat1_chart.png
+
+# Ask the agent from the chart cell; it edits one cell and adds another.
+Hide
+Insert
+Show
+Sleep 1200ms
+# demo: show a
+Type "a"
+Sleep 500ms
+Type "how do weekends compare?"
+Sleep 400ms
+# demo: show Enter
+Enter
+Wait+Screen /look at the chart/
+Screenshot beat2_running.png
+Hide
+Insert
+Show
+Wait+Screen /sits below/
+Sleep 2s
+Screenshot beat3_agent.png
 
 # Drive the slider.
 Hide
 Insert
 Show
-Sleep 2s
+Sleep 1200ms
 # demo: show /
 Type "/"
 Type "smoothing_control"
 Sleep 300ms
 Enter
-Sleep 800ms
+Sleep 700ms
 # demo: show w
 Type "w"
 Sleep 600ms
@@ -78,23 +95,23 @@ Type "/"
 Type "rides_chart"
 Sleep 300ms
 Enter
-Sleep 2500ms
-Screenshot beat2_smoothed.png
+Sleep 1800ms
+Screenshot beat4_smoothed.png
 
 # Select two days in the table; the chart marks them.
 Hide
 Insert
 Show
-Sleep 2s
+Sleep 1200ms
 # demo: show /
 Type "/"
 Type "daily_table"
 Sleep 300ms
 Enter
-Sleep 1s
+Sleep 800ms
 # demo: show t
 Type "t"
-Sleep 800ms
+Sleep 700ms
 # demo: show j j
 Type "jj"
 # demo: show Space
@@ -105,7 +122,7 @@ Type "jjj"
 # demo: show Space
 Space
 Sleep 1200ms
-Screenshot beat3_table.png
+Screenshot beat5_table.png
 # demo: show Esc
 Escape
 Sleep 400ms
@@ -114,43 +131,44 @@ Type "/"
 Type "rides_chart"
 Sleep 300ms
 Enter
-Sleep 3s
-Screenshot beat4_marked.png
+Sleep 1800ms
+Screenshot beat6_marked.png
 
-# Ask the agent from the chart cell.
+# The agent's changes: the new chart, then the changed headline and its diff.
 Hide
 Insert
 Show
-Sleep 2s
-# demo: show a
-Type "a"
-Sleep 600ms
-Type "compare weekdays and weekends"
-Sleep 500ms
-# demo: show Enter
-Enter
-Wait+Screen /more rides than weekday/
-Sleep 1500ms
-Screenshot beat5_agent.png
-
-# Jump to its change, then its diff.
-Hide
-Insert
-Show
-Sleep 2s
+Sleep 1200ms
 # demo: show c
 Type "c"
-Sleep 3s
-Screenshot beat6_change.png
-# Hide the output so the diff has room.
+Sleep 2s
+Screenshot beat7_new.png
+# demo: show c
+Type "c"
+Sleep 2s
+Screenshot beat8_changed.png
 Hide
 Insert
 Show
-Sleep 2s
-# demo: show \
-Type `\`
-Sleep 800ms
+Sleep 1200ms
 # demo: show d
 Type "d"
-Sleep 3s
-Screenshot beat7_diff.png
+Sleep 2s
+Screenshot beat9_diff.png
+
+# Undo it.
+Hide
+Insert
+Show
+Sleep 1200ms
+# demo: show u
+Type "u"
+Sleep 1500ms
+Screenshot beat10_confirm.png
+# demo: show ↓ ↓
+Down 2
+Sleep 600ms
+# demo: show Enter
+Enter
+Sleep 2s
+Screenshot beat11_reverted.png

@@ -10,7 +10,7 @@
 
 import marimo
 
-__generated_with = "0.25.0"
+__generated_with = "0.25.2"
 app = marimo.App(width="medium")
 
 
@@ -89,8 +89,12 @@ def station_rides(rides, station):
 
 @app.cell
 def headline(mo, station, station_rides):
-    _peak = station_rides.groupby(station_rides.index.hour).mean().idxmax()
-    mo.md(f"**{station.value}**: {int(station_rides.sum()):,} rides in four weeks, busiest at {_peak:02d}:00.")
+    _hourly = station_rides.groupby(station_rides.index.hour).mean()
+    mo.hstack([
+        mo.stat(f"{int(station_rides.sum()):,}", label="Rides", caption=f"{station.value}, four weeks"),
+        mo.stat(f"{_hourly.idxmax():02d}:00", label="Busiest hour", caption=f"{_hourly.max():.0f} rides on average"),
+        mo.stat(f"{station_rides.mean():.0f}", label="Rides per hour", caption="every hour of the day"),
+    ], justify="start", gap=2)
     return
 
 
