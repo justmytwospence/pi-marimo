@@ -1,35 +1,46 @@
-                                                               │ Notebook demo.py · ctrl+] chat
-                                                               │ notebook · demo.py  idle · agent: 1 new
-                                                               │      ├ station_control                                               1 input
-                                                               │      │ smoothing_control                                             1 input
-▍ marimo · weekday_chart · demo.py                             │     Overview
-                                                               │      ├ station_rides
-                                                               │ ▌    ● headline
-                                                               │        rides_chart                                                     chart
-                                                               │        weekday_chart                                                       +
-                                                               │     Days
-                                                               │        daily_table                                                      28×3
-                                                               │
-                                                               │ headline · City bikes › Overview                         ran AGO · N ms
-                                                               │
-                                                               │ Rides                 Busiest hour           Rides per hour
-                                                               │ 8,967                 10:00                  54
-                                                               │ Harbor, four weeks    82 rides on average    every hour of the day
-                                                               ▸
-                                                               │   ▾ python →
-                                                               │
-                                                               │   _hourly = station_rides.groupby(station_rides.index.hour).mean()
-                                                               │   mo.hstack([
-  hover, drag to zoom, wheel · /marimo inspect drives it from t│       mo.stat(f"{int(station_rides.sum()):,}", label="Rides", caption=f"{s
-                                                               │       mo.stat(f"{_hourly.idxmax():02d}:00", label="Busiest hour", caption=
- At Harbor, weekend hours carry about 35% more rides than      │       mo.stat(f"{station_rides.mean():.0f}", label="Rides per hour", capti
- weekday hours, and the whole distribution shifts up, not only │   ], justify="start", gap=2)
- the peaks. The headline shows the lift, and weekday_chart     │
- sits below rides_chart.                                       │
-                                                               │ uses mo, station, station_rides
-───────────────────────────────────────────────────────────────│
-                                                               │
-───────────────────────────────────────────────────────────────│
- ○ demo.py:PORT · Python request succeeded; notebook descen...│
-/private/tmp/pi-marimo-demo                                    │ Reverted headline and started it.
-FOOTER│ r run cell · ? help · O cell · 9/14 · ! diagnostics · \ output · # lines
+                                                                                        │ Notebook demo.py · ctrl+] chat
+                                                                                        │ notebook · demo.py  idle · agent: 1 new
+                                                                                        │    ┌ imports                        headline · City bikes › Overview                   ran AGO · N ms
+                                                                                        │   City bikes
+                                                                                        │      │ rides_data                   Rides                 Busiest hour           Rides per hour
+                                                                                        │     Controls                        8,967                 10:00                  54
+                                                                                        │      ├ station_control    1 input   Harbor, four weeks    82 rides on average    every hour of the day
+                                                                                        │      │ smoothing_control  1 input
+                                                                                        │     Overview                          ▾ python →
+                                                                                        │      ├ station_rides
+                                                                                        │ ▌    ● headline                       _hourly = station_rides.groupby(station_rides.index.hour).mean()
+                                                                                        │        rides_chart          chart     mo.hstack([
+                                                                                        │        weekday_chart            +         mo.stat(f"{int(station_rides.sum()):,}", label="Rides", captio
+                                                                                        │     Days                                  mo.stat(f"{_hourly.idxmax():02d}:00", label="Busiest hour", ca
+                                                                                        │        daily_table           28×3         mo.stat(f"{station_rides.mean():.0f}", label="Rides per hour",
+▍ marimo · weekday_chart · demo.py                                                      │        selection_summary              ], justify="start", gap=2)
+                                                                                        │
+                                                                                        │
+                                                                                        │                                     uses mo, station, station_rides
+                                                                                        │
+                                                                                        │
+                                                                                        │
+                                                                                        ▸
+                                                                                        │
+                                                                                        │
+                                                                                        │
+                                                                                        │
+                                                                                        │
+                                                                                        │
+                                                                                        │
+                                                                                        │
+                                                                                        │
+                                                                                        │
+                                                                                        │
+  hover, drag to zoom, wheel · /marimo inspect drives it from the keyboard              │
+                                                                                        │
+ At Harbor, weekend hours carry about 35% more rides than weekday hours, and the whole  │
+ distribution shifts up, not only the peaks. The headline shows the lift, and           │
+ weekday_chart sits below rides_chart.                                                  │
+                                                                                        │
+────────────────────────────────────────────────────────────────────────────────────────│
+                                                                                        │
+────────────────────────────────────────────────────────────────────────────────────────│
+ ○ demo.py:PORT · Python request succeeded; notebook descendants may still be runnin...│
+/private/tmp/pi-marimo-demo                                                             │ Reverted headline and started it.
+FOOTER│ r run cell · ? help · O cell · 9/14 · ! diagnostics · \ output · # lines · ctrl+p command palette

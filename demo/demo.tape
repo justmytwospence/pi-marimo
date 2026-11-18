@@ -1,4 +1,6 @@
 # The demo video. Run through `npm run demo` (demo/record.sh), which stages /tmp/pi-marimo-demo.
+# The window is wide enough (about 190 columns) for the notebook pane to show its outline beside
+# the detail; narrower, the outline stacks above it.
 # foley v0.1.0 cannot send Ctrl chords to Pi, so the tape never uses them; cells are selected with /name.
 # Insert inside Hide/Show cues the next caption. `# demo: show <keys>` puts the next command's keys on
 # screen; other typing (commands, cell names, the prompt) stays off it. demo/annotate.py draws both.
@@ -6,8 +8,8 @@ Output take.mp4
 Output take.cast
 Output demo.txt
 Set Shell bash
-Set Width 1400
-Set Height 800
+Set Width 1900
+Set Height 1000
 Set FontSize 14
 Set TypingSpeed 35ms
 Set Framerate 30

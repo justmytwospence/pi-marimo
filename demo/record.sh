@@ -63,14 +63,14 @@ elif ! diff -u "$REPO/demo/expected.txt" <(normalize "$OUT/demo.txt"); then
 fi
 
 uvx -q --with pillow==13.0.0 python "$REPO/demo/annotate.py" "$OUT/take.mp4" "$OUT/take.cast" "$REPO/demo/demo.tape" "$REPO/demo/captions.json" "$FONT" "$OUT/demo.mp4"
-ffmpeg -v error -y -i "$OUT/demo.mp4" -vf "fps=12,scale=1200:-1:flags=lanczos,split[a][b];[a]palettegen=stats_mode=diff[p];[b][p]paletteuse=dither=bayer:bayer_scale=5:diff_mode=rectangle" "$OUT/demo.gif"
-# Stills for the docs home page, cropped from the tape's beat screenshots (2800x1600): the chat pane
+ffmpeg -v error -y -i "$OUT/demo.mp4" -vf "fps=12,scale=1600:-1:flags=lanczos,split[a][b];[a]palettegen=stats_mode=diff[p];[b][p]paletteuse=dither=bayer:bayer_scale=5:diff_mode=rectangle" "$OUT/demo.gif"
+# Stills for the docs home page, cropped from the tape's beat screenshots (3800x2000): the chat pane
 # for the agent's chart, the notebook pane for the rest.
-still() { ffmpeg -v error -y -i "$OUT/$1.png" -vf "crop=$3,scale=1000:-1:flags=lanczos" "$OUT/$2.png"; }
-still beat3_agent demo-agent 1160:1000:100:250
-still beat6_marked demo-reactive 1420:1340:1270:110
-still beat5_table demo-table 1420:1340:1270:110
-still beat9_diff demo-diff 1420:1340:1270:110
+still() { ffmpeg -v error -y -i "$OUT/$1.png" -vf "crop=$3,scale=1200:-1:flags=lanczos" "$OUT/$2.png"; }
+still beat3_agent demo-agent 1580:940:100:680
+still beat6_marked demo-reactive 1980:1760:1720:110
+still beat5_table demo-table 1980:1760:1720:110
+still beat9_diff demo-diff 1980:1760:1720:110
 mkdir -p "$REPO/docs/assets"
 cp "$OUT/demo.mp4" "$OUT/demo.gif" "$OUT/demo.json" "$OUT/demo-agent.png" "$OUT/demo-reactive.png" "$OUT/demo-table.png" "$OUT/demo-diff.png" "$REPO/docs/assets/"
 echo "demo: docs/assets/demo.mp4, demo.gif, demo.json and four stills updated; beat screenshots in $OUT"
