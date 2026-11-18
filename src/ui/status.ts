@@ -16,7 +16,7 @@ export const STATUS_STYLE: Readonly<Record<Exclude<BadgeKind, "running">, { icon
   blocked: { icon: "", plain: "⊘", label: "blocked" },
   stale: { icon: "", plain: "↻", label: "stale" },
   edited: { icon: "", plain: "✎", label: "edited" },
-  changed: { icon: "", plain: "✦", label: "changed by agent" },
+  changed: { icon: "", plain: "±", label: "changed by agent" },
   new: { icon: "", plain: "+", label: "created by agent" },
   disabled: { icon: "", plain: "–", label: "disabled" },
 };

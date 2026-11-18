@@ -3,6 +3,7 @@
 ## Unreleased
 
 - `marimo_execute` works on marimo 0.25.2: it passes `marimo pair execute` the stable session id marimo 0.25.2 reports (`sess-…`), not the page's socket id, which that CLI rejects with "No session", so every execution ended as "outcome unknown".
+- Without Nerd Font icons (`view.icons: false`), the "changed by agent" chip is `±` instead of `✦`, which common monospace fonts such as JetBrains Mono lack.
 
 ## 0.8.5
 

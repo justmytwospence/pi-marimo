@@ -66,7 +66,7 @@ describe("state chips", () => {
     const styles = Object.values(STATUS_STYLE);
     expect(new Set(styles.map(({ icon }) => icon)).size).toBe(8);
     expect(new Set(styles.map(({ plain }) => plain)).size).toBe(8);
-    expect(Object.values(STATUS_STYLE).map(({ plain }) => plain).join("")).toBe("◌✗⊘↻✎✦+–");
+    expect(Object.values(STATUS_STYLE).map(({ plain }) => plain).join("")).toBe("◌✗⊘↻✎±+–");
     for (const kind of Object.keys(STATUS_STYLE) as Array<keyof typeof STATUS_STYLE>) expect(visibleWidth(statusIcon(kind))).toBe(1);
     const { nb, cell } = setup();
     cell.error = "SomeExceptionName: long exception";
