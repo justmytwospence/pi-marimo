@@ -135,13 +135,14 @@ export class NeovimSession {
   }
   private async start(): Promise<void> {
     const prefs = normalizeViewPreferences({ editor: { command: this.config.command ?? "nvim", options: this.config.options } });
+    // Loaded here, not at module scope: the client and its logger cost ~25 ms at every Pi startup.
+    // Before spawning, so no await sits between spawn and the error listener below.
+    const { attach } = await import("neovim");
     this.proc = spawn(prefs.editor.command, ["--embed", "--clean", "-n", "-i", "NONE"], { shell: false, stdio: ["pipe", "pipe", "pipe"] });
     this.proc.stderr?.resume();
     const unavailable = new Promise<never>((_, reject) => this.proc.once("error", error => { this.failed = true; reject(error); }));
     // The official client's logger is inside options (not the top-level attach object).
     const noop = (() => undefined) as any;
-    // Loaded here, not at module scope: the client and its logger cost ~25 ms at every Pi startup.
-    const { attach } = await import("neovim");
     this.client = attach({ proc: this.proc, options: { logger: { info: noop, warn: noop, error: noop, debug: noop, level: "silent" } } });
     this.client.on("notification", (name: string, args: any[]) => {
       if (name === "redraw") this.config.onRedraw?.(args);
