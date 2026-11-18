@@ -40,3 +40,8 @@
   font-size: 0.75rem;
   color: var(--md-default-fg-color--light);
 }
+/* Stills in the home page's feature cards. */
+.md-typeset .grid.cards img {
+  border-radius: 4px;
+  margin-bottom: 0.4em;
+}

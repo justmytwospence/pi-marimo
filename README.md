@@ -4,7 +4,9 @@
 
 **The [marimo](https://marimo.io) notebook your agent is editing, live in your terminal beside the chat.**
 
-![The agent adds a weekday vs weekend chart while the notebook runs beside the chat](docs/assets/demo.gif)
+![The agent compares weekends in a notebook that runs beside the chat, then the user reverts one change](docs/assets/demo.gif)
+
+[Watch it with captions and a scrub bar](https://justmytwospence.github.io/pi-marimo/).
 
 pi-marimo is an extension for the [Pi](https://pi.dev) coding agent. Your agent edits the notebook through [marimo pair](https://docs.marimo.io/guides/generate_with_ai/marimo_pair/); you watch it run, read it and steer it from the terminal, docked beside the conversation. You need the browser much less.
 
