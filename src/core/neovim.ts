@@ -1,5 +1,5 @@
 import { spawn, type ChildProcess } from "node:child_process";
-import { attach, type NeovimClient } from "neovim";
+import type { NeovimClient } from "neovim";
 import { decodeKittyPrintable, isKeyRelease, parseKey } from "@earendil-works/pi-tui";
 import { normalizeViewPreferences, type EditorOptions } from "../ui/settings.ts";
 
@@ -140,6 +140,8 @@ export class NeovimSession {
     const unavailable = new Promise<never>((_, reject) => this.proc.once("error", error => { this.failed = true; reject(error); }));
     // The official client's logger is inside options (not the top-level attach object).
     const noop = (() => undefined) as any;
+    // Loaded here, not at module scope: the client and its logger cost ~25 ms at every Pi startup.
+    const { attach } = await import("neovim");
     this.client = attach({ proc: this.proc, options: { logger: { info: noop, warn: noop, error: noop, debug: noop, level: "silent" } } });
     this.client.on("notification", (name: string, args: any[]) => {
       if (name === "redraw") this.config.onRedraw?.(args);

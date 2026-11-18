@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Pi starts about 0.4 s faster with pi-marimo: its modules import each other by their `.ts` paths (Pi's loader resolved every `.js` specifier by failing first), and the Neovim client and shiki load on first use.
+
 ## 0.8.3
 
 - HTML output (`mo.md`, HTML strings, pandas tables) renders as wrapped Markdown instead of cut-off plain text, with even spacing between blocks.

@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { colorToHex, foregroundAnsi, getTerminalColorMode, parseColor, styleText, type Color } from "@earendil-works/pi-tui";
-import { bundledLanguages, bundledLanguagesInfo, createHighlighter, type BundledLanguage, type Highlighter } from "shiki";
-import type { FrameTheme } from "../frame.js";
+import type { BundledLanguage, Highlighter } from "shiki";
+import type { FrameTheme } from "../frame.ts";
 
 export type SyntaxTheme = FrameTheme & { colors?: Readonly<Record<string, Color>>; appearance?: "dark" | "light" };
 /** Specific punctuation only: a blanket rule overrides strings, comments and markup. */
@@ -32,6 +32,9 @@ function syntaxRules(colors: Readonly<Record<string, Color>>) {
 /** One runtime owns this lazy service; render never waits on a grammar or WASM. */
 export class SyntaxHighlighter {
   private highlighter?: Promise<Highlighter>;
+  /** Shiki itself loads on the first request, not at Pi startup (~20 ms). */
+  private shiki?: typeof import("shiki");
+  private shikiLoad?: Promise<void>;
   private loads = new Map<string, Promise<void>>();
   private cache = new Map<string, { lines: readonly string[]; bytes: number }>();
   private bytes = 0;
@@ -44,6 +47,16 @@ export class SyntaxHighlighter {
   request(code: string, language: string, theme: SyntaxTheme, onReady: () => void = () => {}): readonly string[] {
     const plain = code.split("\n");
     if (this.disposed || !theme.colors || Buffer.byteLength(code) > 4 * 1024 * 1024) return plain;
+    const shiki = this.shiki;
+    if (!shiki) {
+      this.shikiLoad ??= import("shiki").then(module => { this.shiki = module; }, (error: unknown) => {
+        this.diagnostic(`Syntax highlighting unavailable (${error instanceof Error ? error.message : "shiki failed to load"})`);
+      });
+      // Once shiki is in, this same request starts the grammar load and calls onReady when highlighted.
+      void this.shikiLoad.then(() => { if (!this.disposed && this.shiki) this.request(code, language, theme, onReady); });
+      return plain;
+    }
+    const { bundledLanguages, bundledLanguagesInfo, createHighlighter } = shiki;
     const name = language.toLowerCase().trim();
     const lang = (bundledLanguagesInfo.find(info => info.id === name || info.aliases?.includes(name))?.id ?? name) as BundledLanguage;
     if (!(lang in bundledLanguages) || this.diagnosed.has(lang)) return plain;
