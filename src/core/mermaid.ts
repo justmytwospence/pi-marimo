@@ -2,9 +2,9 @@ import { createHash } from "node:crypto";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import type { CdpClient } from "./cdp.js";
-import { sharedChrome } from "./chrome.js";
-import type { Geometry } from "./live.js";
+import type { CdpClient } from "./cdp.ts";
+import { sharedChrome } from "./chrome.ts";
+import type { Geometry } from "./live.ts";
 
 export type MermaidAppearance = "light" | "dark";
 export type MermaidState = { status: "rendering" } | { status: "ready"; png: string } | { status: "failed"; reason: string };

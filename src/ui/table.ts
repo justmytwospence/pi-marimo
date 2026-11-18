@@ -4,12 +4,12 @@
 // marimo sent, or the one the table's `search` function returned) and a `TableRender` (the view's
 // cursor, sort and selection). Row and column cards show what a grid cell cannot.
 import { backgroundAnsi, colorToOkhsl, getTerminalColorMode, okhslColor, truncateToWidth, visibleWidth, wrapTextWithAnsi, type TerminalColorMode } from "@earendil-works/pi-tui";
-import type { TableData } from "../core/output.js";
-import type { ColumnSummaries } from "../core/table-rpc.js";
-import type { PaneTheme } from "./outline.js";
-import type { SyntaxTheme } from "./syntax.js";
-import { iconsEnabled } from "./glyphs.js";
-import { clean, oneLine } from "./text.js";
+import type { TableData } from "../core/output.ts";
+import type { ColumnSummaries } from "../core/table-rpc.ts";
+import type { PaneTheme } from "./outline.ts";
+import type { SyntaxTheme } from "./syntax.ts";
+import { iconsEnabled } from "./glyphs.ts";
+import { clean, oneLine } from "./text.ts";
 
 // Strip control strings before folding whitespace (C1 controls can be whitespace too).
 // Only producer labels/values cross this boundary; identifiers and rendered ANSI stay raw.

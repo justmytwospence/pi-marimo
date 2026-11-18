@@ -1,9 +1,9 @@
 // Presentation of retained execution evidence only. Never consult a live session.
 import { keyHint, type ExtensionAPI, type Theme, type ToolRenderers } from "@earendil-works/pi-coding-agent";
 import { Text, truncateToWidth, type Component } from "@earendil-works/pi-tui";
-import { basename } from "../core/io.js";
-import { elapsed } from "../core/render.js";
-import { clean, oneLine } from "./text.js";
+import { basename } from "../core/io.ts";
+import { elapsed } from "../core/render.ts";
+import { clean, oneLine } from "./text.ts";
 
 type State = "starting" | "running" | "reconnecting" | "succeeded" | "failed" | "interrupted" | "unknown";
 type Tone = "accent" | "success" | "error" | "warning" | "dim";

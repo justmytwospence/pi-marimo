@@ -1,6 +1,6 @@
 // Single source of truth for notebook dispatch, help and compact footer tokens.
 import { decodeKittyPrintable, isKeyRelease, matchesKey, parseKey, visibleWidth } from "@earendil-works/pi-tui";
-import type { ViewPreferences } from "./settings.js";
+import type { ViewPreferences } from "./settings.ts";
 
 export type CommandMode = "notebook" | "variables" | "packages" | "table" | "widget" | "chart" | "editor" | "help" | "message";
 export interface Command {

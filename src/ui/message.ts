@@ -1,6 +1,6 @@
 import { wrapTextWithAnsi } from "@earendil-works/pi-tui";
-import { commandFor } from "./keys.js";
-import { clean } from "./text.js";
+import { commandFor } from "./keys.ts";
+import { clean } from "./text.ts";
 
 export interface MessageState { text: string; scroll: number }
 export function messagePreview(text: string | undefined, width: number, available: number): string[] {

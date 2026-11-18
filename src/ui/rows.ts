@@ -3,15 +3,15 @@
 // selected cell's detail detail.ts.
 import { generateDiffString, renderDiff } from "@earendil-works/pi-coding-agent";
 import { sliceByColumn } from "@earendil-works/pi-tui";
-import type { SyntaxHighlighter, SyntaxTheme } from "./syntax.js";
-import type { CodeBlockState } from "./code.js";
-import { markdownRows } from "./markdown.js";
-import type { Geometry } from "../core/live.js";
-import type { Cell, NotebookState } from "../core/notebook.js";
-import type { CellOutput, TableData } from "../core/output.js";
-import type { ChartRenderer, VegaRenderer } from "../core/vega.js";
-import type { LiveCharts } from "./live-charts.js";
-import type { TableRender } from "./table.js";
+import type { SyntaxHighlighter, SyntaxTheme } from "./syntax.ts";
+import type { CodeBlockState } from "./code.ts";
+import { markdownRows } from "./markdown.ts";
+import type { Geometry } from "../core/live.ts";
+import type { Cell, NotebookState } from "../core/notebook.ts";
+import type { CellOutput, TableData } from "../core/output.ts";
+import type { ChartRenderer, VegaRenderer } from "../core/vega.ts";
+import type { LiveCharts } from "./live-charts.ts";
+import type { TableRender } from "./table.ts";
 
 /** Widgets listed under a cell, at most. */
 export const MAX_WIDGETS = 8;

@@ -1,5 +1,5 @@
 import { sliceByColumn, visibleWidth } from "@earendil-works/pi-tui";
-import type { Row, RowOptions } from "./rows.js";
+import type { Row, RowOptions } from "./rows.ts";
 
 export interface CodeBlockState { offset: number }
 export interface CodeOptions extends RowOptions {

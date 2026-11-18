@@ -1,16 +1,16 @@
 // The table mode of the notebook view (`t`): driving a `mo.ui.table` through marimo's own table functions
 // (paging, sorting, search, filters, selection, cards, copy, CSV). It owns which table has the keys and the
 // card's scroll; the per-table state lives in table-session.ts. The view hosts it and draws the table.
-import type { Cell } from "../core/notebook.js";
-import { outputLeaves, type CellOutput, type TableData } from "../core/output.js";
-import type { Followed } from "../core/watcher.js";
-import { commandFor } from "./keys.js";
-import type { Part } from "./detail.js";
-import { orderedColumns } from "./table.js";
-import { type TableSession, parseFilter, tableSession } from "./table-session.js";
-import { oneLine } from "./text.js";
-import { cellTitle } from "./titles.js";
-import type { ViewHost } from "./view-host.js";
+import type { Cell } from "../core/notebook.ts";
+import { outputLeaves, type CellOutput, type TableData } from "../core/output.ts";
+import type { Followed } from "../core/watcher.ts";
+import { commandFor } from "./keys.ts";
+import type { Part } from "./detail.ts";
+import { orderedColumns } from "./table.ts";
+import { type TableSession, parseFilter, tableSession } from "./table-session.ts";
+import { oneLine } from "./text.ts";
+import { cellTitle } from "./titles.ts";
+import type { ViewHost } from "./view-host.ts";
 
 const message = (e: unknown): string => (e instanceof Error ? e.message : String(e));
 

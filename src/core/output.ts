@@ -2,10 +2,10 @@
 // last output as text (HTML stripped, images named), its table's first page and its widgets, and
 // the current terminal console display.
 import { serializeOuter } from "parse5";
-import type { OutputNode } from "./html.js";
-import { progressFromNode, type ProgressTask } from "./progress.js";
-import { nutpieProgressFromNode } from "./sampler.js";
-import { componentProps, outputElements, parseOutputFragment, textContent } from "./html.js";
+import type { OutputNode } from "./html.ts";
+import { progressFromNode, type ProgressTask } from "./progress.ts";
+import { nutpieProgressFromNode } from "./sampler.ts";
+import { componentProps, outputElements, parseOutputFragment, textContent } from "./html.ts";
 
 export type OutputKind = "text" | "table" | "image" | "chart" | "widgets" | "other";
 

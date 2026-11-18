@@ -1,9 +1,9 @@
 // A notebook's widgets in the view: one line each (a slider's bar, a dropdown's choice, ...), how a
 // key changes one, and the sender that coalesces quick changes (holding → on a slider) into one call
 // to marimo's set_ui_element_value.
-import type { NotebookState } from "../core/notebook.js";
-import { truncate } from "../core/notebook.js";
-import type { Widget } from "../core/output.js";
+import type { NotebookState } from "../core/notebook.ts";
+import { truncate } from "../core/notebook.ts";
+import type { Widget } from "../core/output.ts";
 import type { FrameTheme } from "../frame.ts";
 import { visibleWidth } from "@earendil-works/pi-tui";
 

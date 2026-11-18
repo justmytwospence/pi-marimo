@@ -1,10 +1,10 @@
 // The live charts of a notebook view: which expanded outputs have a running page, the latest frame of
 // each, and where on screen each is drawn so the mouse can reach it.
 import { allocateImageId, getCellDimensions, matchesKey, type TuiMouseEvent } from "@earendil-works/pi-tui";
-import type { CellOutput } from "../core/output.js";
-import { type ChromeHost, sharedChrome } from "../core/chrome.js";
-import { type Geometry, LiveChart, type Pointer } from "../core/live.js";
-import type { Painter } from "./painter.js";
+import type { CellOutput } from "../core/output.ts";
+import { type ChromeHost, sharedChrome } from "../core/chrome.ts";
+import { type Geometry, LiveChart, type Pointer } from "../core/live.ts";
+import type { Painter } from "./painter.ts";
 
 /** What a live page must do for the view (LiveChart does; tests stand in). */
 export interface LivePage {

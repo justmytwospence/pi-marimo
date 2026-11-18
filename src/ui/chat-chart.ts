@@ -2,9 +2,9 @@
 // sandboxed browser, frames drawn in place), shown under a one-line caption. The mouse over it goes
 // to the page; `/marimo inspect` drives the latest one from the keyboard.
 import { type Component, Image, type TuiMouseEvent, type TuiMouseEventResult, getCapabilities, getPngDimensions, truncateToWidth } from "@earendil-works/pi-tui";
-import type { CellOutput } from "../core/output.js";
-import { LiveCharts, liveGeometry } from "./live-charts.js";
-import { Painter } from "./painter.js";
+import type { CellOutput } from "../core/output.ts";
+import { LiveCharts, liveGeometry } from "./live-charts.ts";
+import { Painter } from "./painter.ts";
 
 /** What the transcript keeps for a chart: enough to draw it again after a restart. */
 export interface ChartEntry {

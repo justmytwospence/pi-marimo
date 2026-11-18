@@ -5,9 +5,9 @@
 // macOS, `xdg-open` elsewhere), and other terminals (herdr, in regular mode) do the same with it.
 import { spawn } from "node:child_process";
 import { getCapabilities, hyperlink } from "@earendil-works/pi-tui";
-import { basename } from "./core/io.js";
-import { shortWhere, statusText } from "./core/render.js";
-import type { Waiting } from "./core/watcher.js";
+import { basename } from "./core/io.ts";
+import { shortWhere, statusText } from "./core/render.ts";
+import type { Waiting } from "./core/watcher.ts";
 
 /** Where a waiting notebook opens: the server's home page serves its one notebook. */
 export const waitingUrl = (w: Pick<Waiting, "url">): string => `${w.url}/`;

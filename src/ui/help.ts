@@ -1,8 +1,8 @@
 // Searchable notebook controls, sourced exclusively from the command registry.
 import { matchesKey, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import type { FrameTheme } from "../frame.ts";
-import { COMMANDS, GROUPS, commandFor } from "./keys.js";
-import { type BadgeKind, statusIcon } from "./status.js";
+import { COMMANDS, GROUPS, commandFor } from "./keys.ts";
+import { type BadgeKind, statusIcon } from "./status.ts";
 
 export interface HelpState {
   group: string;

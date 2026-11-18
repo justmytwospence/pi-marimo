@@ -1,8 +1,8 @@
 // A live chart: the figure runs in a page of the sandboxed browser (chrome.ts), pointer events from
 // the terminal go in as real mouse events, and each change comes back as a PNG for the view to draw.
 // The page is sized to the cells the image covers, so a cell position maps straight to a pixel.
-import type { ChromeHost } from "./chrome.js";
-import type { CdpClient } from "./cdp.js";
+import type { ChromeHost } from "./chrome.ts";
+import type { CdpClient } from "./cdp.ts";
 
 export interface Geometry {
   /** The image's size in terminal cells, and a cell's size in physical pixels. */

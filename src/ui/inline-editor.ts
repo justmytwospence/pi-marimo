@@ -1,11 +1,11 @@
 import { matchesKey } from "@earendil-works/pi-tui";
-import { NeovimSession, type NeovimOpenOptions, type NeovimExit, type BufferSnapshot } from "../core/neovim.js";
-import type { SaveReceipt } from "../core/edit-cell.js";
-import { editableMarkdown, markdownCellCode } from "../core/markdown.js";
-import type { Followed } from "../core/watcher.js";
-import { NeovimGrid, renderNeovimGrid } from "./neovim-grid.js";
-import type { ViewPreferences } from "./settings.js";
-import { diffLines } from "./rows.js";
+import { NeovimSession, type NeovimOpenOptions, type NeovimExit, type BufferSnapshot } from "../core/neovim.ts";
+import type { SaveReceipt } from "../core/edit-cell.ts";
+import { editableMarkdown, markdownCellCode } from "../core/markdown.ts";
+import type { Followed } from "../core/watcher.ts";
+import { NeovimGrid, renderNeovimGrid } from "./neovim-grid.ts";
+import type { ViewPreferences } from "./settings.ts";
+import { diffLines } from "./rows.ts";
 
 export interface InlineEditorState {
   key: string; cellId: string; baseCode: string; baseText: string; draft: string;

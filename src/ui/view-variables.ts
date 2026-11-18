@@ -1,10 +1,10 @@
 // The variables mode of the notebook view (`v`): marimo's variables panel, with each value's supplied preview.
 // It owns the list's cursor, filter, sort and detail; the view hosts it.
-import { cellTitle } from "./titles.js";
-import type { Followed } from "../core/watcher.js";
-import { commandFor } from "./keys.js";
-import { variableList, type VariableSort } from "./variables.js";
-import type { ViewHost } from "./view-host.js";
+import { cellTitle } from "./titles.ts";
+import type { Followed } from "../core/watcher.ts";
+import { commandFor } from "./keys.ts";
+import { variableList, type VariableSort } from "./variables.ts";
+import type { ViewHost } from "./view-host.ts";
 
 const message = (e: unknown): string => (e instanceof Error ? e.message : String(e));
 

@@ -21,10 +21,10 @@
 // A notebook's id is `marimo:` and its path relative to the cwd (absolute outside it), so it stays
 // the same whatever else is followed; pi-bg also takes `marimo:<file>` when only one matches.
 import { resolve } from "node:path";
-import { busy, holdValue } from "./core/hold.js";
-import { basename } from "./core/io.js";
-import { elapsed } from "./core/render.js";
-import type { Followed } from "./core/watcher.js";
+import { busy, holdValue } from "./core/hold.ts";
+import { basename } from "./core/io.ts";
+import { elapsed } from "./core/render.ts";
+import type { Followed } from "./core/watcher.ts";
 
 export interface EventBus {
   emit(channel: string, data: unknown): void;

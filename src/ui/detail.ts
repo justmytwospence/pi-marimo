@@ -4,24 +4,24 @@
 // as a document, the selected cell marked. No cell ids and no Python reprs: values are in the
 // variables pane.
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
-import { editableMarkdown } from "../core/markdown.js";
-import type { Cell, NotebookState } from "../core/notebook.js";
-import { truncate } from "../core/notebook.js";
-import { duration, runTime } from "./time.js";
-import { progressRows, visibleProgress } from "./progress.js";
+import { editableMarkdown } from "../core/markdown.ts";
+import type { Cell, NotebookState } from "../core/notebook.ts";
+import { truncate } from "../core/notebook.ts";
+import { duration, runTime } from "./time.ts";
+import { progressRows, visibleProgress } from "./progress.ts";
 import type { FrameTheme } from "../frame.ts";
-import { clean, consoleLineText, outputRows } from "./outputs.js";
-import { cellGlyph, headingText, spinner } from "./outline.js";
-import { statusLabel } from "./status.js";
-import { MAX_WIDGETS, type Row, type RowOptions, diffLines } from "./rows.js";
-import { codePanelRows } from "./code.js";
-import { diagnosticPanelRows } from "./diagnostics.js";
-import { warningRows } from "./warnings.js";
-import { outputLeaves, type ConsoleLine } from "../core/output.js";
-import { markdownRows } from "./markdown.js";
-import { cellTitle, sectionOf } from "./titles.js";
-import { oneLine } from "./text.js";
-import { widgetLine, widgetValue } from "./widgets.js";
+import { clean, consoleLineText, outputRows } from "./outputs.ts";
+import { cellGlyph, headingText, spinner } from "./outline.ts";
+import { statusLabel } from "./status.ts";
+import { MAX_WIDGETS, type Row, type RowOptions, diffLines } from "./rows.ts";
+import { codePanelRows } from "./code.ts";
+import { diagnosticPanelRows } from "./diagnostics.ts";
+import { warningRows } from "./warnings.ts";
+import { outputLeaves, type ConsoleLine } from "../core/output.ts";
+import { markdownRows } from "./markdown.ts";
+import { cellTitle, sectionOf } from "./titles.ts";
+import { oneLine } from "./text.ts";
+import { widgetLine, widgetValue } from "./widgets.ts";
 
 /** A focusable piece of the detail: what `n` and `p` walk and Enter acts on. */
 export interface Part {
@@ -32,7 +32,7 @@ export interface Part {
   tableObjectId?: string;
   /** Flat cell widget indices belonging to this ordered leaf. */
   widgetIndices?: number[];
-  output?: import("../core/output.js").CellOutput;
+  output?: import("../core/output.ts").CellOutput;
 }
 
 export interface DetailOptions extends RowOptions {

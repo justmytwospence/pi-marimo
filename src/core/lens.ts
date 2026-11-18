@@ -8,7 +8,7 @@
 // bytes never travel in the trait; activity and reveals are ephemeral custom messages
 // and are ignored.
 
-import { truncate } from "./notebook.js";
+import { truncate } from "./notebook.ts";
 
 export interface LensSelection {
   id: string;

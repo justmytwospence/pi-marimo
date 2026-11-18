@@ -8,7 +8,7 @@ import { existsSync } from "node:fs";
 import { open, readdir } from "node:fs/promises";
 import { createServer } from "node:net";
 import { join } from "node:path";
-import { sameServer } from "./core/touch.js";
+import { sameServer } from "./core/touch.ts";
 
 /** A new notebook, as marimo writes an empty one. */
 export const NOTEBOOK_TEMPLATE = `import marimo

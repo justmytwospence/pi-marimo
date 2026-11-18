@@ -4,8 +4,8 @@ import { spawn, type ChildProcess, type SpawnOptions } from "node:child_process"
 import { randomUUID } from "node:crypto";
 import { StringDecoder } from "node:string_decoder";
 import { stripVTControlCharacters } from "node:util";
-import { ExecutionWaveObserver, type WaveSnapshot } from "./execution-observer.js";
-import { sameServer } from "./touch.js";
+import { ExecutionWaveObserver, type WaveSnapshot } from "./execution-observer.ts";
+import { sameServer } from "./touch.ts";
 
 export interface ExecutionTarget { url: string; path: string; canonicalPath: string; sessionId: string }
 export interface ExecutionOwner { sessionId: string; anchorId: string }

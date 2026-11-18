@@ -4,8 +4,8 @@
 // Never log a record: it holds the token.
 import { readdir, readFile, stat } from "node:fs/promises";
 import { join } from "node:path";
-import { alive, hostsDir } from "./node-io.js";
-import { sameServer } from "./touch.js";
+import { alive, hostsDir } from "./node-io.ts";
+import { sameServer } from "./touch.ts";
 
 export interface HostRecord {
   /** The API base, e.g. `http://127.0.0.1:2718/api/marimo/v1`. */

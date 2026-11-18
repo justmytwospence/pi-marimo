@@ -2,8 +2,8 @@
 // severity-colored rail and the host theme's subtle tool background when available.
 import { sliceByColumn, visibleWidth } from "@earendil-works/pi-tui";
 import type { FrameTheme } from "../frame.ts";
-import { iconsEnabled } from "./glyphs.js";
-import type { Row } from "./rows.js";
+import { iconsEnabled } from "./glyphs.ts";
+import type { Row } from "./rows.ts";
 
 type Severity = "error" | "warning";
 type BackgroundTheme = FrameTheme & { bg?(color: string, text: string): string };

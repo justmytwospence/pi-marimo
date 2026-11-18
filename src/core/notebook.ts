@@ -3,13 +3,13 @@
 // each cell's run state and errors (cell-op), and the dataflow graph
 // (variables). Only what an agent needs is kept; outputs are dropped.
 
-import { LensTracker } from "./lens.js";
-import { ChainTracker } from "./chain.js";
-import { EnvironmentState } from "./packages.js";
-import { CellConsole } from "./console.js";
-import { progressFromText, type ProgressTask } from "./progress.js";
-import { type CellOutput, type ConsoleLine, summarizeOutput } from "./output.js";
-import { type Heading, headingsFromCode, isMarkdownCell, sameCode } from "./markdown.js";
+import { LensTracker } from "./lens.ts";
+import { ChainTracker } from "./chain.ts";
+import { EnvironmentState } from "./packages.ts";
+import { CellConsole } from "./console.ts";
+import { progressFromText, type ProgressTask } from "./progress.ts";
+import { type CellOutput, type ConsoleLine, summarizeOutput } from "./output.ts";
+import { type Heading, headingsFromCode, isMarkdownCell, sameCode } from "./markdown.ts";
 
 /** Ids of the function calls pi-marimo makes (table paging and the like); their results are kept for the caller. */
 export const FUNCTION_CALL_PREFIX = "pi-marimo-fn-";

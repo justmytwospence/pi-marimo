@@ -7,12 +7,12 @@
 // keep their own; before the agent touches any, the one used most recently by
 // anyone (a running cell, then the latest cell run or edit).
 
-import { type Cancellable, type Io, normalize, within } from "./io.js";
-import { NotebookState } from "./notebook.js";
-import { findNotebooks, type NotebookSession, scanServers, type WaitingNotebook, waitingNotebook } from "./registry.js";
-import type { Attachment } from "./render.js";
-import { streamSession } from "./sse.js";
-import { type PairTarget, sameServer } from "./touch.js";
+import { type Cancellable, type Io, normalize, within } from "./io.ts";
+import { NotebookState } from "./notebook.ts";
+import { findNotebooks, type NotebookSession, scanServers, type WaitingNotebook, waitingNotebook } from "./registry.ts";
+import type { Attachment } from "./render.ts";
+import { streamSession } from "./sse.ts";
+import { type PairTarget, sameServer } from "./touch.ts";
 
 export type Mode =
   | { kind: "auto" }

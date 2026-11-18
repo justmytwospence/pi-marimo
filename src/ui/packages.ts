@@ -1,7 +1,7 @@
 // Package pane state and presentation. All kernel work belongs to PackageClient.
 import { visibleWidth } from "@earendil-works/pi-tui";
-import type { EnvironmentState, PackageClient, PackageInfo, PackageSnapshot } from "../core/packages.js";
-import type { Row } from "./rows.js";
+import type { EnvironmentState, PackageClient, PackageInfo, PackageSnapshot } from "../core/packages.ts";
+import type { Row } from "./rows.ts";
 export type PackageTab = "Installed" | "Missing" | "Operations";
 export interface PackagePaneState {
   tab: PackageTab; filter: string; cursor: number; scroll: number; detail: boolean; expanded: string[];

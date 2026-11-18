@@ -1,6 +1,6 @@
 // nutpie 0.16.8's inert HTML progress template. Unknown templates fall back to ordinary HTML.
-import { outputElements, textContent, type OutputNode } from "./html.js";
-import type { ProgressTask } from "./progress.js";
+import { outputElements, textContent, type OutputNode } from "./html.ts";
+import type { ProgressTask } from "./progress.ts";
 
 type Element = Extract<OutputNode, { tagName: string }>;
 const attr = (node: Element, name: string) => node.attrs.find(a => a.name === name)?.value;

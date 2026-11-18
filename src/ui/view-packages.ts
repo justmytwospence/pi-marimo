@@ -1,11 +1,11 @@
 // The packages mode of the notebook view (`P`): the kernel's installed and missing packages, and
 // cancel-first install, upgrade and removal. It owns the pane and its keys; the view hosts it.
 import { matchesKey } from "@earendil-works/pi-tui";
-import type { Followed } from "../core/watcher.js";
-import type { PackageAction } from "../core/packages.js";
-import { commandFor } from "./keys.js";
-import { PackagePane, type PackagePaneState } from "./packages.js";
-import type { ViewHost } from "./view-host.js";
+import type { Followed } from "../core/watcher.ts";
+import type { PackageAction } from "../core/packages.ts";
+import { commandFor } from "./keys.ts";
+import { PackagePane, type PackagePaneState } from "./packages.ts";
+import type { ViewHost } from "./view-host.ts";
 
 const message = (e: unknown): string => (e instanceof Error ? e.message : String(e));
 

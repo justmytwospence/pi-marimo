@@ -1,10 +1,10 @@
 // Variable values are marimo's supplied repr, never an object-evaluation interface.
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
-import type { NotebookState } from "../core/notebook.js";
+import type { NotebookState } from "../core/notebook.ts";
 import type { FrameTheme } from "../frame.ts";
-import { iconsEnabled } from "./glyphs.js";
-import type { Row } from "./rows.js";
-import { cellTitle } from "./titles.js";
+import { iconsEnabled } from "./glyphs.ts";
+import type { Row } from "./rows.ts";
+import { cellTitle } from "./titles.ts";
 
 const uses = (n: number): string => `${n} use${n === 1 ? "" : "s"}`;
 

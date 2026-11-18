@@ -1,9 +1,9 @@
 // A compact view of nutpie's producer-supplied counters and diagnostics.
 import { visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
-import type { ProgressTask } from "../core/progress.js";
+import type { ProgressTask } from "../core/progress.ts";
 import type { FrameTheme } from "../frame.ts";
-import { oneLine } from "./text.js";
-import type { Row } from "./rows.js";
+import { oneLine } from "./text.ts";
+import type { Row } from "./rows.ts";
 
 const fraction = (task: ProgressTask) => task.completed !== undefined && task.total !== undefined && task.total > 0
   ? Math.max(0, Math.min(1, task.completed / task.total)) : undefined;

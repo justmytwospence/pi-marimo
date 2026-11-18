@@ -1,7 +1,7 @@
 // Single-attempt, session-bound cell mutations. Target acquisition belongs to the caller.
 import { randomUUID } from "node:crypto";
-import { runScratch, type ScratchEvent, type ScratchResult } from "./kernel.js";
-import type { NotebookState } from "./notebook.js";
+import { runScratch, type ScratchEvent, type ScratchResult } from "./kernel.ts";
+import type { NotebookState } from "./notebook.ts";
 
 export interface SaveReceipt { canonicalCode: string; requestId: string }
 export interface EditorSession { url: string; sessionId: string }

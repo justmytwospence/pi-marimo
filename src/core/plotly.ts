@@ -6,7 +6,7 @@
 import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { ChartRenderer, type VegaRunner } from "./vega.js";
+import { ChartRenderer, type VegaRunner } from "./vega.ts";
 
 const SCRIPT = String.raw`
 import sys, os, json, base64

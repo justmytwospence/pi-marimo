@@ -7,7 +7,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
-import { type CdpClient, connectCdp } from "./cdp.js";
+import { type CdpClient, connectCdp } from "./cdp.ts";
 
 export interface Assets {
   chrome: string;

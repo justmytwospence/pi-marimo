@@ -2,15 +2,15 @@
 // a human title (titles.ts), the Lens marks on it, and whole state chips at the end. The selected line has an
 // accent bar and Pi's selection background. What a cell holds is in the detail pane (detail.ts).
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
-import type { Cell, NotebookState } from "../core/notebook.js";
-import { truncate } from "../core/notebook.js";
+import type { Cell, NotebookState } from "../core/notebook.ts";
+import { truncate } from "../core/notebook.ts";
 import type { FrameTheme } from "../frame.ts";
-import { type Row, firstLine, foldedCells, selectableCells } from "./rows.js";
-import { cellTitle, outputShape } from "./titles.js";
-import { chainRows } from "./chain-outline.js";
-import { gutterMarks, gutterText, hasGraph } from "./gutter.js";
-import { cellBadges, fitBadges, spinner } from "./status.js";
-export { SPINNER, spinner } from "./status.js";
+import { type Row, firstLine, foldedCells, selectableCells } from "./rows.ts";
+import { cellTitle, outputShape } from "./titles.ts";
+import { chainRows } from "./chain-outline.ts";
+import { gutterMarks, gutterText, hasGraph } from "./gutter.ts";
+import { cellBadges, fitBadges, spinner } from "./status.ts";
+export { SPINNER, spinner } from "./status.ts";
 
 /** Pi's theme has `bg`; a plain one (tests, other hosts) may not. */
 export type PaneTheme = FrameTheme & { bg?(color: string, text: string): string };

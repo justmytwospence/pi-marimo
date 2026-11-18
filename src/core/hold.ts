@@ -4,10 +4,10 @@
 // every held notebook is quiet, disconnected or no longer followed, or when the
 // next turn begins. The hosts show it in herdr; this file only decides it.
 
-import { basename } from "./io.js";
-import { truncate } from "./notebook.js";
-import { elapsed } from "./render.js";
-import type { Followed } from "./watcher.js";
+import { basename } from "./io.ts";
+import { truncate } from "./notebook.ts";
+import { elapsed } from "./render.ts";
+import type { Followed } from "./watcher.ts";
 
 /** The herdr pane token the ports report while the kernel holds (`$marimo` in a sidebar row). */
 export const HERDR_TOKEN = "marimo";

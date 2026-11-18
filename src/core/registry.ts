@@ -4,7 +4,7 @@
 // $XDG_STATE_HOME/marimo/servers (marimo/_server/server_registry.py). A
 // token-protected server is reached with MARIMO_TOKEN.
 
-import type { Io } from "./io.js";
+import type { Io } from "./io.ts";
 
 export interface NotebookSession {
   url: string;

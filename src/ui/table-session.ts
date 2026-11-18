@@ -3,11 +3,11 @@
 // TableRpc), so paging, sorting and filtering happen in marimo, as in the browser. Sessions live in
 // a module store keyed by notebook and object id, so leaving table mode (or docking) keeps them; a
 // rerun of the cell (a new output) starts the table over.
-import type { Cell, NotebookState } from "../core/notebook.js";
-import { cellText, type TableData } from "../core/output.js";
-import { type ColumnSummaries, type FilterCondition, type SearchResult, parseSearch, parseSummaries, parseTopK } from "../core/table-rpc.js";
-import type { Followed } from "../core/watcher.js";
-import { columnGroups, layoutTable, measureColumn, orderedColumns, type TableRender } from "./table.js";
+import type { Cell, NotebookState } from "../core/notebook.ts";
+import { cellText, type TableData } from "../core/output.ts";
+import { type ColumnSummaries, type FilterCondition, type SearchResult, parseSearch, parseSummaries, parseTopK } from "../core/table-rpc.ts";
+import type { Followed } from "../core/watcher.ts";
+import { columnGroups, layoutTable, measureColumn, orderedColumns, type TableRender } from "./table.ts";
 
 export interface TableRpc {
   call(f: Followed, objectId: string, fn: string, args: unknown): Promise<unknown>;

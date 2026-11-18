@@ -1,7 +1,7 @@
 // A current terminal display, not a lossless log. Streams have independent cursors.
 import xterm from "@xterm/headless";
-import { htmlToText, type ConsoleLine } from "./output.js";
-import { progressFromText } from "./progress.js";
+import { htmlToText, type ConsoleLine } from "./output.ts";
+import { progressFromText } from "./progress.ts";
 
 type Stream = "stdout" | "stderr";
 type Screen = { terminal: InstanceType<typeof xterm.Terminal>; tail: Promise<void>; lines: ConsoleLine[]; order: number; level?: string };

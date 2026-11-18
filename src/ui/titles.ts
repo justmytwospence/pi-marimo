@@ -1,9 +1,9 @@
 // What the notebook view calls a cell, and its outline badges. A cell's id
 // is never shown: a cell is its name, what it defines that others use, or what it shows.
-import { markdownText } from "../core/markdown.js";
-import type { Cell, NotebookState } from "../core/notebook.js";
-import { truncate } from "../core/notebook.js";
-import { cellBadges, renderBadge } from "./status.js";
+import { markdownText } from "../core/markdown.ts";
+import type { Cell, NotebookState } from "../core/notebook.ts";
+import { truncate } from "../core/notebook.ts";
+import { cellBadges, renderBadge } from "./status.ts";
 import type { FrameTheme } from "../frame.ts";
 
 const MAX_TITLE = 40;

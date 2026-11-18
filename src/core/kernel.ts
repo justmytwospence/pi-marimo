@@ -3,10 +3,10 @@
 // /set_model_value for the session. marimo checks a server token on every API call (it is in the
 // page marimo serves, `data-token="..."`) besides the access token of a protected server.
 import { randomUUID } from "node:crypto";
-import { type HostRecord, findHost } from "./hosts.js";
-import { authHeaders } from "./registry.js";
-import { htmlToText } from "./output.js";
-import { SseParser } from "./sse.js";
+import { type HostRecord, findHost } from "./hosts.ts";
+import { authHeaders } from "./registry.ts";
+import { htmlToText } from "./output.ts";
+import { SseParser } from "./sse.ts";
 
 type Fetch = (url: string, init?: { method?: string; headers?: Record<string, string>; body?: string; signal?: AbortSignal }) => Promise<{ ok: boolean; status: number; text(): Promise<string> }>;
 

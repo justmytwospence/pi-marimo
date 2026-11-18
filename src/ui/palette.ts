@@ -1,8 +1,8 @@
 // Fuzzy, notebook-local command picker. Selection returns registry entries; the view owns dispatch.
 import { compositeTuiLine, CURSOR_MARKER, decodeKittyPrintable, fuzzyFilter, isKeyRelease, matchesKey, renderFakeCursor, sliceByColumn, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
-import type { FrameTheme } from "../frame.js";
-import { formatHelpKey } from "./help.js";
-import { paletteCommands, type Command, type CommandMode } from "./keys.js";
+import type { FrameTheme } from "../frame.ts";
+import { formatHelpKey } from "./help.ts";
+import { paletteCommands, type Command, type CommandMode } from "./keys.ts";
 
 /** The palette's first rows when nothing is typed. */
 const FEATURED = ["run", "run-stale", "run-all", "interrupt", "ask", "find", "variables", "packages", "chain", "section", "follow", "jump-running", "diff", "revert", "table", "widget", "scratch", "mark", "error-next", "browser", "dock"];

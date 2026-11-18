@@ -11,14 +11,14 @@
 //   open in no browser opens in the browser), `x` twice interrupts a running one.
 // - marimo-lens selections the user made since their last message add `2 selections` to the pill,
 //   and every open selection is counted in the notebook's row.
-import { basename } from "../core/io.js";
-import { shortWhere, statusParts } from "../core/render.js";
-import { interruptKey, notebookKey } from "./identity.js";
-import { elapsed } from "../core/render.js";
-import type { Followed } from "../core/watcher.js";
-import { busy } from "../core/hold.js";
-import { kernelStateParts, lensParts } from "../bg.js";
-import type { ActivityEntry, ActivityPill, ActivitySection, ActivityTheme } from "../activity.js";
+import { basename } from "../core/io.ts";
+import { shortWhere, statusParts } from "../core/render.ts";
+import { interruptKey, notebookKey } from "./identity.ts";
+import { elapsed } from "../core/render.ts";
+import type { Followed } from "../core/watcher.ts";
+import { busy } from "../core/hold.ts";
+import { kernelStateParts, lensParts } from "../bg.ts";
+import type { ActivityEntry, ActivityPill, ActivitySection, ActivityTheme } from "../activity.ts";
 
 interface Run {
   since: number;

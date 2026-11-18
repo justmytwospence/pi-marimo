@@ -1,5 +1,5 @@
-import { normalize } from "../core/io.js";
-import type { Followed } from "../core/watcher.js";
+import { normalize } from "../core/io.ts";
+import type { Followed } from "../core/watcher.ts";
 
 /** One notebook across reconnects; two servers hosting the same file remain distinct. */
 export function notebookKey(f: Followed): string {

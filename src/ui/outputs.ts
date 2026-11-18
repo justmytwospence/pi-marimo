@@ -1,18 +1,18 @@
 // A cell's output and console as rows of the notebook view: text, a table's grid, an inline image
 // (a PNG, or a Vega-Lite or Plotly chart drawn to one), or a live Plotly chart the mouse drives.
 import { Image, getCapabilities, visibleWidth, sliceByColumn, truncateToWidth, wrapTextWithAnsi, foregroundAnsi, backgroundAnsi, indexedColor, rgbColor, styleTextWithAnsi } from "@earendil-works/pi-tui";
-import type { Cell } from "../core/notebook.js";
-import { outputLeaves, type CalloutTone, type CellOutput, type ConsoleLine, type StatItem } from "../core/output.js";
-import type { MermaidAppearance, MermaidRenderer } from "../core/mermaid.js";
-import { codePanelRows } from "./code.js";
-import { markdownRows } from "./markdown.js";
+import type { Cell } from "../core/notebook.ts";
+import { outputLeaves, type CalloutTone, type CellOutput, type ConsoleLine, type StatItem } from "../core/output.ts";
+import type { MermaidAppearance, MermaidRenderer } from "../core/mermaid.ts";
+import { codePanelRows } from "./code.ts";
+import { markdownRows } from "./markdown.ts";
 import type { FrameTheme } from "../frame.ts";
-import { liveGeometry } from "./live-charts.js";
-import type { Row, RowOptions } from "./rows.js";
-import { clean, oneLine } from "./text.js";
-export { clean } from "./text.js";
-import { progressRows } from "./progress.js";
-import { tableGrid } from "./table.js";
+import { liveGeometry } from "./live-charts.ts";
+import type { Row, RowOptions } from "./rows.ts";
+import { clean, oneLine } from "./text.ts";
+export { clean } from "./text.ts";
+import { progressRows } from "./progress.ts";
+import { tableGrid } from "./table.ts";
 
 /** The default indent of everything under a cell's line; the detail pane passes none. */
 export const PAD = "      ";

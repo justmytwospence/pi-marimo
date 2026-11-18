@@ -4,10 +4,10 @@ import { randomUUID } from "node:crypto";
 import { basename, resolve } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import { ownExecutions, type ExecutionActivity, type ExecutionHost, type ExecutionOwner, type ExecutionRecord, type ExecutionTarget } from "./core/execution.js";
-import { sameServer } from "./core/touch.js";
-import type { Followed } from "./core/watcher.js";
-import { executionToolRenderers } from "./ui/execution-render.js";
+import { ownExecutions, type ExecutionActivity, type ExecutionHost, type ExecutionOwner, type ExecutionRecord, type ExecutionTarget } from "./core/execution.ts";
+import { sameServer } from "./core/touch.ts";
+import type { Followed } from "./core/watcher.ts";
+import { executionToolRenderers } from "./ui/execution-render.ts";
 
 export const EXECUTION_ENTRY = "pi-marimo-execution";
 export const COMPLETION_MESSAGE = "pi-marimo-completion";

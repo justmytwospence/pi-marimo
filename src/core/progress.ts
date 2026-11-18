@@ -1,5 +1,5 @@
-import { componentProps, outputElements, parseOutputFragment, textContent, type OutputNode } from "./html.js";
-import { nutpieProgressFromNode } from "./sampler.js";
+import { componentProps, outputElements, parseOutputFragment, textContent, type OutputNode } from "./html.ts";
+import { nutpieProgressFromNode } from "./sampler.ts";
 
 export interface ProgressTask {
   id: string;

@@ -3,7 +3,7 @@
 import { access, readdir, readFile, realpath } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import type { Cancellable, Io, StreamEnd } from "./io.js";
+import type { Cancellable, Io, StreamEnd } from "./io.ts";
 
 export function registryDir(env: NodeJS.ProcessEnv = process.env): string {
   if (process.platform === "win32") return join(homedir(), ".marimo", "servers");

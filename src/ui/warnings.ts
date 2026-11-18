@@ -1,9 +1,9 @@
 // Grouped Python warnings as rows of a diagnostic panel.
 import type { FrameTheme } from "../frame.ts";
-import type { ConsoleLine } from "../core/output.js";
-import { parseWarnings, shortPath } from "../core/warnings.js";
-import { clean, consoleLineText } from "./outputs.js";
-import type { Row } from "./rows.js";
+import type { ConsoleLine } from "../core/output.ts";
+import { parseWarnings, shortPath } from "../core/warnings.ts";
+import { clean, consoleLineText } from "./outputs.ts";
+import type { Row } from "./rows.ts";
 
 const MAX_VARIES = 8;
 

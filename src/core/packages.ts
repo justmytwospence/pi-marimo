@@ -1,8 +1,8 @@
 // Session-bound package management. Never use the package REST routes: they can
 // silently fall back to the server environment when a session has disappeared.
 import { randomUUID } from "node:crypto";
-import { pythonJson, type EditorSession, type ScratchExecute } from "./edit-cell.js";
-import type { NotebookState } from "./notebook.js";
+import { pythonJson, type EditorSession, type ScratchExecute } from "./edit-cell.ts";
+import type { NotebookState } from "./notebook.ts";
 
 export interface PackageInfo { name: string; version: string }
 export type PackageAction = "install" | "upgrade" | "remove";

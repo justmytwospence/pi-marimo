@@ -3,13 +3,13 @@
 // with the cell's picture when Pi has one. The selection is then Lens's like any other: the agent's
 // Lens skill reads and resolves it, and pi-marimo shows it in context, the footer and the view.
 import { createHash, randomBytes } from "node:crypto";
-import { LENS_REQUEST_PREFIX, type LensImage, lensDeleteCommand, lensMarkCommand } from "../core/lens.js";
-import type { Cell, NotebookState } from "../core/notebook.js";
-import { truncate } from "../core/notebook.js";
-import type { Followed } from "../core/watcher.js";
-import { setModelValue } from "../core/kernel.js";
-import { firstLine } from "./rows.js";
-import { cellTitle } from "./titles.js";
+import { LENS_REQUEST_PREFIX, type LensImage, lensDeleteCommand, lensMarkCommand } from "../core/lens.ts";
+import type { Cell, NotebookState } from "../core/notebook.ts";
+import { truncate } from "../core/notebook.ts";
+import type { Followed } from "../core/watcher.ts";
+import { setModelValue } from "../core/kernel.ts";
+import { firstLine } from "./rows.ts";
+import { cellTitle } from "./titles.ts";
 
 /** The document Pi's selections say they were made in (the browser names its page `document:<uuid>`). */
 export const LENS_DOCUMENT_ID = `document:pi-marimo-${randomBytes(6).toString("hex")}`;

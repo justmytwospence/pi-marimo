@@ -1,16 +1,16 @@
 // The run chain view of the outline: only the cells of the latest run, in file order (with each cell's run step
 // beside it) or in run order (with where it sits in the file beside it).
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
-import { chainSteps } from "../core/chain.js";
-import type { Cell, NotebookState } from "../core/notebook.js";
-import { truncate } from "../core/notebook.js";
-import { elapsed } from "../core/render.js";
-import { CHAIN_DONE, type PaneTheme, cellGlyph } from "./outline.js";
-import { gutterMarks, gutterText, hasGraph } from "./gutter.js";
-import { type Row, matchesFilter } from "./rows.js";
-import { cellBadges, fitBadges } from "./status.js";
-import { duration } from "./time.js";
-import { cellTitle } from "./titles.js";
+import { chainSteps } from "../core/chain.ts";
+import type { Cell, NotebookState } from "../core/notebook.ts";
+import { truncate } from "../core/notebook.ts";
+import { elapsed } from "../core/render.ts";
+import { CHAIN_DONE, type PaneTheme, cellGlyph } from "./outline.ts";
+import { gutterMarks, gutterText, hasGraph } from "./gutter.ts";
+import { type Row, matchesFilter } from "./rows.ts";
+import { cellBadges, fitBadges } from "./status.ts";
+import { duration } from "./time.ts";
+import { cellTitle } from "./titles.ts";
 
 export type ChainOrder = "file" | "run";
 

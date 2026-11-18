@@ -1,8 +1,8 @@
 import MarkdownIt from "markdown-it";
 import { getMarkdownTheme } from "@earendil-works/pi-coding-agent";
 import { Markdown, getCellDimensions, sliceByColumn, stripTerminalSequences, visibleWidth, type MarkdownTheme } from "@earendil-works/pi-tui";
-import { codePanelRows } from "./code.js";
-import type { Row, RowOptions } from "./rows.js";
+import { codePanelRows } from "./code.ts";
+import type { Row, RowOptions } from "./rows.ts";
 
 export interface ExtractedCodeBlock {
   id: string;

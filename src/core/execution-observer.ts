@@ -3,10 +3,10 @@
 // pooling and subscription lifetimes; this class owns only a kiosk stream.
 
 import { randomUUID } from "node:crypto";
-import { type Cancellable, type Io, normalize } from "./io.js";
-import { nodeIo } from "./node-io.js";
-import { listSessions } from "./registry.js";
-import { streamSession } from "./sse.js";
+import { type Cancellable, type Io, normalize } from "./io.ts";
+import { nodeIo } from "./node-io.ts";
+import { listSessions } from "./registry.ts";
+import { streamSession } from "./sse.ts";
 
 export type WaveState = "running" | "reconnecting" | "succeeded" | "failed" | "interrupted" | "unknown";
 

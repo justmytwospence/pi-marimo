@@ -6,7 +6,7 @@
 //
 // herdr's pi and opencode integrations are the sole authority over the pane's idle/working state,
 // so this never reports state.
-import { HERDR_TOKEN, type HoldChange } from "./core/hold.js";
+import { HERDR_TOKEN, type HoldChange } from "./core/hold.ts";
 
 export interface EventBus {
   emit(channel: string, data: unknown): void;

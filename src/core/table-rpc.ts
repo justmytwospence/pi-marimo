@@ -2,9 +2,9 @@
 // `download_as`), called as the browser calls them: POST /api/kernel/function_call, with the result
 // arriving on the notebook's message stream as `function-call-result` (NotebookState.functionResults).
 import { randomBytes } from "node:crypto";
-import { kernelPost } from "./kernel.js";
-import { FUNCTION_CALL_PREFIX, type NotebookState } from "./notebook.js";
-import { authHeaders } from "./registry.js";
+import { kernelPost } from "./kernel.ts";
+import { FUNCTION_CALL_PREFIX, type NotebookState } from "./notebook.ts";
+import { authHeaders } from "./registry.ts";
 
 export interface RpcTarget {
   attachment: { url: string; sessionId: string };

@@ -1,11 +1,11 @@
 // What the notebook view's mode controllers (packages, variables, tables, widgets) need from the view
 // that hosts them. The view owns the cursor, scroll, notes and docks; a controller owns its mode's state
 // and keys.
-import type { Cell } from "../core/notebook.js";
-import type { Widget } from "../core/output.js";
-import type { Followed } from "../core/watcher.js";
-import type { DockSpec } from "./dock.js";
-import type { ViewActions } from "./view.js";
+import type { Cell } from "../core/notebook.ts";
+import type { Widget } from "../core/output.ts";
+import type { Followed } from "../core/watcher.ts";
+import type { DockSpec } from "./dock.ts";
+import type { ViewActions } from "./view.ts";
 
 export interface ViewHost {
   readonly actions: ViewActions;

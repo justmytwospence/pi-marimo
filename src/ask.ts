@@ -1,8 +1,8 @@
 // What the notebook view's `a` prompt sends the main agent: the user's words, then where they were
 // looking, with the marimo-pair flags that name that notebook, so the agent can act on it at once.
-import type { Cell } from "./core/notebook.js";
-import { pairFlags, relativePath } from "./core/render.js";
-import type { Followed } from "./core/watcher.js";
+import type { Cell } from "./core/notebook.ts";
+import { pairFlags, relativePath } from "./core/render.ts";
+import type { Followed } from "./core/watcher.ts";
 
 export function askMessage(text: string, f: Pick<Followed, "attachment" | "notebook">, cell: Cell | undefined, cwd: string): string {
   let ref = "the notebook";

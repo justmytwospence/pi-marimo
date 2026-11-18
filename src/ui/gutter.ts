@@ -1,5 +1,5 @@
 // The dataflow gutter: one column in the outline joining the selected cell to the cells it uses and the cells that use it.
-import type { NotebookState } from "../core/notebook.js";
+import type { NotebookState } from "../core/notebook.ts";
 import type { FrameTheme } from "../frame.ts";
 
 export interface GutterMark { glyph: string; color: "accent" | "success" | "dim" | undefined }

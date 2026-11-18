@@ -7,7 +7,7 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import { type Component, type TUI, type TuiMouseEvent, type TuiMouseEventResult, isKeyRelease, isKeyRepeat, matchesKey } from "@earendil-works/pi-tui";
 import type { FrameTheme } from "../frame.ts";
 import { type LayoutTui, SplitLayout, canSplit, dividerLines, muteEditorBorders } from "./split-layout.ts";
-import type { DockedHost, NotebookView, ViewState } from "./view.js";
+import type { DockedHost, NotebookView, ViewState } from "./view.ts";
 
 export const SIDE_PANEL_CHANNEL = "pi-plugins.side-panel.v1";
 export const SIDE_PANEL_TOGGLE_CHANNEL = "pi-plugins.side-panel-toggle.v1";

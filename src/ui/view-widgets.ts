@@ -1,12 +1,12 @@
 // The widgets mode of the notebook view (`w`): driving a cell's marimo controls from the keyboard. It owns
 // which control has focus (and a slider being dragged with the mouse); the view hosts it and draws them.
-import type { Cell } from "../core/notebook.js";
-import { outputLeaves, type Widget } from "../core/output.js";
-import type { Followed } from "../core/watcher.js";
-import { commandFor } from "./keys.js";
-import { MAX_WIDGETS } from "./rows.js";
-import type { ViewHost } from "./view-host.js";
-import { type WidgetAction, nextValue, typeable, widgetValue } from "./widgets.js";
+import type { Cell } from "../core/notebook.ts";
+import { outputLeaves, type Widget } from "../core/output.ts";
+import type { Followed } from "../core/watcher.ts";
+import { commandFor } from "./keys.ts";
+import { MAX_WIDGETS } from "./rows.ts";
+import type { ViewHost } from "./view-host.ts";
+import { type WidgetAction, nextValue, typeable, widgetValue } from "./widgets.ts";
 
 export class WidgetController {
   /** The focused control: its cell, its index among the cell's controls, and the part of it (a range's handle). */

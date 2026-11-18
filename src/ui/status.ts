@@ -2,10 +2,10 @@
 // Chips are bare colored icons (Nerd Font, or plain symbols with `view.icons` off); the words live in
 // the detail status line and the help legend.
 import { visibleWidth } from "@earendil-works/pi-tui";
-import type { Cell, NotebookState } from "../core/notebook.js";
+import type { Cell, NotebookState } from "../core/notebook.ts";
 import type { FrameTheme } from "../frame.ts";
-import { iconsEnabled } from "./glyphs.js";
-import { duration } from "./time.js";
+import { iconsEnabled } from "./glyphs.ts";
+import { duration } from "./time.ts";
 
 export type BadgeKind = "running" | "queued" | "error" | "blocked" | "stale" | "edited" | "changed" | "new" | "disabled";
 export interface Badge { kind: BadgeKind; text: string }

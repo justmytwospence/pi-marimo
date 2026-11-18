@@ -1,11 +1,11 @@
 // Structured progress stays visible independently of result/diagnostic filters.
 import { wrapTextWithAnsi, visibleWidth } from "@earendil-works/pi-tui";
-import type { ProgressTask } from "../core/progress.js";
+import type { ProgressTask } from "../core/progress.ts";
 import type { FrameTheme } from "../frame.ts";
-import { oneLine } from "./text.js";
-import { spinner } from "./outline.js";
-import { samplerRows } from "./sampler.js";
-import type { Row } from "./rows.js";
+import { oneLine } from "./text.ts";
+import { spinner } from "./outline.ts";
+import { samplerRows } from "./sampler.ts";
+import type { Row } from "./rows.ts";
 
 const seconds = (n: number): string => n < 60 ? `${Math.round(Math.max(0, n))}s` : `${Math.floor(n / 60)}m ${Math.round(n % 60)}s`;
 

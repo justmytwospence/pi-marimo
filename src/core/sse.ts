@@ -11,8 +11,8 @@
 // session's current state (kernel-ready, then every cell's last messages), so
 // a fresh NotebookState is complete after the replay.
 
-import type { Cancellable, Io } from "./io.js";
-import { authHeaders } from "./registry.js";
+import type { Cancellable, Io } from "./io.ts";
+import { authHeaders } from "./registry.ts";
 
 export interface SseEvent {
   event?: string;

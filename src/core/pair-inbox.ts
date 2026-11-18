@@ -5,8 +5,8 @@
 // forwarder makes. Servers without a host record are left alone. If the user detaches Pi in marimo, it
 // stays detached until `reattach()`.
 import { randomUUID } from "node:crypto";
-import { findHost as defaultFindHost } from "./hosts.js";
-import { SseParser } from "./sse.js";
+import { findHost as defaultFindHost } from "./hosts.ts";
+import { SseParser } from "./sse.ts";
 
 export const AGENT_MESSAGE_TYPE = "marimo.pair.agent-message";
 
