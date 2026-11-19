@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.8.7
 
 - The agent uses `marimo_execute` by default: a bash `execute-code.sh` or `marimo pair execute` call at a notebook Pi already follows is not run, and the agent is told to run the same code with `marimo_execute`. Calls at notebooks not followed yet (discovering or attaching a server) still run.
 
