@@ -593,6 +593,24 @@ test("the first bash pair call is told about marimo_execute, only when it is act
   }
 });
 
+test.each([[["bash", "marimo_execute"], true], [["bash"], false]] as const)("a bash pair call at a followed notebook is sent to marimo_execute, only when it is active (%j)", async (active, blocked) => {
+  {
+    const x = setup();
+    (x.pi as any).getActiveTools = () => active;
+    let view: any;
+    try {
+      const nb = await followedNotebook(x);
+      view = nb.view;
+      const [toolCall] = x.handlers.get("tool_call")!;
+      const out = (await toolCall!({ toolCallId: "b1", toolName: "bash", input: { command: pair } }, undefined)) as { block?: boolean; reason?: string } | undefined;
+      expect(out?.block ?? false).toBe(blocked);
+      if (blocked) expect(out!.reason).toMatch(/marimo_execute with notebook "nb\.py"/u);
+      const other = `bash .agents/skills/marimo-pair/scripts/execute-code.sh --url http://localhost:9999 - <<'PY'\n1\nPY`;
+      expect(await toolCall!({ toolCallId: "b2", toolName: "bash", input: { command: other } }, undefined)).toBeUndefined();
+    } finally { view?.dispose(); await x.fire("session_shutdown"); }
+  }
+});
+
 test("a bash pair call's result loses the scratch Lens html", async () => {
   const x = setup();
   try {

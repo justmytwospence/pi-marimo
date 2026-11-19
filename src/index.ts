@@ -86,6 +86,7 @@ const LENS_STATUS_KEY = "marimo-lens";
 const OFFER_SOURCE = "pi-marimo";
 const MESSAGE_TYPE = "pi-marimo-state";
 const CHART_ENTRY = "pi-marimo-chart";
+const REDIRECT = "pi-marimo: not run. With pi-marimo active, run marimo-pair code with marimo_execute, not execute-code.sh or `marimo pair execute` in bash: it runs the same Python (code mode included) in the notebook's kernel, tracks runs that outlive the call and resumes you when they finish.";
 const PAIR_HINT = "pi-marimo: marimo_execute runs this same Python (code mode included) in the notebook's kernel without the shell. It tracks runs that outlive the call (marimo_watch, marimo_execution) and resumes you when they finish, and marimo_chart shows the user a cell's chart and gives you its picture (show: false to only look). Use them instead of execute-code.sh from here on.";
 /** Besides the current notebook, the ones worked in during this many latest prompts are in full in context. */
 const FULL_PROMPTS = 3;
@@ -1008,6 +1009,15 @@ export default function piMarimo(pi: ExtensionAPI): void {
     if (candidates) {
       const root = String((event as { toolCallId?: unknown }).toolCallId ?? "").split("/")[0]!;
       if (root) ambiguous.set(root, ambiguityNote(candidates));
+    }
+    // The marimo-pair skill tells the agent to run its code through bash. When every notebook the
+    // call names is followed, marimo_execute can run the same code: send the agent there instead.
+    // Calls at notebooks not followed yet (discovery, a server just attached) still go through.
+    const files = watcher.targeted(targets);
+    if (event.toolName === "bash" && !candidates && files.length === targets.length && typeof pi.getActiveTools === "function" && pi.getActiveTools().includes("marimo_execute")) {
+      pairHinted = true;
+      const names = [...new Set(files.map((p) => basename(p)))].join(", ");
+      return { block: true, reason: `${REDIRECT} Call marimo_execute with notebook "${names}" and the same Python as code.` };
     }
     return undefined;
   });

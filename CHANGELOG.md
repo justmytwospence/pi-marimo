@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- The agent uses `marimo_execute` by default: a bash `execute-code.sh` or `marimo pair execute` call at a notebook Pi already follows is not run, and the agent is told to run the same code with `marimo_execute`. Calls at notebooks not followed yet (discovering or attaching a server) still run.
+
 ## 0.8.6
 
 - `marimo_execute` works on marimo 0.25.2: it passes `marimo pair execute` the stable session id marimo 0.25.2 reports (`sess-…`), not the page's socket id, which that CLI rejects with "No session", so every execution ended as "outcome unknown".
