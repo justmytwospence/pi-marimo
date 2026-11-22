@@ -28,7 +28,7 @@ A server Pi starts keeps running across `/reload` and stops when Pi exits, with 
 
 | tool | purpose |
 |---|---|
-| `marimo_execute` | run Python through the official CLI; return a result within the foreground window or a background execution handle |
+| `marimo_execute` | run Python through the official CLI; return a result within its wait (30 s by default) or a background execution handle |
 | `marimo_watch` | subscribe to the currently observed notebook execution wave, including its queued descendants; executes no Python |
 | `marimo_execution` | list execution records, inspect one result, or unsubscribe without interrupting Python |
 

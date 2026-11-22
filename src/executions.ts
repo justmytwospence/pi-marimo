@@ -13,6 +13,8 @@ import { executionToolRenderers } from "./ui/execution-render.ts";
 export const EXECUTION_ENTRY = "pi-marimo-execution";
 export const COMPLETION_MESSAGE = "pi-marimo-completion";
 export const EXECUTIONS_MESSAGE = "pi-marimo-executions";
+export const DEFAULT_YIELD_MS = 30_000;
+export const MAX_YIELD_MS = 120_000;
 export type CompletionMode = "subscribed" | "all" | "off";
 export interface ExecutionConfig {
   execution: { command: string[] };
@@ -225,8 +227,8 @@ export class ExecutionSession {
   async execute(params: ExecuteParams, signal?: AbortSignal): Promise<ExecutionReply> {
     const { host, ctx, sessionId } = this.requireSession();
     if (!params.code.trim()) throw new Error("code must be nonempty.");
-    const ms = params.yield_ms ?? 1000;
-    if (!Number.isInteger(ms) || ms < 0 || ms > 1000) throw new Error("yield_ms must be an integer from 0 to 1000.");
+    const ms = params.yield_ms ?? DEFAULT_YIELD_MS;
+    if (!Number.isInteger(ms) || ms < 0 || ms > MAX_YIELD_MS) throw new Error(`yield_ms must be an integer from 0 to ${MAX_YIELD_MS}.`);
     const f = this.select(params);
     const original = targetOf(f);
     const isCurrent = () => this.ctx === ctx && this.sessionId === sessionId && this.followed.some(o => o.notebook === f.notebook && o.connection === "connected" && o.notebook.ready && sameTarget(targetOf(o), original)) && !busyCells(f).length;
@@ -255,8 +257,13 @@ export class ExecutionSession {
       && !hasNews(other, host.shownMark(other.id))) this.claim(host, other);
     this.persist(r);
     // Abort/yield affects only this foreground wait, never ownership or the CLI.
+    // The wait also ends when the user sends a message; the run itself is never stopped.
+    const stop = new AbortController();
+    const relay = () => stop.abort();
+    if (signal?.aborted) stop.abort(); else signal?.addEventListener("abort", relay, { once: true });
+    const poll = setInterval(() => { if (ctx.hasPendingMessages?.() === true) stop.abort(); }, 250);
     try {
-      const done = await host.waitForResult(id, ms, signal);
+      const done = await host.waitForResult(id, ms, stop.signal);
       if (done) {
         host.markInline(id);
         r = host.get(owner, id);
@@ -265,6 +272,8 @@ export class ExecutionSession {
         r = host.get(owner, id);
       }
     } finally {
+      clearInterval(poll);
+      signal?.removeEventListener("abort", relay);
       this.foreground.delete(id);
       this.changed();
     }
@@ -493,12 +502,13 @@ export function registerExecutionTools(pi: Pick<ExtensionAPI, "registerTool">, s
     "marimo_execute supervises the official marimo pair execute CLI; it is transport, not a new notebook editing API. Follow the marimo-pair workflow and use marimo._code_mode for durable notebook changes, never direct .py edits.",
     "The dedicated first inspection is import marimo._code_mode as cm; help(cm). Run that by itself before other code-mode work.",
     "Never poll a busy kernel with Python or queue inspection behind a fit. Use marimo_watch to subscribe and marimo_execution to read results or unsubscribe. Yield/abort and unsubscribe do not interrupt Python. Never automatically retry an unknown outcome.",
+    "Let marimo_execute wait for ordinary edits and checks; pass yield_ms: 0 only for long work you will not wait on, such as a fit while you do something else.",
   ];
   pi.registerTool({
     ...executionToolRenderers("execute"),
-    name: "marimo_execute", label: "Execute Python", description: "Run Python in a followed marimo notebook's kernel through the official marimo CLI (marimo pair execute): the same scratchpad and code mode as the marimo-pair skill's execute-code.sh, which it replaces while pi-marimo is active. Pass notebook (path or file name) unless you already worked in exactly one. Returns inline within 1000 ms or a supervised execution handle; subscribed completion resumes this session with a native follow-up.",
+    name: "marimo_execute", label: "Execute Python", description: "Run Python in a followed marimo notebook's kernel through the official marimo CLI (marimo pair execute): the same scratchpad and code mode as the marimo-pair skill's execute-code.sh, which it replaces while pi-marimo is active. Pass notebook (path or file name) unless you already worked in exactly one. Waits up to 30 s for the result (yield_ms, at most 120000; it stops waiting early when the user sends a message), then returns a supervised execution handle. A subscribed handle reports back before your next step if the run failed or printed something new, otherwise when you finish your turn.",
     promptGuidelines: guidelines,
-    parameters: Type.Object({ ...selector, code: Type.String({ minLength: 1 }), label: Type.Optional(Type.String()), subscribe: Type.Optional(Type.Boolean()), yield_ms: Type.Optional(Type.Integer({ minimum: 0, maximum: 1000 })) }),
+    parameters: Type.Object({ ...selector, code: Type.String({ minLength: 1 }), label: Type.Optional(Type.String()), subscribe: Type.Optional(Type.Boolean()), yield_ms: Type.Optional(Type.Integer({ minimum: 0, maximum: MAX_YIELD_MS, description: "Milliseconds to wait for the result before returning a background handle (default 30000). 0 starts it in the background at once." })) }),
     execute: (_id, params, signal) => session.execute(params, signal),
   });
   pi.registerTool({

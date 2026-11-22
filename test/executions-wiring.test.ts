@@ -268,6 +268,23 @@ test("inline completion wins the reporting race without an automatic continuatio
   await tick(); expect(x.messages).toEqual([]);
 });
 
+test("the foreground wait ends early when a user message is pending", async () => {
+  const x = setup(); x.start();
+  x.ctx.hasPendingMessages = () => true;
+  const r = record(await x.manager.execute({ code: "long" }));
+  expect(r).toMatchObject({ detached: true, notification: "explicit" });
+  expect(x.children[0]!.kill).not.toHaveBeenCalled();
+  x.children[0]!.finish(); await tick();
+});
+
+test("yield_ms is validated against the new maximum", async () => {
+  const x = setup(); x.start();
+  await expect(x.manager.execute({ code: "x", yield_ms: 120_001 })).rejects.toThrow("yield_ms must be an integer from 0 to 120000");
+  const run = x.manager.execute({ code: "x", yield_ms: 120_000 }, AbortSignal.abort());
+  await expect(run).resolves.toBeDefined();
+  x.children[0]!.finish(); await tick();
+});
+
 test("aborted foreground wait detaches without killing or unsubscribing the process", async () => {
   const x = setup(); x.start();
   const controller = new AbortController();
