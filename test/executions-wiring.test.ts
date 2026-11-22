@@ -113,7 +113,8 @@ function setup(mode: "subscribed" | "all" | "off" = "subscribed", options: { inl
   const acquireTarget = vi.fn(async (f: Followed) => f.attachment);
   const engage = vi.fn((f: Followed) => { f.engaged = true; });
   const hostFactory = vi.fn(() => host);
-  const deps = { host: hostFactory, command, acquireTarget, engage, id: () => `native-${++nextId}` };
+  let busy = false;
+  const deps = { host: hostFactory, command, acquireTarget, engage, id: () => `native-${++nextId}`, agentBusy: () => busy };
   let manager = new ExecutionSession(pi as any, deps);
   const config = { completion: { mode }, context: options.context ?? true };
   const followed = [notebook()];
@@ -127,6 +128,7 @@ function setup(mode: "subscribed" | "all" | "off" = "subscribed", options: { inl
     set entries(value: any[]) { entries = value; },
     start, tool, persistent,
     setSession(id: string) { sessionId = id; },
+    setBusy(value: boolean) { busy = value; },
     rebind() { manager.shutdown(); manager = new ExecutionSession(pi as any, deps); start(); },
     register() { registerExecutionTools(pi as any, manager); },
   };
@@ -192,6 +194,37 @@ test("delayed official execution survives unrelated turns and sends exactly one 
   x.manager.beforeTurn(); x.manager.update(x.followed); await tick();
   expect(x.messages).toHaveLength(1);
   expect(record(x.manager.status(r.id)).delivery).toBe("delivered");
+});
+
+test("a completion that finishes mid-turn rides on the next tool result instead of a late follow-up turn", async () => {
+  const x = setup(); x.start(); x.register();
+  x.setBusy(true);
+  const r = record(await x.tool("marimo_execute", { code: "fit()", yield_ms: 0 }));
+  x.children[0]!.stdout.write("fit done\n");
+  x.children[0]!.finish();
+  await tick();
+  expect(x.messages).toHaveLength(0);
+  const note = x.manager.claimInTurn();
+  expect(note).toContain(r.id);
+  expect(note).toContain("fit done");
+  expect(x.manager.claimInTurn()).toBeUndefined();
+  x.setBusy(false); x.manager.settled(); await tick();
+  expect(x.messages).toHaveLength(0);
+  expect(record(x.manager.status(r.id)).delivery).toBe("delivered");
+});
+
+test("reading a finished execution's status claims its completion; one left unread is delivered once the agent settles", async () => {
+  const x = setup(); x.start(); x.register();
+  x.setBusy(true);
+  const read = record(await x.tool("marimo_execute", { code: "a()", yield_ms: 0 }));
+  x.children[0]!.finish(); await tick();
+  expect(record(x.manager.status(read.id)).delivery).toBe("delivered");
+  const unread = record(await x.tool("marimo_execute", { code: "b()", yield_ms: 0 }));
+  x.children[1]!.finish(); await tick();
+  expect(x.messages).toHaveLength(0);
+  x.setBusy(false); x.manager.settled(); await tick();
+  expect(x.messages).toHaveLength(1);
+  expect(x.messages[0].details.ids).toEqual([`pi-marimo-execution:${unread.id}`]);
 });
 
 test("inline completion wins the reporting race without an automatic continuation", async () => {

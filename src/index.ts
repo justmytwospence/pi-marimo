@@ -374,6 +374,7 @@ export default function piMarimo(pi: ExtensionAPI): void {
       touchedAt.set(f.attachment.path, prompts);
     },
     onChange: () => schedule(),
+    agentBusy: () => ctxRef?.isIdle() === false,
   });
   // Pi as an agent of the notebooks this session uses (core/pair-inbox.ts): marimo shows it attached, and what
   // the notebook sends its agent arrives as a prompt, a follow-up while the agent is busy.
@@ -1070,6 +1071,7 @@ export default function piMarimo(pi: ExtensionAPI): void {
     }
     const structured = event.structuredContent !== undefined ? { structuredContent: event.structuredContent } : {};
     if (nested) return changed ? { content, ...structured } : undefined;
+    owe(root, executions.claimInTurn());
     const notes = [...(ambiguous.has(root) ? [ambiguous.get(root)!] : []), ...(owed.get(root) ?? [])];
     ambiguous.delete(root);
     owed.delete(root);

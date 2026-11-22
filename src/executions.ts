@@ -50,6 +50,8 @@ export interface ExecutionDependencies {
   host?: () => ExecutionHost;
   id?: () => string;
   onChange?: () => void;
+  /** True while the agent is mid-turn: completions then ride on its next tool result instead of a follow-up turn. */
+  agentBusy?: () => boolean;
 }
 export interface ExecutionSelector { notebook?: string; url?: string }
 export interface ExecuteParams extends ExecutionSelector { code: string; label?: string; subscribe?: boolean; yield_ms?: number }
@@ -71,6 +73,12 @@ function outputTail(name: string, text: string, omitted: number, limit?: number)
   const missing = omitted + Buffer.byteLength(text) - Buffer.byteLength(tail);
   return text || missing ? `\n${name}${missing ? ` (${missing} earlier bytes omitted)` : ""}:\n${tail}` : "";
 }
+/** Completion details, bounded in aggregate as well as per host tail. */
+function completionBody(batch: ExecutionRecord[]): string {
+  const body = batch.map(r => `${r.id}: ${r.label} · ${r.state}\n${r.target.canonicalPath}\n${r.summary ?? ""}${r.errors.length ? `\nNew notebook errors:\n${r.errors.join("\n").slice(-2048)}` : ""}${r.blocked.length ? `\nBlocked cells: ${r.blocked.join(", ").slice(-1024)}` : ""}${outputTail("stdout", r.stdout, r.stdoutOmittedBytes, 4096)}${outputTail("stderr", r.stderr, r.stderrOmittedBytes, 4096)}`).join("\n\n");
+  return `${body.length > 22_000 ? "Some details omitted; use marimo_execution with an ID for its result.\n" : ""}${body.slice(-22_000)}\n\nA native CLI success confirms only its Python request, not every downstream notebook cell. Other work in the same kernel may still be busy; inspect new notebook errors/blocked cells before continuing. Do not retry an unknown outcome automatically.`;
+}
+
 const object = (value: unknown): Record<string, unknown> | undefined => value !== null && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
 /** Session data is untrusted/versioned metadata, not authority to launch or import arbitrary fields. */
 function savedRecord(value: unknown): value is ExecutionRecord {
@@ -282,8 +290,14 @@ export class ExecutionSession {
   }
 
   status(id?: string): ExecutionReply {
-    this.requireSession();
-    if (id) return this.recordReply(this.owned(id));
+    const { host } = this.requireSession();
+    if (id) {
+      const r = this.owned(id);
+      // The agent has read the terminal result: a later completion message would only repeat it.
+      if (!terminal(r) || !r.detached || r.delivery !== "pending" || r.notification === "none") return this.recordReply(r);
+      this.claim(host, r);
+      return this.recordReply(host.get(r.owner, r.id));
+    }
     const records = this.records();
     return reply(`${records.length ? records.map(r => `${r.id}: ${r.label} · ${r.state} · ${r.notification === "none" ? "not subscribed" : "subscribed"} · ${r.target.canonicalPath}`).join("\n") : "No marimo executions in this session/branch."}${this.disabled()}`, { records });
   }
@@ -415,10 +429,37 @@ export class ExecutionSession {
     });
   }
 
+  private claim(host: ExecutionHost, r: ExecutionRecord): void {
+    host.markQueued(r.id);
+    host.markDelivered(r.id);
+    this.ledger.add(completionId(r.id));
+    this.persist(host.get(r.owner, r.id));
+  }
+
+  private pending(): ExecutionRecord[] {
+    return this.records().filter(r => terminal(r) && r.delivery === "pending" && !this.foreground.has(r.id) && r.detached && !this.failedDelivery.has(r.id));
+  }
+
+  /**
+   * Completions that finished while the agent was mid-turn, claimed for the tool result it is about to read.
+   * A follow-up queued mid-turn reaches the model only after the turn ends, long after it moved on,
+   * so it would start a turn that merely acknowledges a stale result.
+   */
+  claimInTurn(): string | undefined {
+    if (!this.ctx || !this.host || this.config.completion.mode === "off") return undefined;
+    const host = this.host;
+    const batch = this.pending().filter(r => r.notification !== "none" && !this.ledger.has(completionId(r.id)));
+    if (!batch.length) return undefined;
+    for (const r of batch) this.claim(host, r);
+    return `pi-marimo: background execution${batch.length === 1 ? "" : "s"} finished while you worked (no follow-up will repeat ${batch.length === 1 ? "it" : "them"}):\n\n${completionBody(batch)}`;
+  }
+
   private deliver(): void {
     if (!this.ctx || !this.host) return;
     const host = this.host;
-    const pending = this.records().filter(r => terminal(r) && r.delivery === "pending" && !this.foreground.has(r.id) && r.detached && !this.failedDelivery.has(r.id));
+    // Mid-turn: claimInTurn hands these to the next tool result; agent_settled delivers whatever is left.
+    if (this.deps.agentBusy?.() === true) return;
+    const pending = this.pending();
     const batch: ExecutionRecord[] = [];
     for (const r of pending) {
       if (this.ledger.has(completionId(r.id))) { host.markQueued(r.id); host.markDelivered(r.id); continue; }
@@ -431,10 +472,8 @@ export class ExecutionSession {
     }
     if (!batch.length) return;
     const ids = batch.map(r => completionId(r.id));
-    // Bound aggregate text as well as individual host tails.
     const headline = batch.map(r => `${r.id}: ${r.state}`).join("\n");
-    const body = batch.map(r => `${r.id}: ${r.label} · ${r.state}\n${r.target.canonicalPath}\n${r.summary ?? ""}${r.errors.length ? `\nNew notebook errors:\n${r.errors.join("\n").slice(-2048)}` : ""}${r.blocked.length ? `\nBlocked cells: ${r.blocked.join(", ").slice(-1024)}` : ""}${outputTail("stdout", r.stdout, r.stdoutOmittedBytes, 4096)}${outputTail("stderr", r.stderr, r.stderrOmittedBytes, 4096)}`).join("\n\n");
-    const content = `${headline}\n\n${body.length > 22_000 ? "Some details omitted; use marimo_execution with an ID for its result.\n" : ""}${body.slice(-22_000)}\n\nA native CLI success confirms only its Python request, not every downstream notebook cell. Other work in the same kernel may still be busy; inspect new notebook errors/blocked cells before continuing. Do not retry an unknown outcome automatically.`;
+    const content = `${headline}\n\n${completionBody(batch)}`;
     try {
       this.pi.sendMessage({ customType: COMPLETION_MESSAGE, content, display: true, details: { version: 2, ids, executions: batch.map(r => ({ id: r.id, label: r.label, target: r.target, state: r.state, startedAt: r.startedAt, endedAt: r.endedAt, summary: r.summary, errors: r.errors, blocked: r.blocked, stdoutOmittedBytes: r.stdoutOmittedBytes, stderrOmittedBytes: r.stderrOmittedBytes })) } }, { deliverAs: "followUp", triggerTurn: true });
     } catch {
