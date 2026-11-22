@@ -44,7 +44,7 @@ describe("a cell's title", () => {
     expect(cellTitle(nb, cell(nb, "d"))).toBe("daily, extra +1");
     expect(cellTitle(nb, cell(nb, "c"))).toBe("chart");
     expect(cellTitle(nb, cell(nb, "w"))).toBe("controls");
-    expect(cellTitle(nb, cell(nb, "t"))).toBe("table");
+    expect(cellTitle(nb, cell(nb, "t"))).toBe("df");
     expect(cellTitle(nb, cell(nb, "p"))).toBe("tmp");
     expect(cellTitle(nb, cell(nb, "o"))).toBe("print('hello')");
   });
@@ -55,6 +55,45 @@ describe("a cell's title", () => {
     expect(cellTitle(nb, cell(nb, "m"))).toBe("The model");
     expect(cellTitle(nb, cell(nb, "p")).length).toBeLessThanOrEqual(40);
     expect(cellTitle(nb, cell(nb, "p"))).toMatch(/^just some prose/u);
+  });
+
+  test("a chart is its own title or its axes; a table the variable it displays; otherwise the kind", () => {
+    const nb = notebook([
+      { id: "a", code: "alt.Chart(df).mark_line()" }, { id: "b", code: "_c = alt.Chart(df)\n_c" }, { id: "c", code: "fig" },
+      { id: "d", code: "_t = load()\nmo.ui.table(_t, page_size=5)" }, { id: "e", code: "pl.DataFrame(rows)" }, { id: "f", code: "alt.Chart(df)" },
+      { id: "g", code: "foo(\n  x)" },
+    ]);
+    const vega = (spec: object) => ({ channel: "output", mimetype: "application/vnd.vegalite.v5+json", data: JSON.stringify(spec) });
+    nb.apply("cell-op", { cell_id: "a", status: "idle", output: vega({ title: { text: ["Heart rate", "by gradient"] }, mark: "line" }) });
+    nb.apply("cell-op", { cell_id: "b", status: "idle", output: vega({ layer: [{ encoding: { x: { field: "gradient" }, y: { field: "rms_bpm", title: "RMS (bpm)" } } }] }) });
+    nb.apply("cell-op", { cell_id: "c", status: "idle", output: { channel: "output", mimetype: "image/png", data: "iVBOR" } });
+    nb.apply("cell-op", { cell_id: "d", status: "idle", output: { channel: "output", mimetype: "text/html", data: table } });
+    nb.apply("cell-op", { cell_id: "e", status: "idle", output: { channel: "output", mimetype: "text/html", data: table } });
+    nb.apply("cell-op", { cell_id: "f", status: "idle", output: vega({ mark: "point" }) });
+    nb.apply("cell-op", { cell_id: "g", status: "idle", output: { channel: "output", mimetype: "text/html", data: table } });
+    expect(cellTitle(nb, cell(nb, "a"))).toBe("Heart rate by gradient");
+    expect(cellTitle(nb, cell(nb, "b"))).toBe("RMS (bpm) by gradient");
+    expect(cellTitle(nb, cell(nb, "c"))).toBe("fig");
+    expect(cellTitle(nb, cell(nb, "d"))).toBe("t");
+    expect(cellTitle(nb, cell(nb, "e"))).toBe("table");
+    expect(cellTitle(nb, cell(nb, "f"))).toBe("chart");
+    expect(cellTitle(nb, cell(nb, "g"))).toBe("table");
+  });
+
+  test("a cell with only private names is the prose it shows, else those names, else its first line", () => {
+    const nb = notebook([
+      { id: "a", code: '_verdict = "not assessable"\nmo.md(f"**Verdict:** {_verdict}")' },
+      { id: "b", code: "_bias = float(x)\n_bias" }, { id: "c", code: "def _at(name, g):\n    return 1\n_top = [1]" },
+      { id: "d", code: "print(1)" }, { id: "e", code: "_x = 1\nraise ValueError()" },
+    ]);
+    nb.apply("cell-op", { cell_id: "a", status: "idle", output: { channel: "output", mimetype: "text/html", data: '<span class="markdown prose"><h2>Verdict: not assessable</h2>\n<p>more</p></span>' } });
+    nb.apply("cell-op", { cell_id: "b", status: "idle", output: { channel: "output", mimetype: "text/plain", data: "3.14" } });
+    nb.apply("cell-op", { cell_id: "e", status: "idle", output: error("ValueError", "bad value here") });
+    expect(cellTitle(nb, cell(nb, "a"))).toBe("Verdict: not assessable");
+    expect(cellTitle(nb, cell(nb, "b"))).toBe("bias");
+    expect(cellTitle(nb, cell(nb, "c"))).toBe("at, top");
+    expect(cellTitle(nb, cell(nb, "d"))).toBe("print(1)");
+    expect(cellTitle(nb, cell(nb, "e"))).toBe("x");
   });
 
   test("a cell's section path leaves out its own headings", () => {

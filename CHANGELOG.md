@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- The outline names chart cells by the chart's title or axes and table cells by the variable they display, instead of a row of identical `chart` and `table` entries. A cell that defines only private `_` names is named by the prose it shows, else by those names, instead of its first line of code.
 - `marimo_execute` waits up to 30 s for a result by default (`yield_ms` now accepts 0 to 120000), so routine edits and checks return their result directly instead of a background handle.
 - A background run's completion reaches a busy agent before its next step (Pi steering) instead of as a follow-up after its turn ends, and only when the run failed, hit new notebook errors or blocked cells, or printed something beyond marimo's own "created and ran cell" confirmations. A plain success is dropped once the agent reads it with `marimo_execution` or runs more code in that notebook, and otherwise arrives when the agent finishes its turn.
 

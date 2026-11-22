@@ -935,7 +935,7 @@ test("a table output is a grid in the detail, and its shape is the outline's bad
   f.notebook.apply("cell-op", { cell_id: "a", status: "idle", output: { channel: "output", mimetype: "text/html", data: table } });
   const v = make(f);
   try {
-    expect(screen(v)).toMatch(/▌  table +1×2/u);
+    expect(screen(v)).toMatch(/▌  df +1×2/u);
     expect(screen(v)).toMatch(/city\s{2,}pop/u);
     expect(screen(v)).toMatch(/Oslo\s{2,}709,000/u);
     expect(screen(v)).toContain("rows 1–1 of 1");

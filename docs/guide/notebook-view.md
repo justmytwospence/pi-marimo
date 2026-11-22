@@ -4,7 +4,7 @@ The outline, the detail, the keys, the run chain, and docking beside the chat.
 
 `ctrl+'` docks it beside the chat; `/marimo view` opens it full screen; `|` switches between the two. One key press toggles once: held repeats and release do nothing. With pi-sidebar installed, an already-open Sidebar keeps the key; otherwise an eligible notebook takes it before Sidebar, regardless of extension load order. `/sidebar` explicitly opens Sidebar.
 
-The **outline** lists sections and cells. A cell is named by its name, or what it defines that other cells use, or what it shows (`imports`, `daily, smooth`, `chart`, `controls`); ids are never shown. A cell has a glyph only when it needs attention:
+The **outline** lists sections and cells. A cell is named by its name, or what it defines that other cells use, or what it shows (`imports`, `daily, smooth`, `controls`): a chart by its title or axes (`RMS (bpm) by gradient`), a table by the variable it displays (`hr_compare`), and a cell with only private `_` names by the prose it shows, else those names without the underscore. Ids are never shown. A cell has a glyph only when it needs attention:
 
 | glyph | |
 |---|---|
