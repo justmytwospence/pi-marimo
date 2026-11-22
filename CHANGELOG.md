@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.9.0
 
 - The outline names chart cells by the chart's title or axes and table cells by the variable they display, instead of a row of identical `chart` and `table` entries. A cell that defines only private `_` names is named by the prose it shows, else by those names, instead of its first line of code.
 - `marimo_execute` waits up to 30 s for a result by default (`yield_ms` now accepts 0 to 120000), so routine edits and checks return their result directly instead of a background handle.
