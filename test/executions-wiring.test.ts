@@ -189,28 +189,61 @@ test("delayed official execution survives unrelated turns and sends exactly one 
   x.children[0]!.finish();
   await tick();
   expect(x.messages).toHaveLength(1);
-  expect(x.messages[0]).toMatchObject({ customType: COMPLETION_MESSAGE, delivery: { deliverAs: "followUp", triggerTurn: true }, details: { version: 2, ids: [`pi-marimo-execution:${r.id}`], executions: [expect.objectContaining({ id: r.id, label: "Python execution", startedAt: r.startedAt, endedAt: expect.any(Number), stdoutOmittedBytes: 0, stderrOmittedBytes: 0 })] } });
+  expect(x.messages[0]).toMatchObject({ customType: COMPLETION_MESSAGE, delivery: { deliverAs: "steer", triggerTurn: true }, details: { version: 2, ids: [`pi-marimo-execution:${r.id}`], executions: [expect.objectContaining({ id: r.id, label: "Python execution", startedAt: r.startedAt, endedAt: expect.any(Number), stdoutOmittedBytes: 0, stderrOmittedBytes: 0 })] } });
   expect(x.messages[0].content).toContain("Other work in the same kernel may still be busy");
   x.manager.beforeTurn(); x.manager.update(x.followed); await tick();
   expect(x.messages).toHaveLength(1);
   expect(record(x.manager.status(r.id)).delivery).toBe("delivered");
 });
 
-test("a completion that finishes mid-turn rides on the next tool result instead of a late follow-up turn", async () => {
+test("a busy agent is steered for a failure but not for a plain success", async () => {
+  const x = setup(); x.start(); x.register();
+  x.setBusy(true);
+  await x.tool("marimo_execute", { code: "edit()", yield_ms: 0 });
+  x.children[0]!.stdout.write("created and ran cell 'a'\n"); await tick();
+  x.children[0]!.finish(); await tick();
+  expect(x.messages).toHaveLength(0);
+  const bad = record(await x.tool("marimo_execute", { code: "1/0", yield_ms: 0 }));
+  x.children[1]!.finish(1); await tick();
+  expect(x.messages).toHaveLength(1);
+  expect(x.messages[0].details.ids).toEqual([`pi-marimo-execution:${bad.id}`]);
+  expect(x.messages[0].delivery).toEqual({ deliverAs: "steer", triggerTurn: true });
+});
+
+test("a busy agent is steered for new printed output", async () => {
   const x = setup(); x.start(); x.register();
   x.setBusy(true);
   const r = record(await x.tool("marimo_execute", { code: "fit()", yield_ms: 0 }));
-  x.children[0]!.stdout.write("fit done\n");
-  x.children[0]!.finish();
-  await tick();
+  x.children[0]!.stdout.write("result: 42\n"); await tick();
+  x.children[0]!.finish(); await tick();
+  expect(x.messages).toHaveLength(1);
+  expect(x.messages[0].details.ids).toEqual([`pi-marimo-execution:${r.id}`]);
+  expect(x.messages[0].delivery).toEqual({ deliverAs: "steer", triggerTurn: true });
+});
+
+test("a held plain success is delivered when the agent settles", async () => {
+  const x = setup(); x.start(); x.register();
+  x.setBusy(true);
+  const r = record(await x.tool("marimo_execute", { code: "edit()", yield_ms: 0 }));
+  x.children[0]!.finish(); await tick();
   expect(x.messages).toHaveLength(0);
-  const note = x.manager.claimInTurn();
-  expect(note).toContain(r.id);
-  expect(note).toContain("fit done");
-  expect(x.manager.claimInTurn()).toBeUndefined();
   x.setBusy(false); x.manager.settled(); await tick();
+  expect(x.messages).toHaveLength(1);
+  expect(x.messages[0].details.ids).toEqual([`pi-marimo-execution:${r.id}`]);
+});
+
+test("a later accepted execute on the same notebook drops a held plain success", async () => {
+  const x = setup(); x.start(); x.register();
+  x.setBusy(true);
+  const a = record(await x.tool("marimo_execute", { code: "a()", yield_ms: 0 }));
+  x.children[0]!.finish(); await tick();
   expect(x.messages).toHaveLength(0);
-  expect(record(x.manager.status(r.id)).delivery).toBe("delivered");
+  const b = record(await x.tool("marimo_execute", { code: "b()", yield_ms: 0 }));
+  expect(record(x.manager.status(a.id)).delivery).toBe("delivered");
+  x.setBusy(false); x.manager.settled();
+  x.children[1]!.finish(); await tick();
+  expect(x.messages).toHaveLength(1);
+  expect(x.messages[0].details.ids).toEqual([`pi-marimo-execution:${b.id}`]);
 });
 
 test("reading a finished execution's status claims its completion; one left unread is delivered once the agent settles", async () => {
@@ -256,7 +289,7 @@ test("completions are batched even during a busy response, with untouched drafts
   x.children[0]!.finish(); x.children[1]!.finish(); await tick();
   expect(x.messages).toHaveLength(1);
   expect(x.messages[0].details.ids.sort()).toEqual([`pi-marimo-execution:${a.id}`, `pi-marimo-execution:${b.id}`].sort());
-  expect(x.messages[0].delivery).toEqual({ deliverAs: "followUp", triggerTurn: true });
+  expect(x.messages[0].delivery).toEqual({ deliverAs: "steer", triggerTurn: true });
 });
 
 test("status/unsubscribe public aliases share tool ownership and never interrupt", async () => {

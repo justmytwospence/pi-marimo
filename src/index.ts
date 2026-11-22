@@ -1071,7 +1071,6 @@ export default function piMarimo(pi: ExtensionAPI): void {
     }
     const structured = event.structuredContent !== undefined ? { structuredContent: event.structuredContent } : {};
     if (nested) return changed ? { content, ...structured } : undefined;
-    owe(root, executions.claimInTurn());
     const notes = [...(ambiguous.has(root) ? [ambiguous.get(root)!] : []), ...(owed.get(root) ?? [])];
     ambiguous.delete(root);
     owed.delete(root);

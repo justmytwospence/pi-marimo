@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- A background `marimo_execute` that finishes while the agent is still working is reported on the agent's next tool result instead of as a follow-up queued for the end of its turn, which reached the agent long after it had moved on and made it start a turn just to acknowledge a stale result. Reading a finished execution with `marimo_execution` also counts as its report. A completion the agent has not seen by the end of its turn still resumes it as before.
+- A background run's completion reaches a busy agent before its next step (Pi steering) instead of as a follow-up after its turn ends, and only when the run failed, hit new notebook errors or blocked cells, or printed something beyond marimo's own "created and ran cell" confirmations. A plain success is dropped once the agent reads it with `marimo_execution` or runs more code in that notebook, and otherwise arrives when the agent finishes its turn.
 
 ## 0.8.7
 

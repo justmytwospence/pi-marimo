@@ -5,6 +5,7 @@ import { basename, resolve } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { ownExecutions, type ExecutionActivity, type ExecutionHost, type ExecutionOwner, type ExecutionRecord, type ExecutionTarget } from "./core/execution.ts";
+import { hasNews, shownMark } from "./core/novelty.ts";
 import { sameServer } from "./core/touch.ts";
 import type { Followed } from "./core/watcher.ts";
 import { executionToolRenderers } from "./ui/execution-render.ts";
@@ -50,7 +51,7 @@ export interface ExecutionDependencies {
   host?: () => ExecutionHost;
   id?: () => string;
   onChange?: () => void;
-  /** True while the agent is mid-turn: completions then ride on its next tool result instead of a follow-up turn. */
+  /** True while the agent is mid-turn: only completions with news are sent then; the rest wait for the turn to end. */
   agentBusy?: () => boolean;
 }
 export interface ExecutionSelector { notebook?: string; url?: string }
@@ -248,6 +249,10 @@ export class ExecutionSession {
       throw error;
     }
     this.deps.engage(f);
+    // The kernel accepted new work, so earlier runs on this notebook ended; one with no news was a plain success.
+    for (const other of this.records()) if (other.id !== id && sameServer(other.target.url, target.url) && other.target.canonicalPath === target.canonicalPath
+      && terminal(other) && other.detached && other.delivery === "pending" && other.notification !== "none" && !this.foreground.has(other.id)
+      && !hasNews(other, host.shownMark(other.id))) this.claim(host, other);
     this.persist(r);
     // Abort/yield affects only this foreground wait, never ownership or the CLI.
     try {
@@ -402,6 +407,7 @@ export class ExecutionSession {
   private disabled(): string { return this.config.completion.mode === "off" ? `\n${offNotice}` : ""; }
 
   private recordReply(r: ExecutionRecord): ExecutionReply {
+    this.host?.markShown(r.id, shownMark(r));
     const subscribed = r.notification !== "none" && this.config.completion.mode !== "off";
     return reply(`${r.id}: ${r.label} · ${r.state}\n${r.target.canonicalPath}\n${r.summary ?? ""}${r.errors.length ? `\nNew notebook errors:\n${r.errors.join("\n")}` : ""}${r.blocked.length ? `\nBlocked cells: ${r.blocked.join(", ")}` : ""}${outputTail("stdout", r.stdout, r.stdoutOmittedBytes)}${outputTail("stderr", r.stderr, r.stderrOmittedBytes)}${this.disabled()}`, { ...r, subscribed, notebook: r.target.canonicalPath });
   }
@@ -440,30 +446,17 @@ export class ExecutionSession {
     return this.records().filter(r => terminal(r) && r.delivery === "pending" && !this.foreground.has(r.id) && r.detached && !this.failedDelivery.has(r.id));
   }
 
-  /**
-   * Completions that finished while the agent was mid-turn, claimed for the tool result it is about to read.
-   * A follow-up queued mid-turn reaches the model only after the turn ends, long after it moved on,
-   * so it would start a turn that merely acknowledges a stale result.
-   */
-  claimInTurn(): string | undefined {
-    if (!this.ctx || !this.host || this.config.completion.mode === "off") return undefined;
-    const host = this.host;
-    const batch = this.pending().filter(r => r.notification !== "none" && !this.ledger.has(completionId(r.id)));
-    if (!batch.length) return undefined;
-    for (const r of batch) this.claim(host, r);
-    return `pi-marimo: background execution${batch.length === 1 ? "" : "s"} finished while you worked (no follow-up will repeat ${batch.length === 1 ? "it" : "them"}):\n\n${completionBody(batch)}`;
-  }
-
   private deliver(): void {
     if (!this.ctx || !this.host) return;
     const host = this.host;
-    // Mid-turn: claimInTurn hands these to the next tool result; agent_settled delivers whatever is left.
-    if (this.deps.agentBusy?.() === true) return;
+    const busy = this.deps.agentBusy?.() === true;
     const pending = this.pending();
     const batch: ExecutionRecord[] = [];
     for (const r of pending) {
       if (this.ledger.has(completionId(r.id))) { host.markQueued(r.id); host.markDelivered(r.id); continue; }
       if (this.config.completion.mode === "off" || r.notification === "none") { host.unsubscribe(r.owner, r.id); continue; }
+      // A busy agent hears only news now; the rest waits for supersession, a status read, or the end of its turn.
+      if (busy && !hasNews(r, host.shownMark(r.id))) continue;
       this.persist(r); // Terminal result precedes the nontransactional enqueue.
       host.markQueued(r.id);
       const queued = host.get(r.owner, r.id);
@@ -475,14 +468,14 @@ export class ExecutionSession {
     const headline = batch.map(r => `${r.id}: ${r.state}`).join("\n");
     const content = `${headline}\n\n${completionBody(batch)}`;
     try {
-      this.pi.sendMessage({ customType: COMPLETION_MESSAGE, content, display: true, details: { version: 2, ids, executions: batch.map(r => ({ id: r.id, label: r.label, target: r.target, state: r.state, startedAt: r.startedAt, endedAt: r.endedAt, summary: r.summary, errors: r.errors, blocked: r.blocked, stdoutOmittedBytes: r.stdoutOmittedBytes, stderrOmittedBytes: r.stderrOmittedBytes })) } }, { deliverAs: "followUp", triggerTurn: true });
+      this.pi.sendMessage({ customType: COMPLETION_MESSAGE, content, display: true, details: { version: 2, ids, executions: batch.map(r => ({ id: r.id, label: r.label, target: r.target, state: r.state, startedAt: r.startedAt, endedAt: r.endedAt, summary: r.summary, errors: r.errors, blocked: r.blocked, stdoutOmittedBytes: r.stdoutOmittedBytes, stderrOmittedBytes: r.stderrOmittedBytes })) } }, { deliverAs: "steer", triggerTurn: true });
     } catch {
       // Keep queued metadata recoverable. A host change callback is already queued;
       // block it from retrying indefinitely. beforeTurn/rebind may retry safely.
       for (const r of batch) this.failedDelivery.add(r.id);
       return;
     }
-    // Idle/direct senders may have persisted immediately. Busy Pi queues are acknowledged by message_end.
+    // Idle/direct senders may have persisted immediately. Busy Pi steering queues are acknowledged by message_end.
     for (const entry of this.ctx.sessionManager.getBranch()) if (entry.type === "custom_message") {
       this.messageDelivered({ role: "custom", customType: entry.customType, details: entry.details });
     }

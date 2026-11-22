@@ -10,7 +10,7 @@ pi-marimo supervises the official `marimo pair execute` CLI; marimo remains resp
 | `marimo_watch` | subscribe to the currently observed notebook execution wave, including its queued descendants; executes no Python |
 | `marimo_execution` | list execution records, inspect one result, or unsubscribe without interrupting Python |
 
-A typical workflow is: ask Pi to start a fit, receive a subscribed execution handle, chat about something else, then receive a completion follow-up when the execution finishes. Pi queues that follow-up if it is already answering you; it does not overwrite your draft or interrupt the response.
+A typical workflow is: ask Pi to start a fit, receive a subscribed execution handle, chat about something else, then hear back when the execution finishes. If Pi is answering you at the time, the notice reaches it before its next step when the run failed or printed something new; a plain success waits until Pi finishes its answer, and is dropped if Pi has meanwhile read the result or run more code in that notebook. It never overwrites your draft or interrupts the response.
 
 Completion notices, execution status replies and native tool results show a compact summary by default: notebook, task label, outcome and known elapsed time. Use Pi's configured expand/collapse action to reveal the full captured message, including execution IDs, paths, output, errors and omission notices. The hint shows your actual keybinding. This presentation also applies to older completion messages after reload; it does not shorten the model-visible result or change output retention. For longer retained per-task output tails, use `marimo_execution` with the execution ID.
 
@@ -22,7 +22,7 @@ Completion notices, execution status replies and native tool results show a comp
 | `all` | additionally resume Pi after observed execution waves in notebooks this session uses, including runs started in the notebook UI |
 | `off` | retain execution tracking and results, but never automatically continue the agent |
 
-Use `/marimo watch [file]` to subscribe, `/marimo executions` to inspect records, and `/marimo unwatch <id>` to stop watching. Sending chat messages, unsubscribing, dismissing a notebook row, and changing completion mode do not interrupt Python. These controls prevent future notifications; a completion already accepted into Pi's follow-up queue is not withdrawn. The existing two-press interrupt controls remain separate.
+Use `/marimo watch [file]` to subscribe, `/marimo executions` to inspect records, and `/marimo unwatch <id>` to stop watching. Sending chat messages, unsubscribing, dismissing a notebook row, and changing completion mode do not interrupt Python. These controls prevent future notifications; a completion Pi has already queued is not withdrawn. The existing two-press interrupt controls remain separate.
 
 Native execution clients and subscriptions survive `/reload` and switching away from the originating Pi session. Results belong to their original session and branch; they wait there rather than waking another conversation. A full Pi process exit is different: closing the official execution client can interrupt scratch execution. This package is not a durable execution daemon, and after a restart it reports unconfirmed work as `unknown`, never silently rerunning it.
 

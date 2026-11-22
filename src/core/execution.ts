@@ -5,6 +5,7 @@ import { randomUUID } from "node:crypto";
 import { StringDecoder } from "node:string_decoder";
 import { stripVTControlCharacters } from "node:util";
 import { ExecutionWaveObserver, type WaveSnapshot } from "./execution-observer.ts";
+import type { ShownMark } from "./novelty.ts";
 import { sameServer } from "./touch.ts";
 
 /** `pairSessionId`, when set, is what the CLI's `--session` gets (marimo 0.25.2+); `sessionId` stays the identity. */
@@ -171,6 +172,8 @@ interface Entry {
   interrupted?: boolean;
   /** Retain a native result until the foreground caller chooses inline/detached. */
   foreground?: boolean;
+  /** What the agent was last shown of this run (in memory; survives /reload, not a process restart). */
+  shown?: ShownMark;
 }
 interface Pool {
   target: ExecutionTarget;
@@ -325,6 +328,8 @@ export class ExecutionHost {
     this.changed(record);
     this.prune(record.owner.sessionId, id);
   }
+  markShown(id: string, mark: ShownMark): void { const entry = this.records.get(id); if (entry) entry.shown = mark; }
+  shownMark(id: string): ShownMark | undefined { return this.records.get(id)?.shown; }
   /** Synchronous inline claim wins over detachment/queueing; no duplicate follow-up. */
   markInline(id: string): void {
     const entry = this.required(id);
