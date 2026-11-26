@@ -117,6 +117,8 @@ export class ExecutionSession {
   private foreground = new Set<string>();
   private ledger = new Set<string>();
   private failedDelivery = new Set<string>();
+  /** The branch's entry ids by leaf, so per-render activity does not walk the whole session. */
+  private branchIds?: { leaf: string | null; ids: Set<string> };
 
   constructor(private readonly pi: ExecutionPi, private readonly deps: ExecutionDependencies) {}
 
@@ -216,6 +218,7 @@ export class ExecutionSession {
     this.policy = undefined;
     this.policyKey = "";
     this.ctx = undefined;
+    this.branchIds = undefined;
     this.followed = [];
     this.sessionId = undefined;
     this.host = undefined;
@@ -327,7 +330,7 @@ export class ExecutionSession {
   activity(f: Followed): ExecutionActivity {
     if (!this.host || !this.sessionId) return { running: false, detail: [] };
     const target = targetOf(f);
-    const records = this.records().filter(r => sameServer(r.target.url, target.url) && r.target.canonicalPath === target.canonicalPath);
+    const records = this.displayRecords().filter(r => sameServer(r.target.url, target.url) && r.target.canonicalPath === target.canonicalPath);
     const active = records.filter(r => !terminal(r));
     const latest = records.find(r => r.kind === "execute" && terminal(r));
     const failed = latest && latest.state !== "succeeded" ? latest : undefined;
@@ -346,6 +349,18 @@ export class ExecutionSession {
 
   private anchors(): Set<string> {
     return new Set(this.ctx?.sessionManager.getBranch().map(e => e.id) ?? []);
+  }
+
+  private displayAnchors(): Set<string> {
+    const sm = this.ctx?.sessionManager;
+    if (!sm) return new Set();
+    const leaf = sm.getLeafId();
+    if (!this.branchIds || this.branchIds.leaf !== leaf) this.branchIds = { leaf, ids: new Set(sm.getBranch().map(e => e.id)) };
+    return this.branchIds.ids;
+  }
+
+  private displayRecords(): readonly Readonly<ExecutionRecord>[] {
+    return this.host && this.sessionId && this.ctx?.sessionManager.getSessionId() === this.sessionId ? [...this.host.view(this.sessionId, this.displayAnchors())].reverse().sort((a, b) => b.startedAt - a.startedAt) : [];
   }
 
   private records(): ExecutionRecord[] {

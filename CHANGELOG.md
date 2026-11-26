@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- The notebook rows under the prompt no longer walk the whole session and copy every run's output on each screen redraw, which kept long idle sessions busy.
+
 ## 0.9.0
 
 - The outline names chart cells by the chart's title or axes and table cells by the variable they display, instead of a row of identical `chart` and `table` entries. A cell that defines only private `_` names is named by the prose it shows, else by those names, instead of its first line of code.

@@ -678,6 +678,20 @@ test("bounded native output reports omitted bytes in status and completion text"
   expect(x.messages[0].content.length).toBeLessThan(24_000);
 });
 
+test("activity follows the leaf: a new entry keeps a run, another branch hides it, returning shows it", async () => {
+  const x = setup(); x.start();
+  await x.manager.execute({ code: "x", yield_ms: 0 });
+  expect(x.manager.activity(x.followed[0]!).running).toBe(true);
+  const branch = [...x.entries];
+  x.persistent("message", { message: { role: "user" } });
+  expect(x.manager.activity(x.followed[0]!).running).toBe(true);
+  x.entries = [];
+  expect(x.manager.activity(x.followed[0]!).running).toBe(false);
+  x.entries = branch;
+  expect(x.manager.activity(x.followed[0]!).running).toBe(true);
+  x.children[0]!.finish(); await tick();
+});
+
 test("native failure activity has timing and is cleared by a newer successful request", async () => {
   const x = setup(); x.start();
   await x.manager.execute({ code: "bad", yield_ms: 0 });

@@ -273,6 +273,12 @@ export class ExecutionHost {
   }
 
   get(owner: ExecutionOwner, id: string): ExecutionRecord { return copy(this.owned(owner, id).record); }
+  /** `list` without the defensive copies, for display that runs on every render: read-only, never persisted or returned to tools. */
+  view(sessionId: string, activeAnchors: ReadonlySet<string>): readonly Readonly<ExecutionRecord>[] {
+    return [...this.records.values()].reverse().map((e) => e.record)
+      .filter((r) => r.owner.sessionId === sessionId && activeAnchors.has(r.owner.anchorId))
+      .sort((a, b) => b.startedAt - a.startedAt);
+  }
   list(sessionId: string, activeAnchors: ReadonlySet<string>): ExecutionRecord[] {
     return [...this.records.values()].reverse().map((e) => e.record)
       .filter((r) => r.owner.sessionId === sessionId && activeAnchors.has(r.owner.anchorId))
