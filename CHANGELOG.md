@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.9.1
 
 - The notebook rows under the prompt no longer walk the whole session and copy every run's output on each screen redraw, which kept long idle sessions busy.
 
