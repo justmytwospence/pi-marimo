@@ -7,7 +7,7 @@
 | 0.25.2 (released) | full: the legacy session stream and `/api/kernel/*` endpoints |
 | `main` at c74e9e4 (unreleased) | followed through the new host events; run, interrupt and agent attachment use the host protocol |
 
-pi-marimo needs Node 22.19 or later and Pi. Charts need a terminal with Kitty graphics. A weekly CI job runs the live tests against the released marimo and against marimo main.
+pi-marimo needs Node 22.19 or later and Pi. Charts need a terminal with Kitty graphics. Pull requests run live tests against 0.25.2 and the pinned host-protocol commit `c74e9e4fee123273c60a0c5e73db41e16698bc2d`. Floating main is an advisory weekly and manual check; a workflow definition is not evidence of a successful run.
 
 ## How each feature talks to marimo
 
