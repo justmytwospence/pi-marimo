@@ -5,6 +5,7 @@ npm ci && npm run check
 ```
 
 - Live tests (need `marimo` on PATH): `PI_MARIMO_LIVE_TEST=1 npx vitest run test/e2e.test.ts test/e2e-actions.test.ts test/e2e-host.test.ts`.
+- Cross-plugin contracts run when `PI_PLUGINS_DIR` names a Pi Plugins checkout. The manual `cross-plugin contracts` workflow pins `dde2abc03c76033a4d660e98ff5401fb0ee056e3`. The activity and pill byte-identity assertions currently fail against that pin because the suite has newer main-editor ownership logic. Keep this lane separate from required PR checks until the implementations are reconciled; a manual run still fails on drift. Standalone checks without `PI_PLUGINS_DIR` explicitly skip the cross-plugin assertions.
 - Against marimo main: `PI_MARIMO_LIVE_TEST=1 PI_MARIMO_LIVE_MARIMO="uvx --from git+https://github.com/marimo-team/marimo@main marimo" npx vitest run test/e2e-host.test.ts`.
 - The documentation: `npm run docs` serves it, `npm run docs:build` builds it strictly. [`reference/keys.md`](reference/keys.md) is generated from `src/ui/keys.ts`: after changing a key, run `UPDATE_DOCS=1 npx vitest run test/docs.test.ts`.
 - The testing notebook, every surface the view draws: `uvx --with pandas,numpy,matplotlib,plotly,altair,vl-convert-python,rich,tqdm,marimo-lens marimo edit --no-token examples/testing.py`. If it is already running, `/marimo edit examples/testing.py` opens its Pi view using that server.

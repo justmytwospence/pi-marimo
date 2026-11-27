@@ -1,0 +1,26 @@
+name: cross-plugin contracts
+on: workflow_dispatch
+permissions:
+  contents: read
+jobs:
+  pinned-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with: { node-version: '24', cache: npm }
+      - uses: actions/checkout@v4
+        with:
+          repository: justmytwospence/pi-plugins
+          ref: dde2abc03c76033a4d660e98ff5401fb0ee056e3
+          path: pi-plugins
+          persist-credentials: false
+      - run: npm ci
+      - run: |
+          test -f "$PI_PLUGINS_DIR/packages/pi-bg/src/pill.ts"
+          npx vitest run --maxWorkers=1 test/contracts.test.ts
+        env:
+          PI_PLUGINS_DIR: ${{ github.workspace }}/pi-plugins
